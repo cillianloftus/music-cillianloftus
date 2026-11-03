@@ -1,0 +1,38 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"compatibility_date": "2026-11-01",
+	"compatibility_flags": [
+		"global_fetch_strictly_public"
+	],
+	"name": "music-cillianloftus",
+	"main": "@astrojs/cloudflare/entrypoints/server",
+	"assets": {
+		"directory": "./dist",
+		"binding": "ASSETS"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "music-db",
+			"database_id": "1def270c-5393-4f62-a025-eec092098626"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "CACHE",
+			"id": "fc56db1303464d6b98992d6068b8d896"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "ASSET_STORE",
+			"bucket_name": "music-assets"
+		}
+	],
+	"ai": {
+		"binding": "AI"
+	}
+}
