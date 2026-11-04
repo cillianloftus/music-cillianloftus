@@ -1,0 +1,277 @@
+---
+/**
+ * The file catalogue (ARCHITECTURE.md §3, "Ownership and files"): every
+ * file on disk catalogued against its recording, and a check that a folder
+ * still matches, so a missing or damaged rip is noticed before it matters.
+ * Checking happens in the browser and changes nothing.
+ */
+import Base from '../../layouts/Base.astro';
+import { catalogue } from '../../lib/import/files';
+
+const files = await catalogue();
+const byFormat = new Map<string, number>();
+for (const f of files) byFormat.set(f.format, (byFormat.get(f.format) ?? 0) + 1);
+const albums = new Map<string, { id: string | null; title: string; files: typeof files }>();
+for (const f of files) {
+  const key = f.album_id ?? '(none)';
+  const entry = albums.get(key) ?? { id: f.album_id, title: f.album_title ?? 'Not on an album', files: [] };
+  entry.files.push(f);
+  albums.set(key, entry);
+}
+const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
+---
+
+<Base title="Files">
+  <div class="wrap page">
+    <header>
+      <h1>Files</h1>
+      <p class="muted">
+        Audio you own, catalogued by where it lives. Nothing here is uploaded or played; the site only keeps track.
+        <a href="/edit/import/files">Import a folder</a> to add more.
+      </p>
+    </header>
+
+    {
+      files.length === 0 ? (
+        <p class="empty">No files catalogued yet.</p>
+      ) : (
+        <>
+          <p class="summary tabular">
+            {files.length.toLocaleString('en-GB')} files:{' '}
+            {[...byFormat].map(([format, n]) => `${n} ${format.toUpperCase()}`).join(', ')}
+          </p>
+
+          <section class="verify" aria-labelledby="verify-heading" data-verify hidden>
+            <h2 id="verify-heading">Check a folder</h2>
+            <p class="muted">
+              Choose a folder you imported before. Every file is fingerprinted again and compared with the catalogue.
+            </p>
+            <div class="field">
+              <label for="root">Where that folder lives</label>
+              <input class="input" id="root" type="text" autocomplete="off" spellcheck="false" placeholder="D:\Music" />
+            </div>
+            <label class="button pick">
+              <input type="file" {...{ webkitdirectory: true }} multiple class="visually-hidden" data-picker />
+              Choose the folder
+            </label>
+            <p role="status" class="status" data-status></p>
+            <progress hidden data-progress></progress>
+            <div data-report></div>
+          </section>
+
+          <section aria-labelledby="list-heading">
+            <h2 id="list-heading">By album</h2>
+            <ul role="list" class="albums">
+              {[...albums.values()].map((album) => (
+                <li>
+                  <details>
+                    <summary>
+                      <span class="title">{album.title}</span>
+                      <span class="muted tabular"> · {album.files.length} {album.files.length === 1 ? 'file' : 'files'}</span>
+                    </summary>
+                    {album.id && (
+                      <p>
+                        <a href={`/album/${album.id}`}>Open album</a>
+                      </p>
+                    )}
+                    <ul role="list" class="paths">
+                      {album.files.map((f) => (
+                        <li>
+                          <span class="path">{f.path}</span>
+                          <span class="muted">
+                            {f.format.toUpperCase()}
+                            {f.bitrate && ` · ${f.bitrate} kbps`}
+                            {!f.checksum && ' · no checksum'}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
+      )
+    }
+
+    <script is:inline type="application/json" id="known-files" set:html={JSON.stringify(known).replaceAll('<', '\\u003c')} />
+  </div>
+</Base>
+
+<script>
+  import { verify } from '../../lib/tags/verify';
+
+  const section = document.querySelector<HTMLElement>('[data-verify]');
+  if (section) {
+    section.hidden = false;
+    const known = JSON.parse(document.getElementById('known-files')!.textContent!) as { path: string; checksum: string | null }[];
+    const picker = section.querySelector<HTMLInputElement>('[data-picker]')!;
+    const rootInput = section.querySelector<HTMLInputElement>('#root')!;
+    const status = section.querySelector<HTMLElement>('[data-status]')!;
+    const progress = section.querySelector<HTMLProgressElement>('[data-progress]')!;
+    const report = section.querySelector<HTMLElement>('[data-report]')!;
+    try {
+      rootInput.value = localStorage.getItem('import-root') ?? '';
+    } catch {
+      /* nothing remembered */
+    }
+
+    const AUDIO = /\.(mp3|flac|ogg|oga|opus|m4a|mp4|alac)$/i;
+
+    picker.addEventListener('change', async () => {
+      const chosen = [...(picker.files ?? [])].filter((f) => AUDIO.test(f.name));
+      const root = rootInput.value.trim().replace(/[\\/]+$/, '');
+      const full = (relative: string) => (root ? `${root}/${relative}` : relative);
+      const folder = full((chosen[0]?.webkitRelativePath ?? '').split('/')[0] ?? '');
+      report.replaceChildren();
+      progress.hidden = false;
+      progress.max = chosen.length || 1;
+      const found: { path: string; checksum: string }[] = [];
+      for (const [i, file] of chosen.entries()) {
+        progress.value = i;
+        status.textContent = `Fingerprinting ${i + 1} of ${chosen.length}…`;
+        const hash = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+        found.push({ path: full(file.webkitRelativePath || file.name), checksum: [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('') });
+      }
+      progress.hidden = true;
+
+      const result = verify(known, found, folder);
+      const groups: [string, string[], string][] = [
+        ['Unchanged', result.ok, 'ok'],
+        ['Changed since import', result.changed, 'bad'],
+        ['Missing', result.missing, 'bad'],
+        ['Not catalogued', result.unknown, 'note'],
+        ['Present, but imported without a checksum', result.unchecked, 'note'],
+      ];
+      status.textContent =
+        result.changed.length + result.missing.length === 0
+          ? `All ${result.ok.length} catalogued files in ${folder} are present and unchanged.`
+          : `${result.changed.length} changed and ${result.missing.length} missing in ${folder}.`;
+      for (const [heading, paths, tone] of groups) {
+        if (paths.length === 0 || tone === 'ok') continue;
+        const h = document.createElement('h3');
+        h.textContent = `${heading} (${paths.length})`;
+        h.dataset.tone = tone;
+        const ul = document.createElement('ul');
+        for (const p of paths.slice(0, 200)) {
+          const li = document.createElement('li');
+          li.textContent = p;
+          ul.appendChild(li);
+        }
+        report.appendChild(h);
+        report.appendChild(ul);
+      }
+    });
+  }
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    max-width: 52rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .empty {
+    padding: var(--space-6);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-l);
+    color: var(--text-muted);
+  }
+
+  .verify {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .verify .field {
+    width: 100%;
+  }
+
+  .pick:focus-within {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .status:empty {
+    display: none;
+  }
+
+  progress {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  [data-report] {
+    display: grid;
+    gap: var(--space-2);
+    width: 100%;
+    font-size: var(--step--1);
+  }
+
+  [data-report] :global(h3[data-tone='bad']) {
+    color: var(--danger);
+  }
+
+  [data-report] :global(ul) {
+    margin: 0;
+    padding-left: 1.2rem;
+    overflow-wrap: anywhere;
+  }
+
+  .albums {
+    display: grid;
+    gap: var(--space-2);
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  summary {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    cursor: pointer;
+  }
+
+  .title {
+    font-weight: 700;
+  }
+
+  .paths {
+    display: grid;
+    gap: var(--space-2);
+    margin: var(--space-2) 0 var(--space-3);
+    padding: 0;
+    list-style: none;
+    font-size: var(--step--1);
+  }
+
+  .paths li {
+    display: grid;
+  }
+
+  .path {
+    font-family: var(--font-mono);
+    overflow-wrap: anywhere;
+  }
+</style>

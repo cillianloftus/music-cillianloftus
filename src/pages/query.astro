@@ -3,8 +3,8 @@
  * The filter-chip builder (build step 8). The state is the definition in
  * the URL (?d=), so the back button is undo and every state can be shared.
  * Every edit is a GET that redirects to a clean URL; nothing here needs
- * JavaScript. Natural language will arrive on this page and produce the
- * same definitions.
+ * JavaScript. Natural language (typed or spoken) posts to /api/query and
+ * comes back here as the same kind of definition, shown as the same chips.
  */
 import Base from '../layouts/Base.astro';
 import ResultList from '../components/ResultList.astro';
@@ -120,6 +120,17 @@ const entityTabs: [Entity, string][] = [
   ['release_group', 'Albums'],
   ['artist', 'Artists'],
 ];
+// The natural-language box: what was asked, what the model misheard, what failed.
+const asked = params.get('asked') ?? '';
+const askError = params.get('ask_error');
+let heard: { heard: string; name: string }[] = [];
+try {
+  heard = JSON.parse(params.get('heard') ?? '[]');
+} catch {
+  heard = [];
+}
+const refining = Boolean(encoded) && !askError;
+
 const saveHref = `/edit/definition/${saved ? saved.id : 'new'}?d=${encodeDefinition(definition)}`;
 ---
 
@@ -127,8 +138,52 @@ const saveHref = `/edit/definition/${saved ? saved.id : 'new'}?d=${encodeDefinit
   <div class="wrap page">
     <header>
       <h1>{saved ? saved.name : 'Build a playlist'}</h1>
-      <p class="muted">Every change updates the results. Back undoes.</p>
+      <p class="muted">Say what you want, or build it with filters. Every change updates the results. Back undoes.</p>
     </header>
+
+    <form class="ask" method="post" action="/api/query" data-ask>
+      <label for="utterance" class="visually-hidden">Ask for music</label>
+      <div class="ask-row">
+        <input
+          class="input"
+          id="utterance"
+          name="utterance"
+          type="text"
+          autocomplete="off"
+          enterkeyhint="go"
+          maxlength="500"
+          required
+          value={askError ? asked : ''}
+          placeholder={refining ? '“Make it thirty”' : '“Top 20 albums from the 90s”'}
+          aria-describedby="ask-status"
+        />
+        <button class="button mic" type="button" hidden data-mic aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg>
+          <span class="visually-hidden">Speak</span>
+        </button>
+        <button class="button button--primary" type="submit">Ask</button>
+      </div>
+      {encoded && <input type="hidden" name="d" value={encoded} />}
+      {savedId && <input type="hidden" name="saved" value={savedId} />}
+      {
+        encoded && (
+          <label class="fresh">
+            <input type="checkbox" name="fresh" /> Start from scratch instead of changing this one
+          </label>
+        )
+      }
+      <p id="ask-status" class="ask-status" role="status" data-ask-status>
+        {askError && <span class="error-text">{askError}</span>}
+        {!askError && asked && <span>You asked: “{asked}”.</span>}
+        {
+          heard.map((h) => (
+            <span>
+              {' '}Read “{h.heard}” as {h.name}.
+            </span>
+          ))
+        }
+      </p>
+    </form>
 
     <nav class="tabs" aria-label="What to list">
       {
@@ -341,7 +396,138 @@ const saveHref = `/edit/definition/${saved ? saved.id : 'new'}?d=${encodeDefinit
   </div>
 </Base>
 
+<script>
+  // Voice is another way to fill the same box (ARCHITECTURE.md §4, "Voice"):
+  // the interim transcript shows as it is heard, and a final one submits.
+  type Recognition = {
+    lang: string;
+    interimResults: boolean;
+    continuous: boolean;
+    start(): void;
+    stop(): void;
+    onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
+    onend: (() => void) | null;
+    onerror: ((event: { error: string }) => void) | null;
+  };
+  const w = window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
+  const Speech = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+  const form = document.querySelector<HTMLFormElement>('[data-ask]');
+  const mic = document.querySelector<HTMLButtonElement>('[data-mic]');
+  const input = document.getElementById('utterance') as HTMLInputElement | null;
+  const status = document.querySelector<HTMLElement>('[data-ask-status]');
+
+  if (Speech && form && mic && input && status) {
+    mic.hidden = false;
+    let recognition: Recognition | null = null;
+    let finalText = '';
+
+    const stop = () => {
+      mic.setAttribute('aria-pressed', 'false');
+      recognition = null;
+    };
+
+    mic.addEventListener('click', () => {
+      if (recognition) {
+        recognition.stop();
+        return;
+      }
+      recognition = new Speech();
+      recognition.lang = document.documentElement.lang || 'en-GB';
+      recognition.interimResults = true;
+      recognition.continuous = false;
+      finalText = '';
+      recognition.onresult = (event) => {
+        let interim = '';
+        finalText = '';
+        for (let i = 0; i < event.results.length; i++) {
+          const result = event.results[i]!;
+          if (result.isFinal) finalText += result[0]!.transcript;
+          else interim += result[0]!.transcript;
+        }
+        input.value = (finalText + interim).trim();
+      };
+      recognition.onerror = (event) => {
+        status.textContent = event.error === 'not-allowed' ? 'Microphone access was refused.' : 'Did not catch that. Try again, or type it.';
+        stop();
+      };
+      recognition.onend = () => {
+        const text = finalText.trim();
+        stop();
+        if (text) {
+          input.value = text;
+          status.textContent = 'Working it out…';
+          form.requestSubmit();
+        }
+      };
+      mic.setAttribute('aria-pressed', 'true');
+      status.textContent = 'Listening…';
+      recognition.start();
+    });
+  }
+
+  // A model call takes a moment; say so rather than looking frozen.
+  form?.addEventListener('submit', () => {
+    if (status) status.textContent = 'Working it out…';
+    form.querySelector<HTMLButtonElement>('button[type="submit"]')?.setAttribute('aria-disabled', 'true');
+  });
+</script>
+
 <style>
+  .ask {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .ask-row {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .ask-row .input {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--step-0);
+  }
+
+  .mic {
+    width: var(--target);
+    padding: 0;
+  }
+
+  .mic svg {
+    width: 1.25rem;
+    height: 1.25rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+
+  .mic[aria-pressed='true'] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+  }
+
+  .fresh {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .ask-status {
+    min-height: 1.4em;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .error-text {
+    color: var(--danger);
+  }
+
   .page {
     display: grid;
     gap: var(--space-5);
@@ -350,10 +536,6 @@ const saveHref = `/edit/definition/${saved ? saved.id : 'new'}?d=${encodeDefinit
   header {
     display: grid;
     gap: var(--space-1);
-  }
-
-  h1 {
-    font-size: var(--step-2);
   }
 
   h2 {

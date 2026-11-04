@@ -53,7 +53,7 @@ const canPush = entity === 'recording' && configured && status && status.days_le
 
   {
     canPush && (
-      <form method="post" action="/api/write/spotify/push">
+      <form method="post" action="/api/write/spotify/push" data-push={definitionId}>
         <input type="hidden" name="definition_id" value={definitionId} />
         <button class="button button--primary" type="submit" disabled={busy}>
           {busy ? 'Pushing…' : spotifyPlaylistId ? 'Update on Spotify' : 'Push to Spotify'}
@@ -107,6 +107,52 @@ const canPush = entity === 'recording' && configured && status && status.days_le
     }
   </div>
 </section>
+
+<script>
+  /**
+   * Draws the playlist's generated art into a JPEG and sends it with the
+   * push, so the Spotify playlist gets the same cover. Workers have no
+   * canvas; browsers do. Any failure falls back to a plain push.
+   */
+  async function coverJpeg(definitionId: string): Promise<Blob | null> {
+    const image = new Image();
+    image.src = `/playlist/${definitionId}/art.svg`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 640;
+    canvas.getContext('2d')!.drawImage(image, 0, 0, 640, 640);
+    // Spotify's limit is 256 KB of base64: about 190 KB of JPEG.
+    for (const quality of [0.9, 0.8, 0.65, 0.5]) {
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+      if (blob && blob.size <= 190_000) return blob;
+    }
+    return null;
+  }
+
+  for (const form of document.querySelectorAll<HTMLFormElement>('form[data-push]')) {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = form.querySelector('button');
+      if (button) {
+        button.disabled = true;
+        button.textContent = 'Pushing…';
+      }
+      const body = new FormData(form);
+      try {
+        const cover = await coverJpeg(form.dataset.push!);
+        if (cover) body.set('art', cover, 'cover.jpg');
+      } catch {
+        // No cover this time; the tracks still go up.
+      }
+      try {
+        const response = await fetch(form.action, { method: 'POST', body });
+        location.assign(response.redirected ? response.url : location.href);
+      } catch {
+        form.submit();
+      }
+    });
+  }
+</script>
 
 <style>
   .spotify {

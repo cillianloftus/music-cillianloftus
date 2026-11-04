@@ -77,6 +77,12 @@
   box-sizing: border-box;
 }
 
+/* The hidden attribute must win over any display a class sets (a hidden
+   .button is still inline-flex otherwise). */
+[hidden] {
+  display: none !important;
+}
+
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
@@ -109,8 +115,9 @@ p {
 
 a {
   color: inherit;
-  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
-  text-underline-offset: 0.18em;
+  text-decoration-color: color-mix(in srgb, currentColor 32%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
 }
 
 a:hover {
@@ -135,6 +142,15 @@ select,
 textarea {
   font: inherit;
   color: inherit;
+}
+
+/* Page titles share one display style; pages with a hero set their own. */
+h1 {
+  font-size: clamp(2rem, 1.5rem + 2.2vw, 3rem);
+  font-weight: 850;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  text-wrap: balance;
 }
 
 .visually-hidden {

@@ -19,7 +19,13 @@ function describe(kind: string, payloadJson: string): { label: string; href: str
         linkText: 'Open playlist',
       };
     }
-    const target = payload.target ? `MusicBrainz ${payload.target.entity} ${payload.target.mbid.slice(0, 8)}…` : '';
+    const t = payload.target;
+    const via = payload.result?.via === 'musicbrainz' ? ', found on MusicBrainz' : '';
+    const target = !t
+      ? ''
+      : payload.source === 'spotify'
+        ? `Spotify ${t.kind} ${String(t.id).slice(0, 8)}…${via}`
+        : `MusicBrainz ${t.entity} ${String(t.mbid).slice(0, 8)}…`;
     const href = payload.result?.releaseGroupId ? `/album/${payload.result.releaseGroupId}` : null;
     return { label: target, href, linkText: 'Open album' };
   } catch {
@@ -107,10 +113,6 @@ function describe(kind: string, payloadJson: string): { label: string; href: str
   .page {
     display: grid;
     gap: var(--space-5);
-  }
-
-  h1 {
-    font-size: var(--step-2);
   }
 
   .muted {

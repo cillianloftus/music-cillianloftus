@@ -1,0 +1,133 @@
+---
+/**
+ * One level of the genre tree editor, as nested lists: each genre with its
+ * track count, a way to move it, and its children beneath. Recursive.
+ */
+
+export interface EditNode {
+  id: string;
+  name: string;
+  parent: string | null;
+  tracks: number;
+  children: EditNode[];
+}
+
+interface Props {
+  nodes: EditNode[];
+  suggestOpen: boolean;
+  level?: number;
+}
+
+const { nodes, suggestOpen, level = 1 } = Astro.props;
+---
+
+<ul role="list" class:list={['tree', { nested: level > 1 }]}>
+  {
+    nodes.map((node) => (
+      <li id={`genre-${node.id}`}>
+        <div class="row">
+          <span class="name">{node.name}</span>
+          <span class="count tabular">{node.tracks > 0 ? `${node.tracks} ${node.tracks === 1 ? 'track' : 'tracks'}` : ''}</span>
+          <details class="move">
+            <summary>
+              Move<span class="visually-hidden"> {node.name}</span>
+            </summary>
+            <form method="post" action="/api/write/genre">
+              <input type="hidden" name="id" value={node.id} />
+              {suggestOpen && <input type="hidden" name="suggest" value="1" />}
+              <label for={`parent-${node.id}`}>Beneath</label>
+              <input
+                class="input"
+                id={`parent-${node.id}`}
+                name="parent"
+                list="genre-names"
+                autocomplete="off"
+                value={node.parent ?? ''}
+                placeholder="Top level"
+              />
+              <button class="button" type="submit">Move</button>
+            </form>
+          </details>
+        </div>
+        {node.children.length > 0 && <Astro.self nodes={node.children} suggestOpen={suggestOpen} level={level + 1} />}
+      </li>
+    ))
+  }
+</ul>
+
+<style>
+  .tree {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .nested {
+    margin-left: var(--space-3);
+    padding-left: var(--space-4);
+    border-left: 1px solid var(--border);
+  }
+
+  li {
+    scroll-margin-top: var(--space-6);
+  }
+
+  li:target > .row {
+    background: var(--surface-2);
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 var(--space-3);
+    min-height: var(--target);
+    border-radius: var(--radius-s);
+  }
+
+  .name {
+    font-weight: 650;
+  }
+
+  .count {
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+  }
+
+  .move {
+    margin-left: auto;
+  }
+
+  .move summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    padding: 0 var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    cursor: pointer;
+  }
+
+  .move[open] {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+
+  .move form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 0 var(--space-3);
+  }
+
+  .move .input {
+    flex: 1 1 12rem;
+    width: auto;
+  }
+
+  label {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+</style>

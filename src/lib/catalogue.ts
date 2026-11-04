@@ -283,3 +283,61 @@ export async function artistAppearances(artistId: string): Promise<{ role: Credi
     .all<{ role: CreditRole; count: number }>();
   return results;
 }
+
+export interface ArtistTrack {
+  id: string;
+  title: string;
+  quality_score: number;
+  personal_score: number;
+  album_id: string | null;
+  album_title: string | null;
+  art_key: string | null;
+}
+
+/** An artist's best-rated recordings, as primary artist. */
+export async function artistTopTracks(artistId: string, viewerId: string | null, limit = 5): Promise<ArtistTrack[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT r.id, r.title, s.quality_score, s.personal_score,
+            ra.release_group_id AS album_id, g.title AS album_title, x.art_key
+     FROM artist_credit c
+     JOIN recording r ON r.id = c.entity_id
+     JOIN v_recording_score s ON s.recording_id = r.id AND s.user_id = ?1
+     LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
+     LEFT JOIN release_group g ON g.id = ra.release_group_id
+     LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
+     LEFT JOIN release x ON x.id = gc.release_id
+     WHERE c.entity_type = 'recording' AND c.artist_id = ?2 AND c.role = 'primary'
+     ORDER BY s.personal_score DESC, s.quality_score DESC, r.title
+     LIMIT ?3`,
+  )
+    .bind(viewerId, artistId, limit)
+    .all<ArtistTrack>();
+  return results;
+}
+
+export interface Collaborator {
+  id: string;
+  name: string;
+  /** Recordings or releases of this artist's that credit them. */
+  count: number;
+}
+
+/** Who appears most on this artist's own records, in any role but their own. */
+export async function artistCollaborators(artistId: string, limit = 8): Promise<Collaborator[]> {
+  const { results } = await env.DB.prepare(
+    `WITH own AS (
+       SELECT entity_type, entity_id FROM artist_credit WHERE artist_id = ?1 AND role = 'primary'
+     )
+     SELECT a.id, a.name, count(DISTINCT c.entity_type || c.entity_id) AS count
+     FROM own o
+     JOIN artist_credit c ON c.entity_type = o.entity_type AND c.entity_id = o.entity_id
+     JOIN artist a ON a.id = c.artist_id
+     WHERE c.artist_id <> ?1
+     GROUP BY a.id
+     ORDER BY count DESC, a.name
+     LIMIT ?2`,
+  )
+    .bind(artistId, limit)
+    .all<Collaborator>();
+  return results;
+}

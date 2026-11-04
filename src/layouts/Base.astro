@@ -6,9 +6,12 @@ import { THEME_COOKIE, themeFrom } from '../lib/theme';
 interface Props {
   title: string;
   description?: string;
+  /** A picture for link previews: a stored cover path such as /art/release/x/1200.jpg. */
+  image?: string | null;
 }
 
-const { title, description = 'Albums and tracks, rated by Cillian Loftus.' } = Astro.props;
+const { title, description = 'Albums and tracks, rated by Cillian Loftus.', image = null } = Astro.props;
+const absolute = (path: string) => new URL(path, Astro.url.origin).toString();
 const theme = themeFrom(Astro.cookies.get(THEME_COOKIE)?.value);
 const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · music · Cillian Loftus`;
 ---
@@ -20,6 +23,14 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
+    <meta property="og:site_name" content="music · Cillian Loftus" />
+    <meta property="og:title" content={title === 'music' ? 'music · Cillian Loftus' : title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={absolute(Astro.url.pathname)} />
+    <meta property="og:type" content="website" />
+    {image && <meta property="og:image" content={absolute(image)} />}
+    <meta name="twitter:card" content={image ? 'summary_large_image' : 'summary'} />
+    <link rel="canonical" href={absolute(Astro.url.pathname)} />
     <meta name="theme-color" content={theme === 'light' ? '#f6f3ec' : '#0e0e10'} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
@@ -51,7 +62,11 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     transform: none;
   }
 
+  /* A stacking context of its own, so page backdrops (z-index -1) sit
+     behind the content but above the page background. */
   main {
+    position: relative;
+    isolation: isolate;
     padding-block: var(--space-5) var(--space-7);
   }
 

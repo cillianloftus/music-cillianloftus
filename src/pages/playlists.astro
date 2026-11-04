@@ -18,9 +18,10 @@ const user = Astro.locals.user;
       definitions.length === 0 ? (
         <p class="empty">No playlists yet.</p>
       ) : (
-        <ul class="list" role="list">
+        <ul class="grid" role="list">
           {definitions.map((d) => (
             <li>
+              <img class="art" src={`/playlist/${d.id}/art.svg`} alt="" width="640" height="640" loading="lazy" decoding="async" />
               <a class="name" href={`/playlist/${d.id}`}>{d.name}</a>
               {d.description && <p class="muted">{d.description}</p>}
             </li>
@@ -43,10 +44,6 @@ const user = Astro.locals.user;
     justify-items: start;
   }
 
-  h1 {
-    font-size: var(--step-2);
-  }
-
   .muted {
     color: var(--text-muted);
   }
@@ -58,38 +55,69 @@ const user = Astro.locals.user;
     color: var(--text-muted);
   }
 
-  .list {
+  h1 {
+    font-size: clamp(2.2rem, 1.6rem + 2.4vw, 3.25rem);
+    font-weight: 850;
+    letter-spacing: -0.035em;
+  }
+
+  .grid {
     display: grid;
-    gap: var(--space-3);
+    grid-template-columns: repeat(auto-fill, minmax(min(11rem, 44%), 1fr));
+    gap: var(--space-6) var(--space-5);
     margin: 0;
     padding: 0;
     list-style: none;
   }
 
-  .list li {
+  .grid li {
     position: relative;
     display: grid;
-    gap: var(--space-1);
-    padding: var(--space-4);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-m);
-    background: var(--surface-1);
+    align-content: start;
+    gap: var(--space-2);
   }
 
-  .list li:hover {
-    border-color: var(--text-subtle);
+  .art {
+    width: 100%;
+    height: auto;
+    border-radius: var(--radius-m);
+    box-shadow: var(--shadow);
+    transition: transform 0.25s cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+
+  .grid li:hover .art {
+    transform: translateY(-3px);
   }
 
   .name {
-    font-size: var(--step-1);
+    margin-top: var(--space-1);
+    font-size: var(--step-0);
     font-weight: 700;
     text-decoration: none;
   }
 
+  /* The whole tile is the link. */
   .name::after {
     content: '';
     position: absolute;
     inset: 0;
     border-radius: var(--radius-m);
+  }
+
+  .grid li:hover .name {
+    text-decoration: underline;
+  }
+
+  .name:focus-visible {
+    outline: none;
+  }
+
+  .name:focus-visible::after {
+    outline: 3px solid var(--focus);
+    outline-offset: 4px;
+  }
+
+  .grid .muted {
+    font-size: var(--step--1);
   }
 </style>

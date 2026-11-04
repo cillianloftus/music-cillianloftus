@@ -14,7 +14,7 @@
 import { env } from 'cloudflare:workers';
 import { getDefinition } from '../definitions';
 import { selectIds } from '../query/run';
-import { SpotifyError, spotifyFor, type SpotifyClient } from './client';
+import { MARKET, SpotifyError, spotifyFor, type SpotifyClient } from './client';
 import { resolveSpotifyIds } from './match';
 
 export interface PushReport {
@@ -24,6 +24,30 @@ export interface PushReport {
   pushed: number;
   unmatched: { id: string; title: string; artist: string | null }[];
   unplayable: { spotifyId: string; title: string }[];
+  /** Whether the generated cover went up: covers never fail a push. */
+  cover?: 'uploaded' | 'failed' | 'none';
+}
+
+/** Uploads the stored cover, if there is one. Returns what happened rather than throwing. */
+async function uploadCover(spotify: SpotifyClient, playlistId: string, artKey: string | null): Promise<PushReport['cover']> {
+  if (!artKey) return 'none';
+  try {
+    const object = await env.ASSET_STORE.get(artKey);
+    if (!object) return 'none';
+    const bytes = new Uint8Array(await object.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    await spotify.putJpeg(`/playlists/${playlistId}/images`, btoa(binary));
+    return 'uploaded';
+  } catch (error) {
+    console.warn('Playlist cover upload failed', error);
+    return 'failed';
+  }
+}
+
+/** Spotify takes up to 256 KB of base64, so about 190 KB of JPEG. Checked by its magic bytes, not its name. */
+export function isSmallJpeg(bytes: Uint8Array): boolean {
+  return bytes.length > 100 && bytes.length <= 190_000 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 }
 
 const MAX_ITEMS_PER_REQUEST = 100;
@@ -73,7 +97,7 @@ async function replaceItems(spotify: SpotifyClient, playlistId: string, uris: st
 /** Tracks Spotify will not play in the account's market (ARCHITECTURE.md §6). */
 async function findUnplayable(spotify: SpotifyClient, playlistId: string): Promise<PushReport['unplayable']> {
   const unplayable: PushReport['unplayable'] = [];
-  let path: string | null = `/playlists/${playlistId}/items?market=from_token&limit=50&fields=${encodeURIComponent('items(item(id,name,is_playable)),next')}`;
+  let path: string | null = `/playlists/${playlistId}/items?market=${MARKET}&limit=50&fields=${encodeURIComponent('items(item(id,name,is_playable)),next')}`;
   while (path) {
     const page: PlaylistItemsPage = await spotify.get<PlaylistItemsPage>(path);
     for (const entry of page.items) {
@@ -120,6 +144,7 @@ export async function pushDefinition(definitionId: string): Promise<PushReport> 
     .run();
 
   const unplayable = uris.length > 0 ? await findUnplayable(spotify, playlist.id) : [];
+  const cover = await uploadCover(spotify, playlist.id, saved.art_key);
 
   return {
     playlistId: playlist.id,
@@ -128,5 +153,6 @@ export async function pushDefinition(definitionId: string): Promise<PushReport> 
     pushed: uris.length,
     unmatched,
     unplayable,
+    cover,
   };
 }

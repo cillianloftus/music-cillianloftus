@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import Backdrop from '../../components/Backdrop.astro';
 import DefinitionChips from '../../components/DefinitionChips.astro';
 import ResultList from '../../components/ResultList.astro';
 import SpotifyPanel from '../../components/SpotifyPanel.astro';
@@ -17,14 +18,36 @@ const results = await runDefinition(saved.definition, {
   excludes: saved.excludes,
 });
 const user = Astro.locals.user;
+
+const noun = saved.definition.entity === 'recording' ? 'track' : saved.definition.entity === 'release_group' ? 'album' : 'artist';
+const totalMs = results.reduce((sum, r) => sum + ('length_ms' in r && typeof r.length_ms === 'number' ? r.length_ms : 0), 0);
+const hours = Math.floor(totalMs / 3_600_000);
+const minutes = Math.round((totalMs % 3_600_000) / 60_000);
+const summary = [
+  `${results.length} ${noun}${results.length === 1 ? '' : 's'}`,
+  totalMs > 0 ? (hours ? `${hours} hr ${minutes} min` : `${minutes} min`) : null,
+]
+  .filter(Boolean)
+  .join(' · ');
 ---
 
 <Base title={saved.name} description={saved.description ?? undefined}>
   <div class="wrap page">
+    <Backdrop src={`/playlist/${saved.id}/art.svg`} height="32rem" />
     <header>
+      <img
+        class="art"
+        src={`/playlist/${saved.id}/art.svg`}
+        alt=""
+        width="640"
+        height="640"
+        decoding="async"
+      />
+      <div class="intro">
       <p class="eyebrow">Playlist · {saved.owner_name}</p>
       <h1>{saved.name}</h1>
       {saved.description && <p class="muted">{saved.description}</p>}
+      <p class="count tabular">{summary}</p>
       <DefinitionChips definition={saved.definition} />
       {
         user?.id === saved.user_id && (
@@ -34,6 +57,7 @@ const user = Astro.locals.user;
           </p>
         )
       }
+      </div>
     </header>
 
     {
@@ -75,12 +99,45 @@ const user = Astro.locals.user;
 
   header {
     display: grid;
+    gap: var(--space-5);
+    align-items: end;
+    padding-top: var(--space-4);
+  }
+
+  .intro {
+    display: grid;
     gap: var(--space-3);
+    min-width: 0;
+  }
+
+  @media (min-width: 48rem) {
+    header {
+      grid-template-columns: 16rem minmax(0, 1fr);
+      gap: var(--space-7);
+    }
+  }
+
+  /* Generated from the playlist's contents; decorative, as the list below says it all in words. */
+  .art {
+    width: min(16rem, 64vw);
+    height: auto;
+    border-radius: var(--radius-m);
+    box-shadow:
+      0 2px 4px rgb(0 0 0 / 0.3),
+      0 24px 60px -12px rgb(0 0 0 / 0.55);
   }
 
   h1 {
-    font-size: var(--step-3);
-    font-weight: 800;
+    font-size: clamp(2.2rem, 1.4rem + 3.2vw, 4.25rem);
+    font-weight: 850;
+    letter-spacing: -0.035em;
+    line-height: 0.98;
+    text-wrap: balance;
+  }
+
+  .count {
+    color: var(--text-muted);
+    font-weight: 600;
   }
 
   .muted {

@@ -14,6 +14,14 @@ const API = 'https://api.spotify.com/v1';
 
 export const SCOPES = ['playlist-modify-private', 'playlist-modify-public', 'ugc-image-upload'];
 
+/**
+ * The market availability is judged in. Named outright: "from_token" makes
+ * Spotify read the account's country, which needs the user-read-private
+ * scope, and without it search fails with 403 "Insufficient client scope"
+ * (found on the first real push, November 2026).
+ */
+export const MARKET = 'IE';
+
 /** Development Mode refresh tokens expire six months after authorisation. */
 export const AUTHORIZATION_LIFETIME_DAYS = 182;
 
@@ -161,6 +169,14 @@ async function accessToken(userId: string, force = false): Promise<string> {
   return token.access_token;
 }
 
+/** A request body sent as given rather than as JSON: base64 image data. */
+class RawBody {
+  constructor(
+    readonly text: string,
+    readonly type: string,
+  ) {}
+}
+
 /** An authenticated API client for one user. */
 export function spotifyFor(userId: string) {
   async function request<T>(
@@ -175,9 +191,9 @@ export function spotifyFor(userId: string) {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
-        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(body instanceof RawBody ? { 'Content-Type': body.type } : body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body instanceof RawBody ? body.text : body !== undefined ? JSON.stringify(body) : undefined,
     });
 
     // An access token can be revoked early; refresh once and retry.
@@ -205,6 +221,8 @@ export function spotifyFor(userId: string) {
     get: <T>(path: string) => request<T>('GET', path),
     post: <T>(path: string, body: unknown) => request<T>('POST', path, body),
     put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
+    /** Spotify takes playlist covers as base64 JPEG in the body, up to 256 KB. */
+    putJpeg: (path: string, base64: string) => request<void>('PUT', path, new RawBody(base64, 'image/jpeg')),
   };
 }
 

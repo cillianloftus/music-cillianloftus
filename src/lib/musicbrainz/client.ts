@@ -100,3 +100,17 @@ export async function browseReleases(releaseGroupMbid: string): Promise<MbReleas
   }
   return releases;
 }
+
+/**
+ * Releases carrying a barcode (UPC/EAN), best match first. How an album
+ * found elsewhere (Spotify gives its UPC) is looked up here first, since
+ * MusicBrainz has the richer record.
+ */
+export async function releasesByBarcode(barcode: string): Promise<{ id: string; score: number; title: string }[]> {
+  if (!/^\d{8,14}$/.test(barcode)) return [];
+  const page = await get<{ releases?: { id: string; score: number; title: string }[] }>(
+    `release?query=barcode:${barcode}&limit=5`,
+    [],
+  );
+  return (page.releases ?? []).map(({ id, score, title }) => ({ id, score, title }));
+}

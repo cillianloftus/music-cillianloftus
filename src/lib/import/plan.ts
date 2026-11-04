@@ -41,6 +41,8 @@ export type CreditEntity = 'release_group' | 'release' | 'recording';
 export interface PlanArtist {
   key: string;
   mbid: string | null;
+  /** Spotify's id, when the source is Spotify. Matched like an MBID. */
+  spotify_id?: string | null;
   name: string;
   sort_name: string;
   disambiguation: string | null;
@@ -61,6 +63,7 @@ export interface PlanRecording {
   date_precision: DatePrecision;
   isrc: string | null;
   work_key: string | null;
+  spotify_id?: string | null;
 }
 
 export interface PlanReleaseGroup {
@@ -71,6 +74,7 @@ export interface PlanReleaseGroup {
   status: 'announced' | 'released' | 'cancelled';
   first_release_date: string | null;
   date_precision: DatePrecision;
+  spotify_id?: string | null;
 }
 
 export interface PlanRelease {
@@ -82,6 +86,7 @@ export interface PlanRelease {
   country: string | null;
   label: string | null;
   format: string | null;
+  spotify_id?: string | null;
 }
 
 export interface PlanTrack {

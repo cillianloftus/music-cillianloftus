@@ -1,0 +1,220 @@
+---
+/**
+ * An album's score with what it is made of: the number, the impact it
+ * adds, how much of the album has been rated, and the album axes from the
+ * latest rating. Everything shown is read from the score views and the
+ * rating itself; nothing is computed here.
+ */
+import type { RatingRow } from '../lib/ratings';
+
+interface Props {
+  quality: number | null | undefined;
+  personal: number | null | undefined;
+  ratedTracks?: number | null;
+  trackCount?: number | null;
+  rating?: RatingRow | null;
+  /** Where "Rate" goes, for the signed-in owner. */
+  rateHref?: string | null;
+}
+
+const { quality, personal, ratedTracks, trackCount, rating, rateHref } = Astro.props;
+const score = quality == null ? null : Math.round(quality);
+const impact = quality != null && personal != null ? Math.round(personal - quality) : 0;
+const coverage = trackCount ? Math.min(1, (ratedTracks ?? 0) / trackCount) : null;
+const axes = rating
+  ? ([
+      ['Sequencing', rating.sequencing],
+      ['Cohesion', rating.cohesion],
+      ['Ambition', rating.ambition],
+    ] as const).filter(([, v]) => v != null)
+  : [];
+const tier = score == null ? 'none' : score >= 90 ? 'top' : score >= 75 ? 'high' : 'mid';
+---
+
+<section class="panel" data-tier={tier} aria-label="Score">
+  {
+    score == null ? (
+      <div class="unrated">
+        <p class="label">Not rated yet</p>
+        {rateHref && (
+          <a class="button button--primary" href={rateHref}>
+            Rate album
+          </a>
+        )}
+      </div>
+    ) : (
+      <>
+        <div class="headline">
+          <p class="number tabular" aria-label={`Score ${score} out of 100`}>
+            <span class="value" aria-hidden="true">{score}</span>
+            <span class="out" aria-hidden="true">/100</span>
+          </p>
+          {impact > 0 && (
+            <p class="impact" title="Impact: what this album means, on top of how well it is made">
+              <span class="visually-hidden">plus </span>+{impact} impact
+            </p>
+          )}
+        </div>
+
+        <div class="details">
+          {coverage !== null && (
+            <div class="meter">
+              <p class="meter-label">
+                <span>Tracks rated</span>
+                <span class="tabular">
+                  {ratedTracks ?? 0} of {trackCount}
+                </span>
+              </p>
+              <span class="bar" aria-hidden="true">
+                <span style={`--fill: ${coverage}`} />
+              </span>
+            </div>
+          )}
+          {axes.map(([label, value]) => (
+            <div class="meter">
+              <p class="meter-label">
+                <span>{label}</span>
+                <span class="tabular">{value}</span>
+              </p>
+              <span class="bar" aria-hidden="true">
+                <span style={`--fill: ${(value as number) / 10}`} />
+              </span>
+            </div>
+          ))}
+          {rating && axes.length === 0 && rating.gut_score != null && <p class="gut">Gut score {rating.gut_score} of 10</p>}
+        </div>
+
+        {rateHref && (
+          <a class="rerate" href={rateHref}>
+            Rate again
+          </a>
+        )}
+      </>
+    )
+  }
+</section>
+
+<style>
+  .panel {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-4) var(--space-6);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-radius: var(--radius-l);
+    background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+    backdrop-filter: blur(12px);
+    max-width: 36rem;
+  }
+
+  .unrated {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .label {
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
+  .headline {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .number {
+    display: flex;
+    align-items: baseline;
+    gap: 0.1em;
+    line-height: 0.9;
+  }
+
+  .value {
+    font-size: clamp(2.8rem, 2rem + 3vw, 4rem);
+    font-weight: 800;
+    letter-spacing: -0.04em;
+  }
+
+  [data-tier='top'] .value,
+  [data-tier='high'] .value {
+    color: var(--accent);
+  }
+
+  .out {
+    color: var(--text-subtle);
+    font-size: var(--step-0);
+    font-weight: 600;
+  }
+
+  .impact {
+    justify-self: start;
+    padding: 0.1rem 0.55rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+    font-size: var(--step--1);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .details {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .meter {
+    display: grid;
+    gap: 3px;
+  }
+
+  .meter-label {
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .bar {
+    display: block;
+    height: 4px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--text) 12%, transparent);
+    overflow: hidden;
+  }
+
+  .bar > span {
+    display: block;
+    height: 100%;
+    width: calc(var(--fill) * 100%);
+    border-radius: inherit;
+    background: var(--accent);
+  }
+
+  .gut {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .rerate {
+    grid-column: 1 / -1;
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  @media (max-width: 26rem) {
+    .panel {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>

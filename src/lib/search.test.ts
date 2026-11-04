@@ -33,6 +33,12 @@ describe('search', () => {
     expect((await search('album b', null)).albums.map((a) => a.id)).toEqual(['rg-b']);
   });
 
+  it('finds an artist’s albums by their name, after any title matches', async () => {
+    const results = await search('yolan', 'u-owner');
+    expect(results.artists).toEqual([expect.objectContaining({ id: 'art-y', name: 'Yolanda', releases: 1 })]);
+    expect(results.albums.map((a) => a.id)).toEqual(['rg-c']);
+  });
+
   it('ignores accents in both directions', async () => {
     insert(db, 'artist', [{ id: 'art-b', name: 'Björk', sort_name: 'Björk', source: 'manual' }]);
     expect((await search('bjork', null)).artists.map((a) => a.id)).toEqual(['art-b']);

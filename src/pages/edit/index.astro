@@ -1,44 +1,190 @@
 ---
+/**
+ * The Manage hub: everything behind sign-in, grouped by what it is for,
+ * with a word of live status where there is something waiting.
+ */
+import { env } from 'cloudflare:workers';
 import Base from '../../layouts/Base.astro';
+import { connection } from '../../lib/spotify/client';
 
-const sections = [
-  { href: '/edit/import', title: 'Import', text: 'Add an album or edition from MusicBrainz.' },
-  { href: '/query', title: 'New playlist', text: 'Build a saved query with filter chips.' },
-  { href: '/edit/jobs', title: 'Jobs', text: 'Imports, pushes and backups, with errors and retries.' },
-  { href: '/edit/backups', title: 'Backups', text: 'Daily copies of every table, and how to restore one.' },
-  { href: '/edit/spotify', title: 'Spotify', text: 'Connection and authorisation expiry.' },
+const user = Astro.locals.user!;
+const [counts, spotify] = await Promise.all([
+  env.DB.prepare(
+    `SELECT (SELECT count(*) FROM anomaly WHERE status = 'open') AS review,
+            (SELECT count(*) FROM job WHERE status = 'failed') AS failed,
+            (SELECT count(*) FROM job WHERE status IN ('queued', 'running')) AS running,
+            (SELECT count(*) FROM file) AS files,
+            (SELECT count(*) FROM play WHERE user_id = ?1) AS plays`,
+  )
+    .bind(user.id)
+    .first<{ review: number; failed: number; running: number; files: number; plays: number }>(),
+  connection(user.id).catch(() => null),
+]);
+
+type Tone = 'attention' | 'quiet';
+interface Item {
+  href: string;
+  title: string;
+  text: string;
+  icon: string;
+  status?: { text: string; tone: Tone } | null;
+}
+
+const n = (x: number, one: string, many = `${one}s`) => `${x.toLocaleString('en-GB')} ${x === 1 ? one : many}`;
+
+// Simple 24px line icons, one path each.
+const ICONS = {
+  import: 'M12 4v11m0 0l-4-4m4 4l4-4M5 19h14',
+  files: 'M4 6h6l2 2h8v10H4z',
+  playlist: 'M4 7h12M4 12h12M4 17h7M18 14v6m-3-3h6',
+  history: 'M12 7v5l3 2M3 12a9 9 0 1 0 3-6.7M3 4v4h4',
+  spotify: 'M6 10c4-1.5 8-1 12 1M7 13.5c3-1 6.5-.7 9.5.8M8 17c2.2-.6 4.6-.4 6.8.6',
+  review: 'M9 12l2 2 4-4M12 3l8 4v5c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V7z',
+  genres: 'M12 7a3 3 0 1 0 0-.1M6 20a3 3 0 1 0 0-.1M18 20a3 3 0 1 0 0-.1M12 7v4m0 0l-5 5m5-5l5 5',
+  weights: 'M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4',
+  jobs: 'M4 6h16M4 12h10M4 18h6M17 15l2 2 3-4',
+  backups: 'M5 7c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3zm0 0v10c0 1.7 3.1 3 7 3s7-1.3 7-3V7M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3',
+};
+
+const groups: { heading: string; items: Item[] }[] = [
+  {
+    heading: 'Add music',
+    items: [
+      { href: '/edit/import', title: 'Import', text: 'From MusicBrainz or Spotify, a folder of files, or by hand.', icon: ICONS.import },
+      {
+        href: '/edit/files',
+        title: 'Files',
+        text: 'Audio you own, by where it lives. Check a folder for damaged rips.',
+        icon: ICONS.files,
+        status: counts?.files ? { text: n(counts.files, 'file'), tone: 'quiet' } : null,
+      },
+    ],
+  },
+  {
+    heading: 'Listen',
+    items: [
+      { href: '/query', title: 'New playlist', text: 'Ask for it, or build it with filters.', icon: ICONS.playlist },
+      {
+        href: '/edit/history',
+        title: 'Listening history',
+        text: 'Spotify plays, and what you rate against what you play.',
+        icon: ICONS.history,
+        status: counts?.plays ? { text: n(counts.plays, 'play'), tone: 'quiet' } : null,
+      },
+      {
+        href: '/edit/spotify',
+        title: 'Spotify',
+        text: 'The connection playlists are pushed through.',
+        icon: ICONS.spotify,
+        status: spotify ? { text: 'Connected', tone: 'quiet' } : { text: 'Not connected', tone: 'attention' },
+      },
+    ],
+  },
+  {
+    heading: 'Curate',
+    items: [
+      {
+        href: '/edit/review',
+        title: 'Review',
+        text: 'Duplicates, missing art and loose ends the nightly checks found.',
+        icon: ICONS.review,
+        status: counts?.review ? { text: `${counts.review} to look at`, tone: 'attention' } : { text: 'All clear', tone: 'quiet' },
+      },
+      { href: '/edit/genres', title: 'Genre tree', text: 'Place genres beneath each other, with help from Wikidata.', icon: ICONS.genres },
+      { href: '/edit/weights', title: 'Weights', text: 'How scores are worked out. Re-rank the library live.', icon: ICONS.weights },
+    ],
+  },
+  {
+    heading: 'System',
+    items: [
+      {
+        href: '/edit/jobs',
+        title: 'Jobs',
+        text: 'Imports, pushes and backups, with errors and retries.',
+        icon: ICONS.jobs,
+        status: counts?.failed
+          ? { text: `${counts.failed} failed`, tone: 'attention' }
+          : counts?.running
+            ? { text: `${counts.running} running`, tone: 'quiet' }
+            : null,
+      },
+      { href: '/edit/backups', title: 'Backups', text: 'Daily copies of every table, and how to restore one.', icon: ICONS.backups },
+    ],
+  },
 ];
 ---
 
 <Base title="Manage">
   <div class="wrap page">
-    <h1>Manage</h1>
-    <ul role="list">
-      {
-        sections.map((s) => (
-          <li>
-            <a href={s.href}>{s.title}</a>
-            <p>{s.text}</p>
-          </li>
-        ))
-      }
-    </ul>
+    <header>
+      <h1>Manage</h1>
+      <p class="muted">Signed in as {user.email}.</p>
+    </header>
+
+    {
+      groups.map((group) => (
+        <section aria-labelledby={`group-${group.heading.replace(/\s+/g, '-')}`}>
+          <h2 id={`group-${group.heading.replace(/\s+/g, '-')}`}>{group.heading}</h2>
+          <ul role="list" class="cards">
+            {group.items.map((item) => (
+              <li>
+                <span class="icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path d={item.icon} />
+                  </svg>
+                </span>
+                <div class="text">
+                  <a href={item.href}>{item.title}</a>
+                  <p>{item.text}</p>
+                </div>
+                {item.status && (
+                  <span class="status" data-tone={item.status.tone}>
+                    {item.status.text}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))
+    }
   </div>
 </Base>
 
 <style>
   .page {
     display: grid;
-    gap: var(--space-5);
-    max-width: 40rem;
+    gap: var(--space-6);
+    max-width: 60rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-1);
   }
 
   h1 {
-    font-size: var(--step-2);
+    font-size: clamp(2.2rem, 1.6rem + 2.4vw, 3.25rem);
+    font-weight: 850;
+    letter-spacing: -0.035em;
   }
 
-  ul {
+  h2 {
+    margin-bottom: var(--space-3);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .cards {
     display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
     gap: var(--space-3);
     margin: 0;
     padding: 0;
@@ -48,20 +194,51 @@ const sections = [
   li {
     position: relative;
     display: grid;
-    gap: var(--space-1);
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--space-3) var(--space-4);
     padding: var(--space-4);
     border: 1px solid var(--border);
     border-radius: var(--radius-m);
     background: var(--surface-1);
+    transition:
+      border-color 0.15s,
+      transform 0.15s;
   }
 
   li:hover {
     border-color: var(--text-subtle);
+    transform: translateY(-1px);
+  }
+
+  .icon {
+    display: grid;
+    place-items: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: var(--radius-s);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+    color: var(--accent);
+  }
+
+  .icon svg {
+    width: 1.35rem;
+    height: 1.35rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .text {
+    display: grid;
+    gap: 2px;
   }
 
   a {
     font-weight: 700;
-    font-size: var(--step-1);
+    font-size: var(--step-0);
     text-decoration: none;
   }
 
@@ -85,5 +262,20 @@ const sections = [
   p {
     color: var(--text-muted);
     font-size: var(--step--1);
+  }
+
+  .status {
+    padding: 0.1rem 0.55rem;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .status[data-tone='attention'] {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: var(--accent);
   }
 </style>

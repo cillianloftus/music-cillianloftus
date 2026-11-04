@@ -1,6 +1,7 @@
 ---
 import { env } from 'cloudflare:workers';
 import Base from '../../../../layouts/Base.astro';
+import Backdrop from '../../../../components/Backdrop.astro';
 import CoverArt from '../../../../components/CoverArt.astro';
 import CreditLine from '../../../../components/CreditLine.astro';
 import GutScale from '../../../../components/GutScale.astro';
@@ -12,6 +13,7 @@ import {
   safeReturnPath,
   type RatableEntity,
 } from '../../../../lib/ratings';
+import { activeWeights } from '../../../../lib/weights';
 
 const { type, id } = Astro.params as { type: string; id: string };
 if (type !== 'recording' && type !== 'release_group') return Astro.rewrite('/404');
@@ -51,10 +53,14 @@ const subject =
         .first<Subject>();
 if (!subject) return Astro.rewrite('/404');
 
-const [lines, history] = await Promise.all([
+const [lines, history, weights, calibration] = await Promise.all([
   artistLines(entityType, [id]),
   ratingHistory(user.id, entityType, id),
+  activeWeights(user.id),
+  env.DB.prepare('SELECT gut_offset FROM v_gut_calibration WHERE user_id = ?').bind(user.id).first<number>('gut_offset'),
 ]);
+// For the live preview: the same formula as the views (src/lib/scoring.ts).
+const previewData = { entityType, weights, offset: calibration ?? 0 };
 const credits = lines.get(id) ?? [];
 const current = history[0];
 
@@ -79,6 +85,7 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
 
 <Base title={`Rate ${subject.title}`}>
   <div class="wrap page">
+    <Backdrop artKey={subject.art_key} height="26rem" />
     <p><a class="back" href={returnTo}>← Back</a></p>
 
     <header class="subject">
@@ -161,7 +168,11 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
           </div>
         </fieldset>
 
-        <button class="button button--primary" type="submit">Save rating</button>
+        <div class="save-row">
+          <button class="button button--primary" type="submit">Save rating</button>
+          <p class="preview" data-preview aria-live="polite"></p>
+        </div>
+        <script is:inline type="application/json" id="rate-preview" set:html={JSON.stringify(previewData)} />
       </form>
     </details>
 
@@ -192,7 +203,62 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
   </div>
 </Base>
 
+<script>
+  // A live preview of the score this rating gives, by the views' own formula.
+  import { albumComposite, craftComposite, type Weights } from '../../../../lib/scoring';
+
+  const data = document.getElementById('rate-preview');
+  const out = document.querySelector<HTMLElement>('[data-preview]');
+  const form = out?.closest('form');
+  if (data && out && form) {
+    const { entityType, weights, offset } = JSON.parse(data.textContent!) as { entityType: string; weights: Weights; offset: number };
+    const value = (name: string) => {
+      const field = form.elements.namedItem(name) as HTMLInputElement | null;
+      if (!field || field.value.trim() === '') return null;
+      const n = Number(field.value);
+      return Number.isFinite(n) && n >= 0 && n <= 10 ? n : null;
+    };
+    const update = () => {
+      const axes = Object.fromEntries(
+        ['production', 'songwriting', 'lyrics', 'performance', 'sequencing', 'cohesion', 'ambition'].map((k) => [k, value(k)]),
+      );
+      const composite = entityType === 'recording' ? craftComposite(axes, weights) : albumComposite(axes, weights);
+      const gut = value('gut_score');
+      const base = composite ?? (gut === null ? null : gut + offset);
+      if (base === null) {
+        out.textContent = '';
+        return;
+      }
+      const quality = Math.round(Math.max(0, Math.min(100, base * 10)));
+      const impact = value('impact') ?? 0;
+      const how = composite !== null ? 'from the axes' : 'from your gut, calibrated';
+      out.textContent =
+        entityType === 'recording'
+          ? `Gives ${quality}${impact ? ` +${impact}` : ''}, ${how}.`
+          : `Album axes give ${quality}${impact ? ` +${impact}` : ''}, ${how}; the tracks make up the rest.`;
+    };
+    form.addEventListener('input', update);
+    update();
+  }
+</script>
+
 <style>
+  .save-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .preview {
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  .preview:empty {
+    display: none;
+  }
+
   .page {
     display: grid;
     gap: var(--space-6);

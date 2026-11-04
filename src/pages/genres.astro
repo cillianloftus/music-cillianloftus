@@ -7,6 +7,7 @@
  */
 import Base from '../layouts/Base.astro';
 import GenreList from '../components/GenreList.astro';
+import { hueOf } from '../lib/art/playlist';
 import { buildGenreTree, genreRows, packGenres } from '../lib/genres';
 
 const SIZE = 800;
@@ -15,19 +16,50 @@ const circles = packGenres(tree, SIZE);
 const largestLeaf = Math.max(1, ...circles.filter((c) => c.leaf).map((c) => c.value));
 const totalGenres = circles.filter((c) => !c.self).length;
 
-/**
- * Leaf colour strength, as % accent over the surface: square root, so small
- * genres stay visible. Capped at 45% so labels in --text keep >= 4.5:1 in
- * both modes (about 5:1 on the darkest dark-mode fill, 7:1 in light).
- */
-const mix = (value: number) => Math.round(10 + 35 * Math.sqrt(value / largestLeaf));
+// A group's name goes along its top edge, but only where its children leave
+// that strip clear; otherwise it would sit on top of a child's label.
+const clearAtTop = (group: (typeof circles)[number]) =>
+  circles.filter((c) => c.parent === group.id).every((c) => c.y - c.r > group.y - group.r + 30);
 
-function leafLabel(name: string, r: number): { text: string; size: number } | null {
-  if (r < 20) return null;
-  const size = Math.min(22, Math.max(10, r / 3.2));
-  const fits = Math.floor((r * 1.8) / (size * 0.56));
-  if (fits < 3) return null;
-  return { text: name.length > fits ? `${name.slice(0, fits - 1)}…` : name, size };
+/**
+ * Leaf colour strength, 0 to 1 by square root so small genres stay
+ * visible. Hue is the genre family's, the same hash the playlist art uses,
+ * so a family looks alike everywhere. Fills are OKLCH, whose lightness is
+ * perceptual: the ranges in the styles keep labels at 5.8:1 or better
+ * against every hue in both modes, where HSL would let yellows fail.
+ */
+const mix = (value: number) => Math.sqrt(value / largestLeaf).toFixed(3);
+
+/** Average glyph width of the bold label face, as a share of its size. */
+const GLYPH = 0.58;
+const MIN_SIZE = 8.5;
+
+/**
+ * Fits a genre's whole name inside its circle: one line, shrinking as far
+ * as it must; or two lines, broken at a space or hyphen, when that allows
+ * a larger size. Only a circle too small for either gets a shortened name.
+ */
+function leafLabel(name: string, r: number): { lines: string[]; size: number } | null {
+  if (r < 13) return null;
+  const cap = Math.min(22, r / 2.4);
+  const one = Math.min(cap, (1.7 * r) / (name.length * GLYPH));
+
+  let two: { lines: string[]; size: number } | null = null;
+  for (const m of name.matchAll(/[ -]/g)) {
+    const i = m.index!;
+    const first = name.slice(0, m[0] === '-' ? i + 1 : i);
+    const second = name.slice(i + 1);
+    const longest = Math.max(first.length, second.length);
+    // Two lines sit off-centre, where the circle is narrower.
+    const size = Math.min(cap, (1.5 * r) / (longest * GLYPH), r / 1.5);
+    if (!two || size > two.size) two = { lines: [first, second], size };
+  }
+
+  if (two && two.size > one * 1.15 && two.size >= MIN_SIZE) return two;
+  if (one >= MIN_SIZE) return { lines: [name], size: one };
+  if (two && two.size >= MIN_SIZE) return two;
+  const fits = Math.floor((1.7 * r) / (MIN_SIZE * GLYPH));
+  return fits >= 4 ? { lines: [`${name.slice(0, fits - 1)}…`], size: MIN_SIZE } : null;
 }
 ---
 
@@ -57,7 +89,7 @@ function leafLabel(name: string, r: number): { text: string; size: number } | nu
                       cy={c.y.toFixed(1)}
                       r={c.r.toFixed(1)}
                       class:list={[c.leaf ? 'leaf' : `group depth-${Math.min(c.depth, 3)}`, { self: c.self }]}
-                      style={c.leaf ? `--mix: ${mix(c.value)}` : undefined}
+                      style={`--h: ${hueOf(c.family)}${c.leaf ? `; --mix: ${mix(c.value)}` : ''}`}
                     />
                     {label && (
                       <text
@@ -68,10 +100,14 @@ function leafLabel(name: string, r: number): { text: string; size: number } | nu
                         text-anchor="middle"
                         dominant-baseline="central"
                       >
-                        {label.text}
+                        {label.lines.map((line, i) => (
+                          <tspan x={c.x.toFixed(1)} dy={i === 0 ? `${(-(label.lines.length - 1) * 0.55).toFixed(2)}em` : '1.1em'}>
+                            {line}
+                          </tspan>
+                        ))}
                       </text>
                     )}
-                    {!c.leaf && c.r >= 70 && (
+                    {!c.leaf && c.r >= 70 && clearAtTop(c) && (
                       <text x={c.x.toFixed(1)} y={(c.y - c.r + 20).toFixed(1)} class="group-label" text-anchor="middle">
                         {c.name}
                       </text>
@@ -81,7 +117,7 @@ function leafLabel(name: string, r: number): { text: string; size: number } | nu
               })}
             </svg>
             <figcaption class="muted">
-              {totalGenres} {totalGenres === 1 ? 'genre' : 'genres'}. Shaded by size; hover a circle for its count.
+              {totalGenres} {totalGenres === 1 ? 'genre' : 'genres'}. Coloured by family, deeper for bigger genres; hover a circle for its count.
             </figcaption>
           </figure>
 
@@ -107,7 +143,9 @@ function leafLabel(name: string, r: number): { text: string; size: number } | nu
   }
 
   h1 {
-    font-size: var(--step-2);
+    font-size: clamp(2.2rem, 1.6rem + 2.4vw, 3.25rem);
+    font-weight: 850;
+    letter-spacing: -0.035em;
   }
 
   h2 {
@@ -140,24 +178,44 @@ function leafLabel(name: string, r: number): { text: string; size: number } | nu
     stroke-width: 1.5;
   }
 
+  /* Groups: a faint wash of their family's colour, deepening with depth. */
   .depth-1 {
-    fill: var(--surface-1);
+    fill: oklch(0.2 0.025 var(--h));
   }
 
   .depth-2 {
-    fill: color-mix(in srgb, var(--surface-2) 60%, var(--surface-1));
+    fill: oklch(0.24 0.035 var(--h));
   }
 
   .depth-3 {
-    fill: var(--surface-2);
+    fill: oklch(0.28 0.045 var(--h));
   }
 
+  /* Leaves: 0.34 to 0.48 lightness under light text. */
   .leaf {
-    fill: color-mix(in srgb, var(--accent) calc(var(--mix) * 1%), var(--surface-2));
+    fill: oklch(calc(0.34 + var(--mix) * 0.14) calc(0.05 + var(--mix) * 0.05) var(--h));
+    transition: fill 0.2s;
+  }
+
+  :global([data-theme='light']) .depth-1 {
+    fill: oklch(0.96 0.015 var(--h));
+  }
+
+  :global([data-theme='light']) .depth-2 {
+    fill: oklch(0.93 0.025 var(--h));
+  }
+
+  :global([data-theme='light']) .depth-3 {
+    fill: oklch(0.9 0.035 var(--h));
+  }
+
+  /* Light mode: 0.88 down to 0.72 under dark text. */
+  :global([data-theme='light']) .leaf {
+    fill: oklch(calc(0.88 - var(--mix) * 0.16) calc(0.04 + var(--mix) * 0.06) var(--h));
   }
 
   .leaf.self {
-    stroke: var(--accent);
+    stroke: oklch(0.75 0.12 var(--h));
     stroke-dasharray: 3 3;
   }
 

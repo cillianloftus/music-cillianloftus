@@ -1,46 +1,434 @@
 ---
+/**
+ * The front page: one album up front (the latest one rated highly), the
+ * shape of the library, what is rated highest, what was rated lately with
+ * the notes that say why, and what arrived most recently.
+ */
 import Base from '../layouts/Base.astro';
 import AlbumCard from '../components/AlbumCard.astro';
+import Backdrop from '../components/Backdrop.astro';
+import CoverArt from '../components/CoverArt.astro';
+import CreditLine from '../components/CreditLine.astro';
+import Score from '../components/Score.astro';
 import { ownerId } from '../lib/auth/user';
-import { recentReleaseGroups } from '../lib/catalogue';
+import { recentReleaseGroups, releaseGroupsByIds, type ReleaseGroupSummary } from '../lib/catalogue';
+import { yearOf } from '../lib/dates';
+import { formatRelative, typeLabel } from '../lib/format';
+import { libraryStats, recentRatings, topReleaseGroups } from '../lib/overview';
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const albums = await recentReleaseGroups(viewerId);
+const [recent, top, ratings, stats] = await Promise.all([
+  recentReleaseGroups(viewerId, 12),
+  topReleaseGroups(viewerId, 10),
+  recentRatings(viewerId, 8),
+  libraryStats(viewerId),
+]);
+
+// Up front: the album most recently rated 80 or more, else the best there is.
+const lovedRating = ratings.find((r) => r.entity_type === 'release_group' && (r.quality_score ?? 0) >= 80);
+let featured: ReleaseGroupSummary | undefined = top[0];
+let featuredNote: string | null = null;
+let featuredWhen: string | null = null;
+if (lovedRating) {
+  [featured] = await releaseGroupsByIds([lovedRating.entity_id], viewerId);
+  featuredNote = lovedRating.impact_note;
+  featuredWhen = lovedRating.rated_at;
+}
+
+const statItems = [
+  { value: stats.albums, label: stats.albums === 1 ? 'album' : 'albums' },
+  { value: stats.tracks, label: stats.tracks === 1 ? 'track' : 'tracks' },
+  { value: stats.artists, label: stats.artists === 1 ? 'artist' : 'artists' },
+  { value: stats.ratings, label: stats.ratings === 1 ? 'rating' : 'ratings' },
+];
 ---
 
-<Base title="music">
-  <div class="wrap">
-    <h1>Recently added</h1>
+<Base title="music" image={featured?.art_key ? `/${featured.art_key}/1200.jpg` : null}>
+  <div class="wrap home">
+    <h1 class="visually-hidden">Music, rated by Cillian Loftus</h1>
 
     {
-      albums.length === 0 ? (
-        <div class="empty">
-          <p>Nothing in the catalogue yet.</p>
-          {Astro.locals.user && (
-            <a class="button button--primary" href="/edit/import">
-              Import an album
+      featured ? (
+        <>
+          <Backdrop artKey={featured.art_key} height="46rem" />
+          <section class="feature" aria-labelledby="feature-title">
+            <a class="feature-art" href={`/album/${featured.id}`} tabindex="-1" aria-hidden="true">
+              <CoverArt artKey={featured.art_key} title={featured.title} sizes="(min-width: 48rem) 22rem, 70vw" priority />
             </a>
-          )}
-        </div>
-      ) : (
-        <ul class="grid" role="list">
-          {albums.map((album, i) => (
-            <li>
-              <AlbumCard album={album} priority={i < 2} />
-            </li>
-          ))}
-        </ul>
+            <div class="feature-text">
+              <p class="eyebrow">
+                {lovedRating ? 'Lately loved' : 'Highest rated'}
+                {featuredWhen && <span class="when"> · rated {formatRelative(featuredWhen)}</span>}
+              </p>
+              <h2 id="feature-title">
+                <a href={`/album/${featured.id}`}>{featured.title}</a>
+              </h2>
+              <p class="feature-by">
+                <CreditLine credits={featured.credits} />
+              </p>
+              <p class="feature-meta">
+                {[typeLabel(featured.type), yearOf(featured.first_release_date)].filter(Boolean).join(' · ')}
+                <span class="feature-score">
+                  <Score quality={featured.quality_score} personal={featured.personal_score} size="l" />
+                </span>
+              </p>
+              {featuredNote && (
+                <blockquote class="note">
+                  <p>{featuredNote}</p>
+                </blockquote>
+              )}
+            </div>
+          </section>
+
+          <dl class="stats" aria-label="The library">
+            {statItems.map((s) => (
+              <div>
+                <dt>{s.label}</dt>
+                <dd class="tabular">{s.value.toLocaleString('en-GB')}</dd>
+              </div>
+            ))}
+          </dl>
+        </>
+      ) : null
+    }
+
+    {
+      top.length > 1 && (
+        <section aria-labelledby="top-heading">
+          <div class="section-head">
+            <h2 id="top-heading">Highest rated</h2>
+            <a href="/playlists">Playlists</a>
+          </div>
+          <ol class="shelf" role="list">
+            {top.map((album, i) => (
+              <li>
+                <span class="rank tabular" aria-hidden="true">
+                  {i + 1}
+                </span>
+                <AlbumCard album={album} />
+              </li>
+            ))}
+          </ol>
+        </section>
       )
     }
+
+    {
+      ratings.length > 0 && (
+        <section aria-labelledby="ratings-heading">
+          <div class="section-head">
+            <h2 id="ratings-heading">Recently rated</h2>
+            <a href="/diary">The whole diary</a>
+          </div>
+          <ul class="ratings" role="list">
+            {ratings.map((r) => (
+              <li>
+                <span class="thumb">
+                  <CoverArt artKey={r.art_key} title={r.album_title ?? r.title} sizes="3.5rem" />
+                </span>
+                <div class="rating-text">
+                  <p class="rating-title">
+                    {r.album_id ? <a href={`/album/${r.album_id}`}>{r.title}</a> : <span>{r.title}</span>}
+                  </p>
+                  <p class="rating-by">
+                    <CreditLine credits={r.credits} link={false} />
+                    <span>
+                      {' · '}
+                      {r.entity_type === 'release_group' ? 'Album' : r.album_title ? `Track on ${r.album_title}` : 'Track'}
+                    </span>
+                  </p>
+                  {r.impact_note && <p class="rating-note">“{r.impact_note}”</p>}
+                </div>
+                <div class="rating-side">
+                  <Score quality={r.quality_score} personal={r.personal_score} size="m" />
+                  <time datetime={r.rated_at}>{formatRelative(r.rated_at)}</time>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+
+    <section aria-labelledby="recent-heading">
+      <div class="section-head">
+        <h2 id="recent-heading">Recently added</h2>
+        <a href="/search">Search</a>
+      </div>
+      {
+        recent.length === 0 ? (
+          <div class="empty">
+            <p>Nothing in the catalogue yet.</p>
+            {Astro.locals.user && (
+              <a class="button button--primary" href="/edit/import">
+                Import an album
+              </a>
+            )}
+          </div>
+        ) : (
+          <ul class="grid" role="list">
+            {recent.map((album) => (
+              <li>
+                <AlbumCard album={album} />
+              </li>
+            ))}
+          </ul>
+        )
+      }
+    </section>
   </div>
 </Base>
 
 <style>
-  h1 {
-    font-size: var(--step-2);
-    margin-bottom: var(--space-5);
+  .home {
+    display: grid;
+    gap: var(--space-7);
   }
 
+  /* Featured album */
+  .feature {
+    display: grid;
+    gap: var(--space-5);
+    align-items: end;
+    padding-top: var(--space-4);
+  }
+
+  .feature-art {
+    display: block;
+    width: min(22rem, 72vw);
+    border-radius: var(--radius-m);
+    box-shadow:
+      0 2px 4px rgb(0 0 0 / 0.3),
+      0 30px 70px -16px rgb(0 0 0 / 0.6);
+    transition: transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+
+  .feature-art:hover {
+    transform: translateY(-3px) scale(1.01);
+  }
+
+  .feature-text {
+    display: grid;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .when {
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .feature h2 {
+    font-size: clamp(2.4rem, 1.4rem + 4vw, 5rem);
+    font-weight: 850;
+    letter-spacing: -0.04em;
+    line-height: 0.95;
+    text-wrap: balance;
+  }
+
+  .feature h2 a {
+    text-decoration: none;
+  }
+
+  .feature h2 a:hover {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+  }
+
+  .feature-by {
+    font-size: var(--step-1);
+    font-weight: 600;
+  }
+
+  .feature-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-4);
+    color: var(--text-muted);
+  }
+
+  .note {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-4);
+    border-left: 2px solid var(--accent);
+    max-width: 34rem;
+    font-size: var(--step-1);
+    font-style: italic;
+    line-height: 1.4;
+  }
+
+  @media (min-width: 48rem) {
+    .feature {
+      grid-template-columns: 22rem minmax(0, 1fr);
+      gap: var(--space-7);
+      padding-top: var(--space-6);
+    }
+  }
+
+  /* Stats */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0;
+    border-block: 1px solid var(--border);
+  }
+
+  .stats div {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 2px;
+    padding: var(--space-4) var(--space-3);
+  }
+
+  .stats div + div {
+    border-left: 1px solid var(--border);
+  }
+
+  .stats dd {
+    margin: 0;
+    font-size: clamp(1.4rem, 1rem + 2vw, 2.25rem);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1;
+  }
+
+  .stats dt {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  /* Sections */
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-4);
+    margin-bottom: var(--space-4);
+  }
+
+  .section-head h2 {
+    font-size: var(--step-2);
+    letter-spacing: -0.02em;
+  }
+
+  .section-head a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  /* Highest rated: a shelf that scrolls sideways on narrow screens. */
+  .shelf {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: min(11rem, 42vw);
+    gap: var(--space-5);
+    margin: 0 calc(var(--gutter) * -1);
+    padding: var(--space-2) var(--gutter) var(--space-4);
+    list-style: none;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: var(--gutter);
+    scrollbar-width: thin;
+  }
+
+  .shelf li {
+    position: relative;
+    scroll-snap-align: start;
+  }
+
+  .rank {
+    position: absolute;
+    top: -0.35rem;
+    left: -0.35rem;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    min-width: 2rem;
+    height: 2rem;
+    padding-inline: 0.4rem;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 800;
+    font-size: var(--step--1);
+    box-shadow: 0 2px 8px rgb(0 0 0 / 0.35);
+  }
+
+  /* Recently rated */
+  .ratings {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ratings li {
+    display: grid;
+    grid-template-columns: 3.5rem minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--space-4);
+    padding: var(--space-4) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ratings li:first-child {
+    border-top: 1px solid var(--border);
+  }
+
+  .thumb {
+    width: 3.5rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .rating-text {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .rating-title {
+    font-weight: 700;
+  }
+
+  .rating-title a {
+    text-decoration: none;
+  }
+
+  .rating-title a:hover {
+    text-decoration: underline;
+  }
+
+  .rating-by {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .rating-note {
+    margin-top: var(--space-1);
+    font-style: italic;
+    text-wrap: pretty;
+  }
+
+  .rating-side {
+    display: grid;
+    justify-items: end;
+    gap: var(--space-1);
+  }
+
+  time {
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    white-space: nowrap;
+  }
+
+  /* Recently added */
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));

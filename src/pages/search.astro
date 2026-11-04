@@ -1,6 +1,7 @@
 ---
 import Base from '../layouts/Base.astro';
 import AlbumCard from '../components/AlbumCard.astro';
+import CoverArt from '../components/CoverArt.astro';
 import ResultList from '../components/ResultList.astro';
 import { ownerId } from '../lib/auth/user';
 import { MIN_QUERY_LENGTH, search } from '../lib/search';
@@ -42,8 +43,17 @@ const searched = q.trim().length >= MIN_QUERY_LENGTH;
             <ul class="artists" role="list">
               {results.artists.map((artist) => (
                 <li>
-                  <a href={`/artist/${artist.id}`}>{artist.name}</a>
-                  {artist.disambiguation && <span class="muted">· {artist.disambiguation}</span>}
+                  <span class="avatar">
+                    <CoverArt artKey={artist.art_key} title={artist.name} sizes="3rem" />
+                  </span>
+                  <span class="artist-text">
+                    <a href={`/artist/${artist.id}`}>{artist.name}</a>
+                    <span class="muted">
+                      {[artist.disambiguation, artist.releases ? `${artist.releases} ${artist.releases === 1 ? 'release' : 'releases'}` : null]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </span>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -140,15 +150,45 @@ const searched = q.trim().length >= MIN_QUERY_LENGTH;
   }
 
   .artists li {
+    position: relative;
     display: flex;
     align-items: center;
-    gap: 0.4em;
-    min-height: 3rem;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
     border-bottom: 1px solid var(--border);
   }
 
+  /* Artists get round pictures; albums stay square. */
+  .avatar {
+    flex: none;
+    width: 3rem;
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .artist-text {
+    display: grid;
+    min-width: 0;
+  }
+
+  .artist-text .muted {
+    font-size: var(--step--1);
+  }
+
   .artists a {
-    font-weight: 600;
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  /* The whole row is the link. */
+  .artists a::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+  }
+
+  .artists li:hover a {
+    text-decoration: underline;
   }
 
   .muted {

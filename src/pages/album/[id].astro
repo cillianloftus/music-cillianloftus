@@ -2,7 +2,12 @@
 import Base from '../../layouts/Base.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import CreditLine from '../../components/CreditLine.astro';
+import Backdrop from '../../components/Backdrop.astro';
 import Score from '../../components/Score.astro';
+import ScorePanel from '../../components/ScorePanel.astro';
+import { ratingHistory } from '../../lib/ratings';
+import { spotifyLink } from '../../lib/spotify/links';
+import { env } from 'cloudflare:workers';
 import { ownerId } from '../../lib/auth/user';
 import {
   contributors,
@@ -16,6 +21,8 @@ import {
 } from '../../lib/catalogue';
 import { formatPartialDate, yearOf } from '../../lib/dates';
 import { describeDuration, formatDuration, roleLabel, typeLabel } from '../../lib/format';
+import { FORMAT_LABELS, HOLDING_FORMATS, OWNED_PHRASE, holdingsFor } from '../../lib/holdings';
+import { playCounts } from '../../lib/history';
 
 const id = Astro.params.id!;
 const user = Astro.locals.user;
@@ -37,6 +44,17 @@ const requested = Astro.url.searchParams.get('edition');
 const shown = allEditions.find((e) => e.id === requested) ?? allEditions.find((e) => e.id === standardId) ?? null;
 const releaseId = shown?.id ?? null;
 const isStandard = releaseId === standardId;
+
+// Straight to the album on Spotify when its id is known; a search otherwise.
+const albumSpotifyId = await env.DB.prepare('SELECT spotify_id FROM release_group WHERE id = ?').bind(album.id).first<string>('spotify_id');
+const listenHref = spotifyLink('album', albumSpotifyId, `${album.credits[0]?.name ?? ''} ${album.title}`);
+
+// The latest album rating, for the axes on the score panel.
+const albumRating = viewerId ? ((await ratingHistory(viewerId, 'release_group', album.id))[0] ?? null) : null;
+
+// The collection is private: only the signed-in owner of it sees it.
+const holdings = user ? await holdingsFor(user.id, album.id) : [];
+const holdingError = user ? Astro.url.searchParams.get('holding_error') : null;
 
 const [tracks, standardTracks, genres, people] = await Promise.all([
   releaseId ? tracklist(releaseId, viewerId) : Promise.resolve([]),
@@ -68,6 +86,10 @@ const editionLabel = (e: Edition) =>
 const editionHref = (e: Edition) =>
   e.id === standardId ? `${Astro.url.pathname}#tracklist-heading` : `${Astro.url.pathname}?edition=${e.id}#tracklist-heading`;
 
+// Listening history is private too: play counts only for the signed-in listener.
+const plays = user ? await playCounts(user.id, tracks.map((t) => t.recording_id)) : new Map<string, number>();
+const totalPlays = [...plays.values()].reduce((a, b) => a + b, 0);
+
 const discs = [...new Set(tracks.map((t) => t.disc))];
 const albumArtistKey = album.credits.map((c) => c.artist_id).join();
 const totalMs = tracks.reduce((sum, t) => sum + (t.length_ms ?? 0), 0);
@@ -84,8 +106,19 @@ const rateHref = (type: string, entityId: string) =>
 const artistNames = album.credits.map((c) => c.name).join(', ');
 ---
 
-<Base title={`${album.title} by ${artistNames}`}>
+<Base
+  title={`${album.title} by ${artistNames}`}
+  description={[
+    `${typeLabel(album.type)}${yearOf(album.first_release_date) ? `, ${yearOf(album.first_release_date)}` : ''}.`,
+    album.quality_score != null ? `Rated ${Math.round(album.quality_score)} out of 100.` : null,
+    album.impact_note ? `“${album.impact_note}”` : null,
+  ]
+    .filter(Boolean)
+    .join(' ')}
+  image={album.art_key ? `/${album.art_key}/1200.jpg` : null}
+>
   <article class="wrap album">
+    <Backdrop artKey={album.art_key} />
     <header class="hero">
       <div class="art">
         <CoverArt
@@ -106,18 +139,25 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
         <h1>{album.title}</h1>
         <p class="by"><CreditLine credits={album.credits} /></p>
 
-        <div class="score-row">
-          <Score quality={album.quality_score} personal={album.personal_score} size="l" />
-          {
-            album.quality_score != null && album.track_count ? (
-              <p class="coverage">
-                {album.rated_track_count} of {album.track_count} tracks rated
-              </p>
-            ) : null
-          }
-        </div>
+        <ScorePanel
+          quality={album.quality_score}
+          personal={album.personal_score}
+          ratedTracks={album.rated_track_count}
+          trackCount={album.track_count}
+          rating={albumRating}
+          rateHref={user ? rateHref('release_group', album.id) : null}
+        />
 
-        {album.impact_note && <blockquote class="impact-note"><p>{album.impact_note}</p></blockquote>}
+        {
+          album.impact_note && (
+            <figure class="impact-note">
+              <blockquote>
+                <p>{album.impact_note}</p>
+              </blockquote>
+              <figcaption>Why it matters</figcaption>
+            </figure>
+          )
+        }
 
         {
           genres.length > 0 && (
@@ -127,15 +167,16 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
           )
         }
 
-        {
-          user && (
-            <p class="actions">
-              <a class="button button--primary" href={rateHref('release_group', album.id)}>
-                Rate album
-              </a>
-            </p>
-          )
-        }
+        <p class="listen">
+          <a class="button" href={listenHref} target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M7.5 10c3-1 6.3-.7 9 .8M8.2 13.2c2.4-.7 5-.5 7.2.6M8.8 16.2c1.8-.4 3.6-.3 5.3.4" />
+            </svg>
+            {albumSpotifyId ? 'Listen on Spotify' : 'Find on Spotify'}
+            <span class="visually-hidden"> (opens in a new tab)</span>
+          </a>
+        </p>
       </div>
     </header>
 
@@ -191,6 +232,11 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                             <CreditLine credits={track.credits} />
                           </span>
                         )}
+                        {plays.has(track.recording_id) && (
+                          <span class="plays tabular">
+                            {plays.get(track.recording_id)} {plays.get(track.recording_id) === 1 ? 'play' : 'plays'}
+                          </span>
+                        )}
                       </div>
                       <span class="length tabular">
                         {track.length_ms != null && (
@@ -201,11 +247,14 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                         )}
                       </span>
                       <span class="track-score">
-                        <Score quality={track.quality_score} personal={track.personal_score} size="s" />
+                        <Score quality={track.quality_score} personal={track.personal_score} size="s" quietWhenEmpty />
                       </span>
                       {user && (
-                        <a class="rate" href={rateHref('recording', track.recording_id)}>
-                          Rate<span class="visually-hidden"> {track.title}</span>
+                        <a class="rate" href={rateHref('recording', track.recording_id)} title={`Rate ${track.title}`}>
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" />
+                          </svg>
+                          <span class="visually-hidden">Rate {track.title}</span>
                         </a>
                       )}
                     </li>
@@ -216,7 +265,14 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
         )
       }
 
-      {totalMs > 0 && <p class="total muted">{tracks.length} tracks · {formatDuration(totalMs)}</p>}
+      {
+        totalMs > 0 && (
+          <p class="total muted">
+            {tracks.length} tracks · {formatDuration(totalMs)}
+            {totalPlays > 0 && ` · you have played these ${totalPlays.toLocaleString('en-GB')} times`}
+          </p>
+        )
+      }
     </section>
 
     <div class="aside">
@@ -245,6 +301,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
 
     <section class="editions" aria-labelledby="editions-heading">
       <h2 id="editions-heading">{allEditions.length === 1 ? 'Edition' : 'Editions'}</h2>
+      {holdingError && <p class="holding-error" role="alert">{holdingError}</p>}
       {
         allEditions.length === 0 ? (
           <p class="muted">No editions yet{album.status === 'announced' ? ': this album is announced' : ''}.</p>
@@ -271,6 +328,46 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                     .filter(Boolean)
                     .join(' · ')}
                 </span>
+                {holdings
+                  .filter((h) => h.release_id === edition.id)
+                  .map((h) => (
+                    <form class="held" method="post" action="/api/write/holding">
+                      <span>
+                        <strong>{OWNED_PHRASE[h.format]}</strong>
+                        {h.acquired_at && <span class="muted"> · since {formatPartialDate(h.acquired_at, h.date_precision as never)}</span>}
+                        {h.notes && <span class="muted"> · {h.notes}</span>}
+                      </span>
+                      <input type="hidden" name="intent" value="remove" />
+                      <input type="hidden" name="id" value={h.id} />
+                      <button class="button button--quiet small" type="submit">
+                        Remove<span class="visually-hidden"> {FORMAT_LABELS[h.format]} copy of {edition.title}</span>
+                      </button>
+                    </form>
+                  ))}
+                {user && (
+                  <details class="own">
+                    <summary>I own this edition</summary>
+                    <form method="post" action="/api/write/holding" class="own-form">
+                      <input type="hidden" name="release_id" value={edition.id} />
+                      <input type="hidden" name="album_id" value={album.id} />
+                      <div class="field">
+                        <label for={`format-${edition.id}`}>Format</label>
+                        <select class="input" id={`format-${edition.id}`} name="format">
+                          {HOLDING_FORMATS.map((f) => <option value={f}>{FORMAT_LABELS[f]}</option>)}
+                        </select>
+                      </div>
+                      <div class="field">
+                        <label for={`acquired-${edition.id}`}>Since <span class="muted">(optional)</span></label>
+                        <input class="input" id={`acquired-${edition.id}`} name="acquired" placeholder="2019 or 2019-06" autocomplete="off" />
+                      </div>
+                      <div class="field wide">
+                        <label for={`notes-${edition.id}`}>Notes <span class="muted">(optional)</span></label>
+                        <input class="input" id={`notes-${edition.id}`} name="notes" maxlength="300" placeholder="Signed, first pressing…" autocomplete="off" />
+                      </div>
+                      <button class="button" type="submit">Add to collection</button>
+                    </form>
+                  </details>
+                )}
               </li>
             ))}
           </ul>
@@ -318,8 +415,10 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   .art {
     align-self: start;
     max-width: 24rem;
-    box-shadow: var(--shadow);
     border-radius: var(--radius-m);
+    box-shadow:
+      0 2px 4px rgb(0 0 0 / 0.3),
+      0 24px 60px -12px rgb(0 0 0 / 0.55);
   }
 
   .intro {
@@ -329,8 +428,11 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   }
 
   h1 {
-    font-size: var(--step-3);
-    font-weight: 800;
+    font-size: clamp(2.2rem, 1.4rem + 3.2vw, 4.25rem);
+    font-weight: 850;
+    letter-spacing: -0.035em;
+    line-height: 0.98;
+    text-wrap: balance;
   }
 
   .by {
@@ -338,26 +440,50 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     font-weight: 600;
   }
 
-  .score-row {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-4);
-    margin-top: var(--space-2);
+  .listen .button svg {
+    width: 1.2rem;
+    height: 1.2rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
   }
 
-  .coverage,
   .muted {
     color: var(--text-muted);
     font-size: var(--step--1);
   }
 
   .impact-note {
+    position: relative;
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-6);
+    max-width: 36rem;
+  }
+
+  .impact-note::before {
+    content: '“';
+    position: absolute;
+    top: -0.35em;
+    left: 0;
+    color: var(--accent);
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 3.5rem;
+    line-height: 1;
+  }
+
+  .impact-note blockquote {
     margin: 0;
-    padding-left: var(--space-4);
-    border-left: 3px solid var(--accent);
-    color: var(--text-muted);
+    font-size: var(--step-1);
     font-style: italic;
-    max-width: 40rem;
+    line-height: 1.4;
+    text-wrap: pretty;
+  }
+
+  .impact-note figcaption {
+    margin-top: var(--space-1);
+    color: var(--text-muted);
+    font-size: var(--step--1);
   }
 
   .genres {
@@ -375,10 +501,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     border-radius: 999px;
     color: var(--text-muted);
     font-size: var(--step--1);
-  }
-
-  .actions {
-    margin-top: var(--space-2);
   }
 
   h2 {
@@ -445,19 +567,49 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   }
 
   .rate {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
-    padding-inline: var(--space-3);
-    border: 1px solid var(--border);
+    display: inline-grid;
+    place-items: center;
+    width: var(--target);
+    height: var(--target);
     border-radius: 999px;
-    font-size: var(--step--1);
-    font-weight: 600;
+    color: var(--text-subtle);
     text-decoration: none;
+    transition: color 0.15s, background-color 0.15s;
   }
 
-  .rate:hover {
-    border-color: var(--text-subtle);
+  .rate svg {
+    width: 1.15rem;
+    height: 1.15rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linejoin: round;
+  }
+
+  .rate:hover,
+  .rate:focus-visible {
+    background: var(--surface-2);
+    color: var(--accent);
+  }
+
+  /* Where hovering is possible, the star waits until the row is pointed at. */
+  @media (hover: hover) {
+    .track .rate {
+      opacity: 0.35;
+    }
+
+    .track:hover .rate,
+    .track .rate:focus-visible {
+      opacity: 1;
+    }
+  }
+
+  .track {
+    transition: background-color 0.15s;
+  }
+
+  .track:hover {
+    background: color-mix(in srgb, var(--surface-1) 70%, transparent);
   }
 
   .total {
@@ -489,6 +641,68 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
 
   .editions li {
     display: grid;
+  }
+
+  .plays {
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+  }
+
+  .held {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
+    padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+    border-left: 3px solid var(--accent);
+    font-size: var(--step--1);
+  }
+
+  .small {
+    padding: 0 var(--space-3);
+    font-size: var(--step--1);
+  }
+
+  .own summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    cursor: pointer;
+  }
+
+  /* inline-flex drops the native marker; this one is skipped by screen readers. */
+  .own summary::before {
+    content: '+' / '';
+    margin-right: var(--space-2);
+    font-weight: 700;
+  }
+
+  .own[open] summary::before {
+    content: '−' / '';
+  }
+
+  .own-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    align-items: end;
+    gap: var(--space-3);
+    padding: var(--space-3) 0 var(--space-2);
+  }
+
+  .own-form .wide {
+    grid-column: 1 / -1;
+  }
+
+  .own-form .button {
+    justify-self: start;
+  }
+
+  .holding-error {
+    color: var(--danger);
   }
 
   .edition-title[aria-current] {

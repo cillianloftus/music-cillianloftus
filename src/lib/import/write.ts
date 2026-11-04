@@ -33,24 +33,38 @@ type Table = 'artist' | 'work' | 'recording' | 'release_group' | 'release';
 
 /** plan key -> existing local id, for every entity that matches one. */
 async function resolveExisting(plan: ImportPlan): Promise<Record<Table, Map<string, string>>> {
-  const byMbid = <T extends { key: string; mbid: string | null }>(entries: T[]) =>
-    entries.filter((e): e is T & { mbid: string } => e.mbid !== null);
-
-  const lookups: [Table, { key: string; mbid: string }[]][] = [
-    ['artist', byMbid(plan.artists)],
-    ['work', byMbid(plan.works)],
-    ['recording', byMbid(plan.recordings)],
-    ['release_group', byMbid([plan.releaseGroup])],
-    ['release', byMbid([plan.release])],
+  type Keyed = { key: string; mbid: string | null; spotify_id?: string | null };
+  const all: [Table, Keyed[]][] = [
+    ['artist', plan.artists],
+    ['work', plan.works],
+    ['recording', plan.recordings],
+    ['release_group', [plan.releaseGroup]],
+    ['release', [plan.release]],
   ];
+  const withMbid = all.map(([table, entries]) => [table, entries.filter((e) => e.mbid !== null)] as const);
+  // Works have no Spotify id.
+  const withSpotify = all
+    .filter(([table]) => table !== 'work')
+    .map(([table, entries]) => [table, entries.filter((e) => e.spotify_id)] as const);
   const unidentifiedArtists = plan.artists.filter((a) => a.mbid === null);
+  // An ISRC names one recording; trusted only when exactly one row holds it.
+  const byIsrc = plan.recordings.filter((r) => r.mbid === null && r.isrc);
 
-  const results = await env.DB.batch<{ id: string; mbid: string; name: string; matches: number }>([
-    ...lookups.map(([table, entries]) =>
-      env.DB.prepare(`SELECT id, mbid FROM ${table} WHERE mbid IN (SELECT value FROM json_each(?))`).bind(
+  const results = await env.DB.batch<{ id: string; ext: string; name: string; matches: number }>([
+    ...withMbid.map(([table, entries]) =>
+      env.DB.prepare(`SELECT id, mbid AS ext FROM ${table} WHERE mbid IN (SELECT value FROM json_each(?))`).bind(
         JSON.stringify(entries.map((e) => e.mbid)),
       ),
     ),
+    ...withSpotify.map(([table, entries]) =>
+      env.DB.prepare(`SELECT id, spotify_id AS ext FROM ${table} WHERE spotify_id IN (SELECT value FROM json_each(?))`).bind(
+        JSON.stringify(entries.map((e) => e.spotify_id)),
+      ),
+    ),
+    env.DB.prepare(
+      `SELECT min(id) AS id, isrc AS ext, count(*) AS matches FROM recording
+       WHERE isrc IN (SELECT value FROM json_each(?)) GROUP BY isrc`,
+    ).bind(JSON.stringify(byIsrc.map((r) => r.isrc))),
     // Hand-typed artists: the existing artist of that name, if unambiguous.
     env.DB.prepare(
       `SELECT min(id) AS id, lower(name) AS name, count(*) AS matches FROM artist
@@ -59,24 +73,42 @@ async function resolveExisting(plan: ImportPlan): Promise<Record<Table, Map<stri
     ).bind(JSON.stringify(unidentifiedArtists.map((a) => a.name))),
   ]);
 
-  const resolved = {} as Record<Table, Map<string, string>>;
-  lookups.forEach(([table, entries], i) => {
-    const idByMbid = new Map(results[i]!.results.map((row) => [row.mbid, row.id]));
-    resolved[table] = new Map(
-      entries.flatMap((e) => (idByMbid.has(e.mbid) ? [[e.key, idByMbid.get(e.mbid)!] as const] : [])),
-    );
-  });
+  const resolved = Object.fromEntries(all.map(([table]) => [table, new Map<string, string>()])) as Record<Table, Map<string, string>>;
+  let i = 0;
+  for (const [table, entries] of withMbid) {
+    const ids = new Map(results[i++]!.results.map((row) => [row.ext, row.id]));
+    for (const e of entries) if (ids.has(e.mbid!)) resolved[table].set(e.key, ids.get(e.mbid!)!);
+  }
+  for (const [table, entries] of withSpotify) {
+    const ids = new Map(results[i++]!.results.map((row) => [row.ext, row.id]));
+    for (const e of entries) if (!resolved[table].has(e.key) && ids.has(e.spotify_id!)) resolved[table].set(e.key, ids.get(e.spotify_id!)!);
+  }
+  const isrcIds = new Map(results[i++]!.results.filter((r) => r.matches === 1).map((r) => [r.ext, r.id]));
+  for (const r of byIsrc) if (!resolved.recording.has(r.key) && isrcIds.has(r.isrc!)) resolved.recording.set(r.key, isrcIds.get(r.isrc!)!);
 
-  const byName = new Map(results.at(-1)!.results.filter((r) => r.matches === 1).map((r) => [r.name, r.id]));
-  for (const artist of unidentifiedArtists) {
+  const byName = new Map(results[i]!.results.filter((r) => r.matches === 1).map((r) => [r.name, r.id]));
+  for (const artist of plan.artists) {
+    if (resolved.artist.has(artist.key) || artist.mbid !== null) continue;
     const id = byName.get(artist.name.toLowerCase());
     if (id) resolved.artist.set(artist.key, id);
   }
   return resolved;
 }
 
-export async function writePlan(plan: ImportPlan): Promise<WriteResult> {
+export interface WriteOptions {
+  /**
+   * Attach the edition to this existing album instead of matching or
+   * creating one: for a source with no shared id, once a caller has found
+   * the album by title and artist.
+   */
+  intoReleaseGroup?: string;
+}
+
+export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): Promise<WriteResult> {
   const existing = await resolveExisting(plan);
+  if (options.intoReleaseGroup && !existing.release_group.has(plan.releaseGroup.key)) {
+    existing.release_group.set(plan.releaseGroup.key, options.intoReleaseGroup);
+  }
 
   const ids = {} as Record<Table, Map<string, string>>;
   for (const table of Object.keys(existing) as Table[]) {
@@ -124,12 +156,27 @@ export async function writePlan(plan: ImportPlan): Promise<WriteResult> {
   const json = (rows: unknown) => JSON.stringify(rows);
   const db = env.DB;
 
+  /**
+   * Fills an empty spotify_id. The column is unique, so an id another row
+   * already holds is left alone rather than failing the whole import.
+   */
+  const fillSpotifyId = (table: 'artist' | 'recording' | 'release_group' | 'release', rows: { id: string; spotify_id?: string | null }[]) =>
+    db.prepare(
+      `UPDATE ${table}
+       SET spotify_id = j.value ->> '$.spotify_id'
+       FROM json_each(?1) j
+       WHERE ${table}.id = j.value ->> '$.id'
+         AND ${table}.spotify_id IS NULL
+         AND j.value ->> '$.spotify_id' IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM ${table} other WHERE other.spotify_id = j.value ->> '$.spotify_id')`,
+    ).bind(json(rows.map((r) => ({ id: r.id, spotify_id: r.spotify_id ?? null }))));
+
   const statements: D1PreparedStatement[] = [
     // Artists
     db.prepare(
-      `INSERT INTO artist (id, name, sort_name, disambiguation, mbid, source)
+      `INSERT INTO artist (id, name, sort_name, disambiguation, mbid, spotify_id, source)
        SELECT j.value ->> '$.id', j.value ->> '$.name', j.value ->> '$.sort_name',
-              j.value ->> '$.disambiguation', j.value ->> '$.mbid', j.value ->> '$.source'
+              j.value ->> '$.disambiguation', j.value ->> '$.mbid', j.value ->> '$.spotify_id', j.value ->> '$.source'
        FROM json_each(?1) j WHERE true
        ON CONFLICT DO NOTHING`,
     ).bind(json(artists)),
@@ -139,6 +186,7 @@ export async function writePlan(plan: ImportPlan): Promise<WriteResult> {
        FROM json_each(?1) j
        WHERE artist.id = j.value ->> '$.id'`,
     ).bind(json(artists)),
+    fillSpotifyId('artist', artists),
 
     // Works
     db.prepare(
@@ -150,8 +198,8 @@ export async function writePlan(plan: ImportPlan): Promise<WriteResult> {
 
     // Release group
     db.prepare(
-      `INSERT INTO release_group (id, title, type, status, first_release_date, date_precision, mbid, source)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+      `INSERT INTO release_group (id, title, type, status, first_release_date, date_precision, mbid, source, spotify_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
        ON CONFLICT DO NOTHING`,
     ).bind(
       releaseGroupId,
@@ -162,7 +210,9 @@ export async function writePlan(plan: ImportPlan): Promise<WriteResult> {
       plan.releaseGroup.date_precision,
       plan.releaseGroup.mbid,
       source,
+      plan.releaseGroup.spotify_id ?? null,
     ),
+    fillSpotifyId('release_group', [{ id: releaseGroupId, spotify_id: plan.releaseGroup.spotify_id ?? null }]),
     // A date and its precision are filled together or not at all.
     db.prepare(
       `UPDATE release_group
@@ -172,8 +222,8 @@ export async function writePlan(plan: ImportPlan): Promise<WriteResult> {
 
     // Release (edition)
     db.prepare(
-      `INSERT INTO release (id, release_group_id, title, date, date_precision, country, label, format, mbid, source)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+      `INSERT INTO release (id, release_group_id, title, date, date_precision, country, label, format, mbid, source, spotify_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
        ON CONFLICT DO NOTHING`,
     ).bind(
       releaseId,
@@ -186,7 +236,9 @@ export async function writePlan(plan: ImportPlan): Promise<WriteResult> {
       plan.release.format,
       plan.release.mbid,
       source,
+      plan.release.spotify_id ?? null,
     ),
+    fillSpotifyId('release', [{ id: releaseId, spotify_id: plan.release.spotify_id ?? null }]),
     db.prepare(
       `UPDATE release
        SET country = coalesce(country, ?2),
@@ -197,11 +249,11 @@ export async function writePlan(plan: ImportPlan): Promise<WriteResult> {
 
     // Recordings
     db.prepare(
-      `INSERT INTO recording (id, work_id, title, length_ms, first_release_date, date_precision, mbid, isrc, source)
+      `INSERT INTO recording (id, work_id, title, length_ms, first_release_date, date_precision, mbid, isrc, spotify_id, source)
        SELECT j.value ->> '$.id', j.value ->> '$.work_id', j.value ->> '$.title',
               j.value ->> '$.length_ms', j.value ->> '$.first_release_date',
               j.value ->> '$.date_precision', j.value ->> '$.mbid', j.value ->> '$.isrc',
-              j.value ->> '$.source'
+              j.value ->> '$.spotify_id', j.value ->> '$.source'
        FROM json_each(?1) j WHERE true
        ON CONFLICT DO NOTHING`,
     ).bind(json(recordings)),
@@ -219,6 +271,7 @@ export async function writePlan(plan: ImportPlan): Promise<WriteResult> {
        FROM json_each(?1) j
        WHERE recording.id = j.value ->> '$.id'`,
     ).bind(json(recordings)),
+    fillSpotifyId('recording', recordings),
 
     // Tracks: (release, disc, position) is unique, so a re-import is a no-op.
     db.prepare(

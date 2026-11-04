@@ -1,5 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { storeCoverArt } from '../import/coverart';
+import { attachFiles } from '../import/files';
+import { importFromSpotify } from '../import/spotify';
 import { planFromMusicBrainz } from '../import/musicbrainz';
 import { writePlan } from '../import/write';
 import { pushDefinition } from '../spotify/push';
@@ -8,6 +10,11 @@ import { claimNext, complete, fail, type JobPayloads, type JobRow } from './queu
 
 async function importRelease(job: JobRow): Promise<void> {
   const payload = JSON.parse(job.payload_json) as JobPayloads['import_release'];
+  if (payload.source === 'spotify') {
+    const result = await importFromSpotify(payload.target);
+    await complete(job.id, { ...payload, result: { releaseGroupId: result.releaseGroupId, via: result.via } }, 1);
+    return;
+  }
   const plan = await planFromMusicBrainz(payload.target);
   const result = await writePlan(plan);
 
@@ -26,7 +33,11 @@ async function importRelease(job: JobRow): Promise<void> {
     }
   }
 
-  await complete(job.id, { ...payload, result: { releaseGroupId: result.releaseGroupId } }, 1);
+  const filesAttached = payload.files?.length ? await attachFiles(result.releaseId, payload.files) : undefined;
+
+  // The file list has done its job; keep the payload small.
+  const { files: _files, ...rest } = payload;
+  await complete(job.id, { ...rest, result: { releaseGroupId: result.releaseGroupId, filesAttached } }, 1);
 }
 
 async function spotifyPush(job: JobRow): Promise<void> {

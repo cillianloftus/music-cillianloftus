@@ -1,6 +1,8 @@
 import { handle } from '@astrojs/cloudflare/handler';
 import { enqueue } from './lib/jobs/queue';
 import { runJobs } from './lib/jobs/runner';
+import { deriveAlbumGenres } from './lib/genres';
+import { detectAnomalies } from './lib/review';
 
 /** Must match the daily entry in wrangler.jsonc triggers.crons. */
 const DAILY_BACKUP = '0 4 * * *';
@@ -11,11 +13,24 @@ export default {
   // Every minute: claim queued jobs and work through them. A scheduled
   // invocation may run for minutes, but stopping well inside the cron
   // interval keeps ticks from piling up behind each other.
-  // Daily at 04:00 UTC: queue a backup first.
+  // Daily at 04:00 UTC: queue a backup, derive album genres, run the review rules.
   async scheduled(controller, _env, ctx) {
     ctx.waitUntil(
       (async () => {
-        if (controller.cron === DAILY_BACKUP) await enqueue('backup', {});
+        if (controller.cron === DAILY_BACKUP) {
+          await enqueue('backup', {});
+          // Both are housekeeping; neither failing may hold up the jobs.
+          for (const [name, task] of [
+            ['Album genre derivation', deriveAlbumGenres],
+            ['Review rules', detectAnomalies],
+          ] as const) {
+            try {
+              await task();
+            } catch (error) {
+              console.error(`${name} failed`, error);
+            }
+          }
+        }
         await runJobs({ budgetMs: 50_000 });
       })(),
     );

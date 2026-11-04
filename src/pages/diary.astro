@@ -1,0 +1,189 @@
+---
+/**
+ * The rating diary: everything rated, newest first, by month, with the
+ * impact notes that say where and when. Ratings are public by Cillian's
+ * choice (ARCHITECTURE.md §3), and the notes are the part that will matter
+ * most in ten years.
+ */
+import Base from '../layouts/Base.astro';
+import Backdrop from '../components/Backdrop.astro';
+import CoverArt from '../components/CoverArt.astro';
+import CreditLine from '../components/CreditLine.astro';
+import Score from '../components/Score.astro';
+import { ownerId } from '../lib/auth/user';
+import { recentRatings, type RecentRating } from '../lib/overview';
+
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+const ratings = await recentRatings(viewerId, 400);
+
+const month = new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: 'Europe/Dublin' });
+const day = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' });
+const months = new Map<string, RecentRating[]>();
+for (const r of ratings) {
+  const key = month.format(new Date(r.rated_at));
+  months.set(key, [...(months.get(key) ?? []), r]);
+}
+const noted = ratings.filter((r) => r.impact_note).length;
+---
+
+<Base title="Diary" description="Every album and track rated, newest first, with notes on where and when.">
+  <div class="wrap page">
+    <Backdrop artKey={ratings[0]?.art_key} height="28rem" />
+    <header>
+      <p class="eyebrow">Diary</p>
+      <h1>What I’ve been listening to</h1>
+      <p class="muted">
+        {ratings.length} {ratings.length === 1 ? 'thing' : 'things'} rated{noted > 0 && `, ${noted} with a note on why it mattered`}. Newest first.
+      </p>
+    </header>
+
+    {
+      ratings.length === 0 ? (
+        <p class="muted">Nothing rated yet.</p>
+      ) : (
+        [...months].map(([name, entries]) => (
+          <section aria-labelledby={`m-${name.replace(/\s+/g, '-')}`} class="month">
+            <h2 id={`m-${name.replace(/\s+/g, '-')}`}>{name}</h2>
+            <ol role="list" class="entries">
+              {entries.map((r) => (
+                <li class:list={[{ noted: r.impact_note }]}>
+                  <time datetime={r.rated_at}>{day.format(new Date(r.rated_at))}</time>
+                  <span class="art">
+                    <CoverArt artKey={r.art_key} title={r.album_title ?? r.title} sizes="4rem" />
+                  </span>
+                  <div class="text">
+                    <p class="title">{r.album_id ? <a href={`/album/${r.album_id}`}>{r.title}</a> : r.title}</p>
+                    <p class="by">
+                      <CreditLine credits={r.credits} link={false} />
+                      {' · '}
+                      {r.entity_type === 'release_group' ? 'Album' : 'Track'}
+                    </p>
+                    {r.impact_note && <blockquote>{r.impact_note}</blockquote>}
+                  </div>
+                  <span class="score">
+                    <Score quality={r.quality_score} personal={r.personal_score} size="m" />
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ))
+      )
+    }
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    max-width: 50rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+    padding-top: var(--space-5);
+  }
+
+  h1 {
+    font-size: clamp(2.2rem, 1.4rem + 3.2vw, 4rem);
+    font-weight: 850;
+    letter-spacing: -0.035em;
+    line-height: 1;
+    text-wrap: balance;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  /* Month headings stay in view while their entries scroll past. */
+  h2 {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: var(--space-2) 0;
+    background: var(--bg);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .entries {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    display: grid;
+    grid-template-columns: 3.5rem 4rem minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--space-4);
+    padding: var(--space-4) 0;
+    border-top: 1px solid var(--border);
+  }
+
+  time {
+    padding-top: 0.15rem;
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .art {
+    width: 4rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .text {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .title {
+    font-weight: 700;
+  }
+
+  .title a {
+    text-decoration: none;
+  }
+
+  .title a:hover {
+    text-decoration: underline;
+  }
+
+  .by {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  blockquote {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--accent);
+    font-size: var(--step-1);
+    font-style: italic;
+    line-height: 1.4;
+    text-wrap: pretty;
+  }
+
+  @media (max-width: 30rem) {
+    li {
+      grid-template-columns: 3.25rem minmax(0, 1fr) auto;
+    }
+
+    time {
+      grid-column: 1 / -1;
+    }
+
+    .art {
+      width: 3.25rem;
+    }
+  }
+</style>

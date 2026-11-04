@@ -11,7 +11,8 @@ const path = Astro.url.pathname;
 
 // Icons are SVG path data on a 24px grid, drawn as strokes.
 const links = [
-  { href: '/', label: 'Albums', icon: 'M4 4h16v16H4z M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z' },
+  { href: '/', label: 'Home', icon: 'M4 11l8-7 8 7v9H4z M10 20v-5h4v5' },
+  { href: '/diary', label: 'Diary', icon: 'M6 4h11a1 1 0 0 1 1 1v15H7a2 2 0 0 1-2-2V5a1 1 0 0 1 1-1z M5 17a2 2 0 0 1 2-2h11 M9 8h6' },
   ...(user ? [{ href: '/edit/queue', label: 'Queue', icon: 'M4 13l2.5-8h11l2.5 8M4 13v6h16v-6M4 13h5l1.5 2h3l1.5-2h5' }] : []),
   { href: '/playlists', label: 'Playlists', icon: 'M4 6h12M4 12h12M4 18h7M18 15v6M15 18h6' },
   { href: '/genres', label: 'Genres', icon: 'M9 9.5a5 5 0 1 0 0 .01M16.5 16a3.5 3.5 0 1 0 0 .01M17 6.5a2 2 0 1 0 0 .01' },

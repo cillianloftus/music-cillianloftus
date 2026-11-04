@@ -8,9 +8,11 @@ interface Props {
   quality?: number | null | undefined;
   personal?: number | null | undefined;
   size?: 's' | 'm' | 'l';
+  /** Show nothing (to the eye) when unrated: in long lists a dash on every row is noise. */
+  quietWhenEmpty?: boolean;
 }
 
-const { quality, personal, size = 'm' } = Astro.props;
+const { quality, personal, size = 'm', quietWhenEmpty = false } = Astro.props;
 const rounded = quality == null ? null : Math.round(quality);
 const impact = quality != null && personal != null ? Math.round(personal - quality) : 0;
 const label =
@@ -22,7 +24,7 @@ const label =
 {
   rounded == null ? (
     <span class={`score score--${size} score--none`}>
-      <span aria-hidden="true">–</span>
+      {!quietWhenEmpty && <span aria-hidden="true">–</span>}
       <span class="visually-hidden">{label}</span>
     </span>
   ) : (

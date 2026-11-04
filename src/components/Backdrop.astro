@@ -1,0 +1,63 @@
+---
+/**
+ * An ambient wash of colour behind a page's header, made from cover art:
+ * the smallest stored size, blurred far past recognition, faded into the
+ * page. Pure CSS, decorative, and kept dim enough (or, in light mode, pale
+ * enough) that text over it holds its contrast whatever the cover.
+ */
+
+interface Props {
+  artKey?: string | null | undefined;
+  /** Any other image, such as a playlist's generated art. */
+  src?: string | null;
+  /** How far down the page the wash reaches. */
+  height?: string;
+}
+
+const { artKey, src, height = '36rem' } = Astro.props;
+const image = src ?? (artKey ? `/${artKey}/250.jpg` : null);
+---
+
+{
+  image && (
+    <div class="backdrop" aria-hidden="true" style={`--backdrop-height: ${height}`}>
+      <img src={image} alt="" width="250" height="250" decoding="async" fetchpriority="low" />
+    </div>
+  )
+}
+
+<style>
+  .backdrop {
+    position: absolute;
+    inset: 0 0 auto;
+    z-index: -1;
+    height: var(--backdrop-height);
+    overflow: hidden;
+    pointer-events: none;
+    /* Fades into the page rather than ending in an edge. */
+    mask-image: linear-gradient(to bottom, black 35%, transparent);
+  }
+
+  img {
+    position: absolute;
+    inset: -20%;
+    width: 140%;
+    height: 140%;
+    object-fit: cover;
+    /* Dim enough that even a white cover leaves muted text above 4.5:1. */
+    filter: blur(72px) saturate(1.6) brightness(0.45);
+    opacity: 0.55;
+    transform: translateZ(0);
+  }
+
+  :global([data-theme='light']) img {
+    filter: blur(72px) saturate(1.4) brightness(1.6);
+    opacity: 0.22;
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .backdrop {
+      display: none;
+    }
+  }
+</style>

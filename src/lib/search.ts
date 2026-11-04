@@ -15,6 +15,9 @@ export interface ArtistHit {
   id: string;
   name: string;
   disambiguation: string | null;
+  /** Releases credited to them, and a cover to show beside the name. */
+  releases: number;
+  art_key: string | null;
 }
 
 export interface SearchResults {
@@ -59,18 +62,47 @@ export async function search(input: string, viewerId: string | null): Promise<Se
   ]);
   const ids = (result: D1Result<{ entity_id: string }> | undefined) => result?.results.map((r) => r.entity_id) ?? [];
 
+  // Searching for an artist should find their records too, not only titles
+  // that happen to contain the name: the top artists' albums follow the
+  // title matches.
+  const topArtists = ids(artistIds).slice(0, 2);
+  const byArtist = topArtists.length
+    ? (
+        await env.DB.prepare(
+          `SELECT DISTINCT c.entity_id AS id FROM artist_credit c
+           JOIN release_group g ON g.id = c.entity_id
+           WHERE c.entity_type = 'release_group' AND c.role = 'primary'
+             AND c.artist_id IN (SELECT value FROM json_each(?))
+           ORDER BY g.first_release_date DESC LIMIT ?`,
+        )
+          .bind(JSON.stringify(topArtists), PER_KIND)
+          .all<{ id: string }>()
+      ).results.map((r) => r.id)
+    : [];
+  const albumIdList = [...new Set([...ids(albumIds), ...byArtist])].slice(0, PER_KIND + 4);
+
   const [artistRows, albums, tracks] = await Promise.all([
-    env.DB.prepare('SELECT id, name, disambiguation FROM artist WHERE id IN (SELECT value FROM json_each(?))')
+    env.DB.prepare(
+      `SELECT a.id, a.name, a.disambiguation,
+              (SELECT count(*) FROM artist_credit c WHERE c.artist_id = a.id AND c.entity_type = 'release_group' AND c.role = 'primary') AS releases,
+              (SELECT r.art_key FROM artist_credit c
+               JOIN v_release_group_canonical gc ON gc.release_group_id = c.entity_id
+               JOIN release r ON r.id = gc.release_id
+               JOIN release_group g ON g.id = c.entity_id
+               WHERE c.artist_id = a.id AND c.entity_type = 'release_group' AND c.role = 'primary' AND r.art_key IS NOT NULL
+               ORDER BY g.first_release_date DESC LIMIT 1) AS art_key
+       FROM artist a WHERE a.id IN (SELECT value FROM json_each(?))`,
+    )
       .bind(JSON.stringify(ids(artistIds)))
       .all<ArtistHit>(),
-    releaseGroupsByIds(ids(albumIds), viewerId),
+    releaseGroupsByIds(albumIdList, viewerId),
     hydrateTracks(ids(trackIds), viewerId),
   ]);
 
   // Keep the index's ranking.
   const order = (list: string[]) => new Map(list.map((id, i) => [id, i]));
   const artistOrder = order(ids(artistIds));
-  const albumOrder = order(ids(albumIds));
+  const albumOrder = order(albumIdList);
 
   return {
     query,

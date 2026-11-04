@@ -27,7 +27,7 @@ const year = yearOf(album.first_release_date);
     <p class="detail">
       {year && <span>{year}</span>}
       {album.status === 'announced' && <span>Announced</span>}
-      <span class="score"><Score quality={album.quality_score} personal={album.personal_score} size="s" /></span>
+      <span class="score"><Score quality={album.quality_score} personal={album.personal_score} size="s" quietWhenEmpty /></span>
     </p>
   </div>
 </article>

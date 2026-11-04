@@ -13,7 +13,19 @@ export type JobKind =
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
 
 export interface JobPayloads {
-  import_release: { source: 'musicbrainz'; target: MbTarget; result?: { releaseGroupId: string } };
+  import_release:
+    | {
+        source: 'musicbrainz';
+        target: MbTarget;
+        /** Local files to catalogue against the release once written (import from tags). */
+        files?: import('../import/files').FileAttachment[];
+        result?: { releaseGroupId: string; filesAttached?: number };
+      }
+    | {
+        source: 'spotify';
+        target: import('../spotify/album').SpotifyTarget;
+        result?: { releaseGroupId: string; via: 'musicbrainz' | 'spotify' };
+      };
   spotify_push: { definitionId: string; result?: import('../spotify/push').PushReport };
   backup: { result?: import('../backup/store').BackupReport };
 }

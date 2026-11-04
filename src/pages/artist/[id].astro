@@ -1,8 +1,19 @@
 ---
 import Base from '../../layouts/Base.astro';
 import AlbumCard from '../../components/AlbumCard.astro';
+import Backdrop from '../../components/Backdrop.astro';
+import CoverArt from '../../components/CoverArt.astro';
+import Score from '../../components/Score.astro';
 import { ownerId } from '../../lib/auth/user';
-import { artist as getArtist, artistAppearances, artistReleaseGroups, redirectFor } from '../../lib/catalogue';
+import {
+  artist as getArtist,
+  artistAppearances,
+  artistCollaborators,
+  artistReleaseGroups,
+  artistTopTracks,
+  redirectFor,
+} from '../../lib/catalogue';
+import { yearOf } from '../../lib/dates';
 import { roleLabel } from '../../lib/format';
 
 const id = Astro.params.id!;
@@ -14,26 +25,78 @@ if (!artist) {
 }
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const [albums, appearances] = await Promise.all([
+const [albums, appearances, topTracks, collaborators] = await Promise.all([
   artistReleaseGroups(artist.id, viewerId),
   artistAppearances(artist.id),
+  artistTopTracks(artist.id, viewerId, 5),
+  artistCollaborators(artist.id, 8),
 ]);
+
+// The wash behind the name: their best-rated album's cover, else the latest.
+const rated = albums.filter((a) => a.quality_score != null).sort((a, b) => b.quality_score! - a.quality_score!);
+const backdrop = (rated[0] ?? albums.at(-1))?.art_key ?? null;
+const scores = rated.map((a) => a.quality_score!);
+const average = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+const years = albums.map((a) => yearOf(a.first_release_date)).filter((y): y is string => y !== null).sort();
+const span = years.length ? (years[0] === years.at(-1) ? years[0] : `${years[0]}–${years.at(-1)}`) : null;
+
+const facts = [
+  albums.length ? `${albums.length} ${albums.length === 1 ? 'release' : 'releases'}` : null,
+  span,
+  average !== null ? `averaging ${average} across ${rated.length} rated` : null,
+].filter(Boolean);
 ---
 
-<Base title={artist.name}>
+<Base
+  title={artist.name}
+  description={facts.length ? `${artist.name}: ${facts.join(', ')}.` : `${artist.name}, in Cillian Loftus’s music library.`}
+  image={backdrop ? `/${backdrop}/1200.jpg` : null}
+>
   <div class="wrap page">
-    <header>
+    <Backdrop artKey={backdrop} height="30rem" />
+
+    <header class="hero">
       <p class="eyebrow">Artist</p>
       <h1>{artist.name}</h1>
       {artist.disambiguation && <p class="muted">{artist.disambiguation}</p>}
+      {facts.length > 0 && <p class="facts">{facts.join(' · ')}</p>}
       {
         appearances.length > 0 && (
-          <p class="muted">
-            Also credited as {appearances.map((a) => `${roleLabel(a.role).toLowerCase()} on ${a.count}`).join(', ')}.
-          </p>
+          <ul class="roles" role="list" aria-label="Also credited as">
+            {appearances.map((a) => (
+              <li>
+                {roleLabel(a.role)} <span class="tabular">{a.count}</span>
+              </li>
+            ))}
+          </ul>
         )
       }
     </header>
+
+    {
+      topTracks.length > 0 && (
+        <section aria-labelledby="tracks-heading">
+          <h2 id="tracks-heading">Best tracks</h2>
+          <ol class="tracks" role="list">
+            {topTracks.map((t, i) => (
+              <li>
+                <span class="rank tabular" aria-hidden="true">
+                  {i + 1}
+                </span>
+                <span class="thumb">
+                  <CoverArt artKey={t.art_key} title={t.album_title ?? t.title} sizes="3rem" />
+                </span>
+                <span class="track-text">
+                  {t.album_id ? <a href={`/album/${t.album_id}`}>{t.title}</a> : <span>{t.title}</span>}
+                  {t.album_title && <span class="muted small">{t.album_title}</span>}
+                </span>
+                <Score quality={t.quality_score} personal={t.personal_score} size="m" />
+              </li>
+            ))}
+          </ol>
+        </section>
+      )
+    }
 
     <section aria-labelledby="albums-heading">
       <h2 id="albums-heading">Releases</h2>
@@ -53,8 +116,26 @@ const [albums, appearances] = await Promise.all([
     </section>
 
     {
+      collaborators.length > 0 && (
+        <section aria-labelledby="with-heading">
+          <h2 id="with-heading">Works with</h2>
+          <ul class="people" role="list">
+            {collaborators.map((c) => (
+              <li>
+                <a href={`/artist/${c.id}`}>{c.name}</a>
+                <span class="muted small tabular">
+                  {c.count} {c.count === 1 ? 'credit' : 'credits'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+
+    {
       artist.mbid && (
-        <p>
+        <p class="external">
           <a href={`https://musicbrainz.org/artist/${artist.mbid}`} rel="external">
             View on MusicBrainz
           </a>
@@ -67,26 +148,113 @@ const [albums, appearances] = await Promise.all([
 <style>
   .page {
     display: grid;
-    gap: var(--space-6);
+    gap: var(--space-7);
   }
 
-  header {
+  .hero {
     display: grid;
-    gap: var(--space-2);
+    gap: var(--space-3);
+    padding-top: var(--space-6);
   }
 
   h1 {
-    font-size: var(--step-3);
-    font-weight: 800;
+    font-size: clamp(2.6rem, 1.4rem + 5vw, 5.5rem);
+    font-weight: 850;
+    letter-spacing: -0.045em;
+    line-height: 0.92;
+    text-wrap: balance;
+  }
+
+  .facts {
+    color: var(--text-muted);
+    font-size: var(--step-1);
   }
 
   h2 {
-    font-size: var(--step-1);
+    font-size: var(--step-2);
+    letter-spacing: -0.02em;
     margin-bottom: var(--space-4);
   }
 
   .muted {
     color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  .roles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: var(--space-1) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .roles li {
+    padding: 0.25rem 0.75rem;
+    border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface-1) 60%, transparent);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .roles .tabular {
+    margin-left: 0.25em;
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .tracks {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    max-width: 44rem;
+  }
+
+  .tracks li {
+    display: grid;
+    grid-template-columns: 1.5rem 3rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .rank {
+    color: var(--text-subtle);
+    font-weight: 700;
+    text-align: right;
+  }
+
+  .thumb {
+    width: 3rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .track-text {
+    display: grid;
+    min-width: 0;
+  }
+
+  .track-text > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .track-text a {
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .track-text a:hover {
+    text-decoration: underline;
   }
 
   .grid {
@@ -102,5 +270,42 @@ const [albums, appearances] = await Promise.all([
     .grid {
       grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
     }
+  }
+
+  .people {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .people li {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-height: var(--target);
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+  }
+
+  .people a {
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .people li:hover {
+    border-color: var(--text-subtle);
+  }
+
+  .people li:has(a:hover) a {
+    text-decoration: underline;
+  }
+
+  .external {
+    color: var(--text-muted);
   }
 </style>
