@@ -1,0 +1,53 @@
+---
+import { describe } from '../lib/query/describe';
+import type { Definition } from '../lib/query/schema';
+
+interface Props {
+  definition: Definition;
+}
+
+const { filters, shape } = describe(Astro.props.definition);
+---
+
+<div class="chips">
+  {
+    filters.length > 0 && (
+      <ul role="list" aria-label="Filters">
+        {filters.map((text) => <li class="chip">{text}</li>)}
+      </ul>
+    )
+  }
+  <ul role="list" aria-label="Ordering and limits">
+    {shape.map((text) => <li class="chip chip--shape">{text}</li>)}
+  </ul>
+</div>
+
+<style>
+  .chips {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .chip {
+    padding: 0.3rem 0.8rem;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .chip--shape {
+    border-color: var(--border);
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+</style>

@@ -1,0 +1,97 @@
+---
+import type { ReleaseGroupSummary } from '../lib/catalogue';
+import { yearOf } from '../lib/dates';
+import CoverArt from './CoverArt.astro';
+import CreditLine from './CreditLine.astro';
+import Score from './Score.astro';
+
+interface Props {
+  album: ReleaseGroupSummary;
+  priority?: boolean;
+}
+
+const { album, priority = false } = Astro.props;
+const year = yearOf(album.first_release_date);
+---
+
+<article class="card">
+  <CoverArt
+    artKey={album.art_key}
+    title={album.title}
+    sizes="(min-width: 72rem) 14rem, (min-width: 40rem) 30vw, 46vw"
+    priority={priority}
+  />
+  <div class="meta">
+    <h3><a href={`/album/${album.id}`}>{album.title}</a></h3>
+    <p class="artist"><CreditLine credits={album.credits} link={false} /></p>
+    <p class="detail">
+      {year && <span>{year}</span>}
+      {album.status === 'announced' && <span>Announced</span>}
+      <span class="score"><Score quality={album.quality_score} personal={album.personal_score} size="s" /></span>
+    </p>
+  </div>
+</article>
+
+<style>
+  .card {
+    position: relative;
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .meta {
+    display: grid;
+    gap: 0.15rem;
+    min-width: 0;
+  }
+
+  h3 {
+    font-size: var(--step-0);
+    font-weight: 650;
+  }
+
+  h3 a {
+    text-decoration: none;
+  }
+
+  /* The whole card is the link target; the heading carries the name. */
+  h3 a::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-m);
+  }
+
+  h3 a:focus-visible {
+    outline: none;
+  }
+
+  h3 a:focus-visible::after {
+    outline: 3px solid var(--focus);
+    outline-offset: 4px;
+  }
+
+  .card:hover h3 a {
+    text-decoration: underline;
+  }
+
+  .artist,
+  .detail {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .detail {
+    display: flex;
+    gap: var(--space-2);
+    align-items: baseline;
+  }
+
+  .detail .score {
+    margin-left: auto;
+    color: var(--text);
+  }
+</style>

@@ -1,0 +1,175 @@
+---
+import Base from '../../layouts/Base.astro';
+import { latestJob, type JobPayloads } from '../../lib/jobs/queue';
+import { BACKUP_PREFIX, listBackups } from '../../lib/backup/store';
+
+const [backups, job] = await Promise.all([listBackups(), latestJob('backup')]);
+const report = job?.status === 'done' ? (JSON.parse(job.payload_json) as JobPayloads['backup']).result : undefined;
+const busy = job?.status === 'queued' || job?.status === 'running';
+
+const when = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Dublin' });
+const size = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
+---
+
+<Base title="Backups">
+  <div class="wrap page">
+    <header>
+      <h1>Backups</h1>
+      <p class="muted">
+        Every table as JSON, daily at 04:00 UTC, kept in R2 (30 daily, plus the first of each month for a
+        year) and committed to a private GitHub repo when one is configured. Everything else here can be
+        refetched; the ratings cannot.
+      </p>
+    </header>
+
+    <div class="actions">
+      <form method="post" action="/api/write/backup">
+        <button class="button button--primary" type="submit" disabled={busy}>
+          {busy ? 'Backing up…' : 'Back up now'}
+        </button>
+      </form>
+      <a class="button" href="/edit/backups/now.json" download>Download a fresh copy</a>
+    </div>
+
+    <div role="status">
+      {job?.status === 'failed' && <p class="error">The last backup failed: {job.error}</p>}
+      {
+        report && (
+          <p class="muted">
+            Last backup {job?.finished_at && when.format(new Date(job.finished_at))}: {report.summary.rows} rows,{' '}
+            {report.summary.ratings} ratings, {size(report.bytes)} compressed.
+            {report.github === 'committed' ? ' Committed to GitHub.' : ' GitHub copy not configured.'}
+          </p>
+        )
+      }
+    </div>
+
+    <section aria-labelledby="stored-heading">
+      <h2 id="stored-heading">Stored</h2>
+      {
+        backups.length === 0 ? (
+          <p class="muted">No stored backups yet.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Date</th>
+                <th scope="col">Ratings</th>
+                <th scope="col">Size</th>
+                <th scope="col"><span class="visually-hidden">Download</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {backups.map((b) => {
+                const name = b.key.slice(BACKUP_PREFIX.length);
+                return (
+                  <tr>
+                    <td>{name.slice(0, 10)}</td>
+                    <td class="tabular">{b.customMetadata?.ratings ?? '–'}</td>
+                    <td class="tabular">{size(b.size)}</td>
+                    <td>
+                      <a href={`/edit/backups/file/${name}`}>
+                        Download<span class="visually-hidden"> backup from {name.slice(0, 10)}</span>
+                      </a>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )
+      }
+    </section>
+
+    <section aria-labelledby="restore-heading">
+      <h2 id="restore-heading">Restoring</h2>
+      <p class="muted">
+        Restores go into a freshly migrated, empty database, and refuse to run over existing data:
+      </p>
+      <pre><code>npx wrangler d1 migrations apply music-db --local
+npm run restore -- music-backup.json.gz --local</code></pre>
+      <p class="muted">
+        Use <code>--remote</code> for production. Every test run restores a backup to prove the
+        format round-trips.
+      </p>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+    max-width: 48rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  h1 {
+    font-size: var(--step-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+    margin-bottom: var(--space-3);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .error {
+    color: var(--danger);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  button[disabled] {
+    opacity: 0.6;
+    cursor: progress;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  th,
+  td {
+    padding: var(--space-2) var(--space-3) var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+  }
+
+  thead th {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  td a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+  }
+
+  pre {
+    margin: var(--space-3) 0;
+    padding: var(--space-4);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    overflow-x: auto;
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+  }
+</style>

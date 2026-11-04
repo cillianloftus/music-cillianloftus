@@ -1,0 +1,358 @@
+---
+/**
+ * Writing a definition by hand (build step 4). The filter-chip builder and
+ * natural language come later and produce the same JSON this accepts.
+ * Posts to itself so errors re-render with the input intact.
+ */
+import Base from '../../../layouts/Base.astro';
+import DefinitionChips from '../../../components/DefinitionChips.astro';
+import ResultList from '../../../components/ResultList.astro';
+import { createDefinition, getDefinition, updateDefinition } from '../../../lib/definitions';
+import { ENTITIES, OPS_BY_TYPE, type Entity } from '../../../lib/query/fields';
+import { runDefinition, type QueryResult } from '../../../lib/query/run';
+import { definitionSchema, describeIssues, type Definition } from '../../../lib/query/schema';
+import { decodeDefinition, encodeDefinition } from '../../../lib/query/builder';
+
+const user = Astro.locals.user!;
+const id = Astro.params.id!;
+const isNew = id === 'new';
+
+const existing = isNew ? null : await getDefinition(id);
+if (!isNew && !existing) return Astro.rewrite('/404');
+if (existing && existing.user_id !== user.id) {
+  return new Response('Only the owner can edit this playlist.', { status: 403 });
+}
+
+const STARTER = {
+  entity: 'recording',
+  where: { and: [{ field: 'personal_score', op: 'gte', value: 80 }] },
+  sort: [{ field: 'personal_score', dir: 'desc' }],
+  limit: 50,
+};
+
+let name = existing?.name ?? '';
+let description = existing?.description ?? '';
+let queryText = JSON.stringify(existing ? JSON.parse(existing.query_json) : STARTER, null, 2);
+let errors: string[] = [];
+let preview: { definition: Definition; results: QueryResult[] } | null = null;
+
+// Arriving from the chip builder (?d=): start from its definition.
+const fromBuilder = Astro.url.searchParams.get('d');
+if (Astro.request.method === 'GET' && fromBuilder) {
+  try {
+    queryText = JSON.stringify(decodeDefinition(fromBuilder), null, 2);
+  } catch {
+    errors.push('The query from the builder could not be read.');
+  }
+}
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  name = form.get('name')?.toString().trim() ?? '';
+  description = form.get('description')?.toString().trim() ?? '';
+  queryText = form.get('query')?.toString() ?? '';
+  const intent = form.get('intent');
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(queryText);
+  } catch (error) {
+    errors.push(`The query is not valid JSON: ${(error as Error).message}`);
+  }
+
+  const parsed = raw === undefined ? null : definitionSchema.safeParse(raw);
+  if (parsed && !parsed.success) errors.push(...describeIssues(parsed.error));
+  if (intent === 'save' && !name) errors.push('Give the playlist a name.');
+
+  if (errors.length > 0) Astro.response.status = 422;
+
+  if (parsed?.success && errors.length === 0) {
+    if (intent === 'save') {
+      const input = { name, description: description || null, definition: parsed.data };
+      const savedId = existing ? existing.id : await createDefinition(user.id, input);
+      if (existing) await updateDefinition(existing.id, input);
+      return Astro.redirect(`/playlist/${savedId}`, 303);
+    }
+    preview = {
+      definition: parsed.data,
+      results: await runDefinition(parsed.data, {
+        userId: user.id,
+        pins: existing?.pins,
+        excludes: existing?.excludes,
+      }),
+    };
+  }
+}
+
+const entities = Object.entries(ENTITIES) as [Entity, (typeof ENTITIES)[Entity]][];
+
+// Back to the chip builder with whatever is in the box, if it is valid.
+let chipsHref = `/query${existing ? `?saved=${existing.id}` : ''}`;
+try {
+  const current = definitionSchema.safeParse(JSON.parse(queryText));
+  if (current.success) {
+    chipsHref = `/query?d=${encodeDefinition(current.data)}${existing ? `&saved=${existing.id}` : ''}`;
+  }
+} catch {
+  // Unparseable JSON: the builder starts fresh.
+}
+---
+
+<Base title={isNew ? 'New playlist' : `Edit ${existing!.name}`}>
+  <div class="wrap page">
+    <header>
+      <p><a class="back" href={existing ? `/playlist/${existing.id}` : '/playlists'}>← Back</a></p>
+      <h1>{isNew ? 'New playlist' : `Edit ${existing!.name}`}</h1>
+      <p class="muted">
+        A playlist is a saved query. Name it and save, or adjust the JSON directly. The
+        <a href={chipsHref}>filter-chip builder</a> edits the same query visually.
+      </p>
+    </header>
+
+    {
+      errors.length > 0 && (
+        <div class="errors" role="alert" aria-labelledby="errors-heading">
+          <h2 id="errors-heading">Not saved</h2>
+          <ul>
+            {errors.map((error) => <li>{error}</li>)}
+          </ul>
+        </div>
+      )
+    }
+
+    <form method="post" class="editor">
+      <div class="field">
+        <label for="name">Name</label>
+        <input class="input" id="name" name="name" type="text" maxlength="100" value={name} />
+      </div>
+      <div class="field">
+        <label for="description">Description <span class="optional">(optional)</span></label>
+        <input class="input" id="description" name="description" type="text" maxlength="300" value={description} />
+      </div>
+      <div class="field">
+        <label for="query">Query</label>
+        <textarea
+          class="input code"
+          id="query"
+          name="query"
+          rows="16"
+          spellcheck="false"
+          autocapitalize="off"
+          autocomplete="off"
+          aria-describedby="query-hint"
+        >{queryText}</textarea>
+        <span class="hint" id="query-hint">Field names and operators are listed in the reference below.</span>
+      </div>
+      <div class="buttons">
+        <button class="button" type="submit" name="intent" value="preview">Preview</button>
+        <button class="button button--primary" type="submit" name="intent" value="save">Save</button>
+      </div>
+    </form>
+
+    {
+      preview && (
+        <section class="preview" aria-labelledby="preview-heading">
+          <h2 id="preview-heading">Preview · {preview.results.length} results</h2>
+          <DefinitionChips definition={preview.definition} />
+          <ResultList results={preview.results} />
+        </section>
+      )
+    }
+
+    <details class="reference">
+      <summary>Reference</summary>
+      <div class="reference-body">
+        <p class="muted">
+          <code>entity</code>, <code>where</code> (conditions combined with <code>and</code> /
+          <code>or</code>), <code>sort</code>, <code>group</code> (<code>by</code>,
+          <code>limit_per_group</code>), <code>collapse_by_work</code> (tracks only, default true),
+          <code>limit</code> (default 50, max 500). Dates are <code>2015</code>, <code>2015-06</code>
+          or <code>2015-06-30</code>. Scores are 0–100; personal score adds impact, up to 110.
+        </p>
+        {
+          entities.map(([key, spec]) => (
+            <section>
+              <h3>
+                <code>{key}</code> · {spec.label}
+              </h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Field</th>
+                    <th scope="col">Operators</th>
+                    <th scope="col">Sort</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(spec.fields).map(([fieldKey, field]) => (
+                    <tr>
+                      <th scope="row">
+                        <code>{fieldKey}</code>
+                        <span class="field-label">
+                          {field.label}
+                          {field.values && `: ${field.values.join(', ')}`}
+                          {field.description && ` ${field.description}`}
+                        </span>
+                      </th>
+                      <td>{OPS_BY_TYPE[field.type].join(', ')}</td>
+                      <td>{field.sortable ? 'yes' : ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {Object.keys(spec.groups).length > 0 && (
+                <p class="muted">
+                  Group by:{' '}
+                  {Object.keys(spec.groups).map((g, i) => (
+                    <>
+                      {i > 0 && ', '}
+                      <code>{g}</code>
+                    </>
+                  ))}
+                </p>
+              )}
+            </section>
+          ))
+        }
+      </div>
+    </details>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    max-width: 52rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  h1 {
+    font-size: var(--step-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .back {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+  }
+
+  .muted,
+  .optional {
+    color: var(--text-muted);
+  }
+
+  .optional {
+    font-weight: 400;
+  }
+
+  .errors {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-m);
+  }
+
+  .errors h2 {
+    color: var(--danger);
+    font-size: var(--step-0);
+  }
+
+  .errors ul {
+    margin: 0;
+    padding-left: 1.2rem;
+  }
+
+  .editor {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .code {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    resize: vertical;
+    tab-size: 2;
+  }
+
+  .buttons {
+    display: flex;
+    gap: var(--space-3);
+  }
+
+  .preview {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .reference {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  summary {
+    display: flex;
+    align-items: center;
+    min-height: 3.5rem;
+    padding-inline: var(--space-5);
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .reference-body {
+    display: grid;
+    gap: var(--space-5);
+    padding: 0 var(--space-5) var(--space-5);
+    overflow-x: auto;
+  }
+
+  h3 {
+    font-size: var(--step-0);
+    margin-bottom: var(--space-2);
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--step--1);
+  }
+
+  th,
+  td {
+    padding: var(--space-2);
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  thead th {
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
+  tbody th {
+    font-weight: 400;
+  }
+
+  .field-label {
+    display: block;
+    color: var(--text-muted);
+  }
+</style>

@@ -5,7 +5,13 @@
     "**/*",
     "./worker-configuration.d.ts"
   ],
+  // Tests run in Node, not Workers, and are checked by tsconfig.test.json
+  // with Node's types, so those never leak into the Worker code.
   "exclude": [
-    "dist"
+    "dist",
+    "src/**/*.test.ts",
+    "src/test",
+    "scripts",
+    "vitest.config.ts"
   ]
 }

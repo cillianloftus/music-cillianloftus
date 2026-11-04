@@ -1,0 +1,170 @@
+---
+/**
+ * The owner's Spotify controls for a playlist: push, the last push's
+ * report, and anything Spotify could not supply. Nothing is dropped
+ * silently (ARCHITECTURE.md §6).
+ */
+import { latestPush, type JobPayloads } from '../lib/jobs/queue';
+import { connection, isConfigured } from '../lib/spotify/client';
+
+interface Props {
+  definitionId: string;
+  spotifyPlaylistId: string | null;
+  entity: string;
+  userId: string;
+}
+
+const { definitionId, spotifyPlaylistId, entity, userId } = Astro.props;
+const configured = isConfigured();
+const status = configured ? await connection(userId) : null;
+const job = await latestPush(definitionId);
+const payload = job ? (JSON.parse(job.payload_json) as JobPayloads['spotify_push']) : null;
+const report = job?.status === 'done' ? payload?.result : undefined;
+const busy = job?.status === 'queued' || job?.status === 'running';
+const when = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Dublin' });
+const canPush = entity === 'recording' && configured && status && status.days_left > 0;
+---
+
+<section id="spotify" class="spotify" aria-labelledby="spotify-heading" data-busy={busy ? 'true' : undefined}>
+  <div class="head">
+    <h2 id="spotify-heading">Spotify</h2>
+    {
+      spotifyPlaylistId && (
+        <a href={`https://open.spotify.com/playlist/${spotifyPlaylistId}`} rel="external">
+          Open in Spotify
+        </a>
+      )
+    }
+  </div>
+
+  {
+    entity !== 'recording' ? (
+      <p class="muted">Only track playlists can be pushed to Spotify.</p>
+    ) : !configured || !status ? (
+      <p class="muted">
+        <a href="/edit/spotify">Connect Spotify</a> to push this playlist.
+      </p>
+    ) : status.days_left <= 0 ? (
+      <p class="muted">
+        The Spotify authorisation has expired. <a href="/edit/spotify">Reconnect</a> to push again.
+      </p>
+    ) : null
+  }
+
+  {
+    canPush && (
+      <form method="post" action="/api/write/spotify/push">
+        <input type="hidden" name="definition_id" value={definitionId} />
+        <button class="button button--primary" type="submit" disabled={busy}>
+          {busy ? 'Pushing…' : spotifyPlaylistId ? 'Update on Spotify' : 'Push to Spotify'}
+        </button>
+      </form>
+    )
+  }
+
+  <div role="status">
+    {busy && <p class="muted">Matching tracks and updating the playlist. Refresh in a moment.</p>}
+    {
+      job?.status === 'failed' && (
+        <p class="error">
+          The last push failed: {job.error}{' '}
+          {job.error?.includes('/edit/spotify') && <a href="/edit/spotify">Reconnect</a>}
+        </p>
+      )
+    }
+    {
+      report && (
+        <div class="report">
+          <p>
+            Pushed {report.pushed} of {report.selected} tracks
+            {job?.finished_at && <> · {when.format(new Date(job.finished_at))}</>}.
+          </p>
+          {report.unmatched.length > 0 && (
+            <details>
+              <summary>{report.unmatched.length} not found on Spotify</summary>
+              <ul>
+                {report.unmatched.map((t) => (
+                  <li>
+                    {t.title}
+                    {t.artist && <span class="muted"> · {t.artist}</span>}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {report.unplayable.length > 0 && (
+            <details open>
+              <summary>{report.unplayable.length} not playable in your country</summary>
+              <ul>
+                {report.unplayable.map((t) => (
+                  <li>{t.title}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )
+    }
+  </div>
+</section>
+
+<style>
+  .spotify {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-4);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .head a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    font-weight: 600;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .error {
+    color: var(--danger);
+  }
+
+  .report {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  summary {
+    cursor: pointer;
+    min-height: var(--target);
+    display: flex;
+    align-items: center;
+    font-weight: 600;
+  }
+
+  details ul {
+    margin: 0;
+    padding-left: 1.2rem;
+  }
+
+  button[disabled] {
+    opacity: 0.6;
+    cursor: progress;
+  }
+</style>

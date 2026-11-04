@@ -1,0 +1,114 @@
+---
+/**
+ * The two-second rating: eleven submit buttons, so one tap saves a gut
+ * score. A plain form, so it works before and without JavaScript.
+ * Two rows (0–5, 6–10) on a phone, one row when there is room.
+ */
+
+interface Props {
+  entityType: 'recording' | 'release_group';
+  entityId: string;
+  returnTo: string;
+  /** The current gut score, highlighted, when the latest rating is gut-only. */
+  current?: number | null;
+  legend?: string;
+  hint?: string;
+}
+
+const {
+  entityType,
+  entityId,
+  returnTo,
+  current = null,
+  legend = 'Gut score',
+  hint = 'First instinct, out of 10. One tap saves it.',
+} = Astro.props;
+const scores = Array.from({ length: 11 }, (_, n) => n);
+---
+
+<form method="post" action="/api/write/rating">
+  <input type="hidden" name="entity_type" value={entityType} />
+  <input type="hidden" name="entity_id" value={entityId} />
+  <input type="hidden" name="return_to" value={returnTo} />
+  <fieldset>
+    <legend>
+      <span class="legend-title">{legend}</span>
+      <span class="hint">{hint}</span>
+    </legend>
+    <div class="scale">
+      {
+        scores.map((n) => (
+          <button type="submit" name="gut_score" value={n} class:list={['step', { current: current === n }]}>
+            {n}
+            {current === n && <span class="visually-hidden"> (current)</span>}
+          </button>
+        ))
+      }
+    </div>
+  </fieldset>
+</form>
+
+<style>
+  fieldset {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  legend {
+    display: grid;
+    gap: var(--space-1);
+    padding: 0;
+    margin-bottom: var(--space-4);
+  }
+
+  .legend-title {
+    font-size: var(--step-1);
+    font-weight: 700;
+  }
+
+  .hint {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .scale {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: var(--space-2);
+  }
+
+  @media (min-width: 36rem) {
+    .scale {
+      grid-template-columns: repeat(11, 1fr);
+    }
+  }
+
+  .step {
+    min-height: 3.25rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    font-size: var(--step-1);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .step:hover {
+    border-color: var(--text-subtle);
+    background: var(--surface-2);
+  }
+
+  .step:active {
+    transform: scale(0.96);
+  }
+
+  .step.current {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+  }
+</style>

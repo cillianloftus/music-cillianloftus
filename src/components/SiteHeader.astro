@@ -1,0 +1,276 @@
+---
+import type { Theme } from '../lib/theme';
+
+interface Props {
+  theme: Theme;
+}
+
+const { theme } = Astro.props;
+const user = Astro.locals.user;
+const path = Astro.url.pathname;
+
+// Icons are SVG path data on a 24px grid, drawn as strokes.
+const links = [
+  { href: '/', label: 'Albums', icon: 'M4 4h16v16H4z M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z' },
+  ...(user ? [{ href: '/edit/queue', label: 'Queue', icon: 'M4 13l2.5-8h11l2.5 8M4 13v6h16v-6M4 13h5l1.5 2h3l1.5-2h5' }] : []),
+  { href: '/playlists', label: 'Playlists', icon: 'M4 6h12M4 12h12M4 18h7M18 15v6M15 18h6' },
+  { href: '/genres', label: 'Genres', icon: 'M9 9.5a5 5 0 1 0 0 .01M16.5 16a3.5 3.5 0 1 0 0 .01M17 6.5a2 2 0 1 0 0 .01' },
+  ...(user ? [{ href: '/edit', label: 'Manage', icon: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4' }] : []),
+];
+
+// The most specific matching link is current, so /edit/queue marks Queue,
+// not Manage (/edit).
+// Detail pages belong to their section: an album to Albums, a playlist to Playlists.
+const SECTION_OF: Record<string, string> = { '/album': '/', '/artist': '/', '/playlist': '/playlists' };
+const section = Object.entries(SECTION_OF).find(([prefix]) => path.startsWith(`${prefix}/`))?.[1];
+const matches = (href: string) =>
+  href === section || (href === '/' ? path === '/' : path === href || path.startsWith(`${href}/`));
+const currentHref = links
+  .map((link) => link.href)
+  .filter(matches)
+  .sort((a, b) => b.length - a.length)[0];
+const isCurrent = (href: string) => href === currentHref;
+const next = theme === 'dark' ? 'light' : 'dark';
+---
+
+<header class="site-header">
+  <div class="wrap bar">
+    <a class="brand" href="/">music<span class="visually-hidden">, home</span></a>
+
+    <nav aria-label="Main">
+      <ul>
+        {
+          links.map((link) => (
+            <li>
+              <a href={link.href} aria-current={isCurrent(link.href) ? 'page' : undefined}>
+                <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d={link.icon}></path>
+                </svg>
+                {link.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+
+    <a
+      class="icon-button search-link"
+      href="/search"
+      aria-label="Search"
+      title="Search"
+      aria-current={path === '/search' ? 'page' : undefined}
+    >
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6"></circle>
+        <path d="M15 15l5 5"></path>
+      </svg>
+    </a>
+
+    <form class="theme" method="post" action="/api/theme" data-theme-toggle>
+      <input type="hidden" name="theme" value={next} />
+      <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+      <button type="submit" aria-label={`Switch to ${next} mode`} title={`Switch to ${next} mode`}>
+        <svg class="icon icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="4.5"></circle>
+          <path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"></path>
+        </svg>
+        <svg class="icon icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
+        </svg>
+      </button>
+    </form>
+  </div>
+</header>
+
+<script>
+  // Progressive enhancement: without JS the form posts and reloads.
+  const form = document.querySelector<HTMLFormElement>('[data-theme-toggle]');
+  form?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const root = document.documentElement;
+    const next = root.dataset.theme === 'light' ? 'dark' : 'light';
+    root.dataset.theme = next;
+    document.cookie = `theme=${next}; Path=/; Max-Age=31536000; SameSite=Lax; Secure`;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute(
+      'content',
+      next === 'light' ? '#f6f3ec' : '#0e0e10',
+    );
+    const after = next === 'dark' ? 'light' : 'dark';
+    const button = form.querySelector('button')!;
+    button.setAttribute('aria-label', `Switch to ${after} mode`);
+    button.title = `Switch to ${after} mode`;
+    form.querySelector<HTMLInputElement>('input[name="theme"]')!.value = after;
+  });
+</script>
+
+<style>
+  .site-header {
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    min-height: 3.5rem;
+  }
+
+  .brand {
+    font-weight: 800;
+    font-size: var(--step-1);
+    letter-spacing: -0.03em;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+  }
+
+  .brand::after {
+    content: '';
+    width: 0.4em;
+    height: 0.4em;
+    margin-left: 0.12em;
+    margin-top: 0.3em;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  nav {
+    margin-left: auto;
+  }
+
+  nav ul {
+    display: flex;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    padding-inline: var(--space-3);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  nav a:hover {
+    color: var(--text);
+  }
+
+  nav a[aria-current='page'] {
+    color: var(--text);
+    background: var(--surface-2);
+  }
+
+  .nav-icon {
+    display: none;
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* Phones: the nav becomes a bar along the bottom, in thumb reach, and the
+     header keeps only the brand and theme toggle. */
+  @media (max-width: 39.99rem) {
+    nav {
+      position: fixed;
+      inset: auto 0 0 0;
+      z-index: 20;
+      margin: 0;
+      padding-bottom: env(safe-area-inset-bottom);
+      border-top: 1px solid var(--border);
+      background: var(--surface-1);
+    }
+
+    nav ul {
+      justify-content: space-around;
+    }
+
+    nav li {
+      flex: 1;
+    }
+
+    nav a {
+      flex-direction: column;
+      justify-content: center;
+      gap: 2px;
+      width: 100%;
+      min-height: 3.5rem;
+      padding: 0;
+      border-radius: 0;
+      font-size: 0.75rem;
+    }
+
+    nav a[aria-current='page'] {
+      background: none;
+      color: var(--accent);
+    }
+
+    .nav-icon {
+      display: block;
+    }
+
+    .search-link {
+      margin-left: auto;
+    }
+
+    /* Keep page content clear of the bar. */
+    :global(body) {
+      padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
+    }
+  }
+
+  .icon-button,
+  .theme button {
+    display: grid;
+    place-items: center;
+    width: var(--target);
+    height: var(--target);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .icon-button {
+    flex: none;
+    color: inherit;
+  }
+
+  .icon-button[aria-current],
+  .icon-button:hover,
+  .theme button:hover {
+    border-color: var(--text-subtle);
+  }
+
+  .icon {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+
+  .icon-moon {
+    fill: currentColor;
+    stroke: none;
+  }
+
+  /* Show the icon for the mode you would switch to. */
+  :global([data-theme='dark']) .icon-moon,
+  :global([data-theme='light']) .icon-sun {
+    display: none;
+  }
+</style>

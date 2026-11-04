@@ -1,0 +1,597 @@
+---
+/**
+ * The filter-chip builder (build step 8). The state is the definition in
+ * the URL (?d=), so the back button is undo and every state can be shared.
+ * Every edit is a GET that redirects to a clean URL; nothing here needs
+ * JavaScript. Natural language will arrive on this page and produce the
+ * same definitions.
+ */
+import Base from '../layouts/Base.astro';
+import ResultList from '../components/ResultList.astro';
+import { getDefinition } from '../lib/definitions';
+import {
+  addCondition,
+  chipConditions,
+  conditionFromForm,
+  currentSort,
+  decodeDefinition,
+  encodeDefinition,
+  opLabel,
+  opsFor,
+  removeCondition,
+  replaceCondition,
+  starterDefinition,
+  switchEntity,
+  withShape,
+} from '../lib/query/builder';
+import { describe, describeCondition } from '../lib/query/describe';
+import { ENTITIES, type Entity } from '../lib/query/fields';
+import { runDefinition } from '../lib/query/run';
+import { definitionSchema, describeIssues, type Definition } from '../lib/query/schema';
+import { artistNames, genreNames } from '../lib/query/vocabulary';
+
+const user = Astro.locals.user!;
+const params = Astro.url.searchParams;
+const savedId = params.get('saved');
+const saved = savedId ? await getDefinition(savedId) : null;
+if (saved && saved.user_id !== user.id) return new Response('Only the owner can edit this playlist.', { status: 403 });
+
+// Current definition: from the URL, else a starter.
+let definition: Definition = starterDefinition('recording');
+const encoded = params.get('d');
+if (encoded) {
+  try {
+    const parsed = definitionSchema.safeParse(decodeDefinition(encoded));
+    if (parsed.success) definition = parsed.data;
+  } catch {
+    // An unreadable ?d= falls back to the starter.
+  }
+}
+
+const urlFor = (next: Definition, extra: Record<string, string> = {}) => {
+  const search = new URLSearchParams({ d: encodeDefinition(next), ...(savedId ? { saved: savedId } : {}), ...extra });
+  return `/query?${search}`;
+};
+
+// Apply an edit, then redirect to the clean URL for the new state.
+let error: string | null = null;
+const action = params.get('action');
+if (action) {
+  let next: Definition | string = definition;
+  const index = Number(params.get('i'));
+  if (action === 'entity') {
+    const entity = params.get('entity');
+    if (entity && entity in ENTITIES) next = switchEntity(definition, entity as Entity);
+  } else if (action === 'remove') {
+    next = removeCondition(definition, index);
+  } else if (action === 'add' || action === 'edit') {
+    const condition = conditionFromForm(
+      definition.entity,
+      params.get('field') ?? '',
+      params.get('op') ?? '',
+      params.get('value') ?? '',
+      params.get('value_to') ?? '',
+    );
+    next = typeof condition === 'string' ? condition : action === 'add' ? addCondition(definition, condition) : replaceCondition(definition, index, condition);
+  } else if (action === 'shape') {
+    next = withShape(definition, {
+      sort: params.get('sort'),
+      dir: params.get('dir'),
+      limit: params.get('limit'),
+      groupBy: params.get('group_by') ?? undefined,
+      perGroup: params.get('per_group'),
+      collapse: params.get('collapse') ?? undefined,
+    });
+  }
+
+  if (typeof next === 'string') {
+    error = next;
+  } else {
+    const checked = definitionSchema.safeParse(next);
+    if (checked.success) return Astro.redirect(urlFor(checked.data), 303);
+    error = describeIssues(checked.error).join(' ');
+  }
+}
+
+const spec = ENTITIES[definition.entity];
+const chips = chipConditions(definition);
+const step = error ? params.get('step') ?? (params.get('field') ? 'field' : null) : params.get('step');
+const editingIndex = params.get('i') !== null && step === 'field' ? Number(params.get('i')) : null;
+const editing = editingIndex !== null ? chips?.[editingIndex] : undefined;
+const fieldKey = step === 'field' ? params.get('field') ?? editing?.field ?? '' : '';
+const field = spec.fields[fieldKey];
+
+const [results, genres, artists] = await Promise.all([
+  runDefinition(definition, { userId: user.id, pins: saved?.pins, excludes: saved?.excludes }),
+  field?.type === 'genre' ? genreNames() : Promise.resolve([]),
+  field?.type === 'credit' ? artistNames() : Promise.resolve([]),
+]);
+const shape = describe(definition).shape;
+const sort = currentSort(definition);
+const sortable = Object.entries(spec.fields).filter(([, f]) => f.sortable && f.sql);
+const groups = Object.entries(spec.groups);
+
+const valueOf = (v: unknown) => (Array.isArray(v) ? v.join(', ') : v === undefined ? '' : String(v));
+const firstValue = editing ? valueOf(Array.isArray(editing.value) && editing.op === 'between' ? editing.value[0] : editing.value) : '';
+const secondValue = editing?.op === 'between' && Array.isArray(editing.value) ? String(editing.value[1]) : '';
+
+const entityTabs: [Entity, string][] = [
+  ['recording', 'Tracks'],
+  ['release_group', 'Albums'],
+  ['artist', 'Artists'],
+];
+const saveHref = `/edit/definition/${saved ? saved.id : 'new'}?d=${encodeDefinition(definition)}`;
+---
+
+<Base title={saved ? `Edit ${saved.name}` : 'Build a playlist'}>
+  <div class="wrap page">
+    <header>
+      <h1>{saved ? saved.name : 'Build a playlist'}</h1>
+      <p class="muted">Every change updates the results. Back undoes.</p>
+    </header>
+
+    <nav class="tabs" aria-label="What to list">
+      {
+        entityTabs.map(([entity, label]) => (
+          <a
+            href={urlFor(definition, { action: 'entity', entity })}
+            aria-current={definition.entity === entity ? 'page' : undefined}
+          >
+            {label}
+          </a>
+        ))
+      }
+    </nav>
+
+    {error && <p class="error" role="alert">{error}</p>}
+
+    <section aria-labelledby="filters-heading" class="filters">
+      <h2 id="filters-heading" class="visually-hidden">Filters</h2>
+      {
+        chips === null ? (
+          <p class="muted">
+            This query combines conditions with “or”, which the chips cannot show yet.{' '}
+            <a href={saveHref}>Edit it as JSON</a>.
+          </p>
+        ) : (
+          <ul class="chips" role="list">
+            {chips.map((condition, i) => (
+              <li class:list={['chip', { editing: editingIndex === i }]}>
+                <a class="chip-edit" href={urlFor(definition, { step: 'field', field: condition.field, i: String(i) })}>
+                  {describeCondition(definition.entity, condition)}
+                  <span class="visually-hidden"> (edit)</span>
+                </a>
+                <a class="chip-remove" href={urlFor(definition, { action: 'remove', i: String(i) })} aria-label={`Remove ${describeCondition(definition.entity, condition)}`}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                </a>
+              </li>
+            ))}
+            <li>
+              <a class="chip-add" href={urlFor(definition, { step: 'pick' })} aria-expanded={step === 'pick' ? 'true' : 'false'}>
+                + Add filter
+              </a>
+            </li>
+          </ul>
+        )
+      }
+
+      {
+        step === 'pick' && (
+          <div class="panel" id="pick">
+            <h3>Filter by</h3>
+            <ul class="fields" role="list">
+              {Object.entries(spec.fields).map(([key, f]) => (
+                <li>
+                  <a href={urlFor(definition, { step: 'field', field: key })}>{f.label}</a>
+                </li>
+              ))}
+            </ul>
+            <a class="cancel" href={urlFor(definition)}>Cancel</a>
+          </div>
+        )
+      }
+
+      {
+        step === 'field' && field && (
+          <form class="panel" method="get" action="/query">
+            <input type="hidden" name="d" value={encodeDefinition(definition)} />
+            {savedId && <input type="hidden" name="saved" value={savedId} />}
+            <input type="hidden" name="action" value={editing ? 'edit' : 'add'} />
+            <input type="hidden" name="field" value={fieldKey} />
+            {editingIndex !== null && <input type="hidden" name="i" value={editingIndex} />}
+
+            <h3>{field.label}</h3>
+            <div class="condition">
+              <div class="field">
+                <label for="op">Compare</label>
+                <select class="input" id="op" name="op">
+                  {opsFor(field).map((op) => (
+                    <option value={op} selected={(editing?.op ?? opsFor(field)[0]) === op}>
+                      {opLabel(field, op)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {field.type === 'enum' ? (
+                <div class="field">
+                  <label for="value">Value</label>
+                  <select class="input" id="value" name="value">
+                    {field.values!.map((v) => (
+                      <option value={v} selected={firstValue === v}>{v.replace(/_/g, ' ')}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : field.type === 'boolean' ? (
+                <fieldset class="field">
+                  <legend>Value</legend>
+                  <label><input type="radio" name="value" value="true" checked={firstValue !== 'false'} /> Yes</label>
+                  <label><input type="radio" name="value" value="false" checked={firstValue === 'false'} /> No</label>
+                </fieldset>
+              ) : (
+                <>
+                  <div class="field">
+                    <label for="value">
+                      Value
+                      {field.type === 'date' && <span class="hint"> (2015, 2015-06 or 2015-06-30)</span>}
+                    </label>
+                    <input
+                      class="input"
+                      id="value"
+                      name="value"
+                      value={firstValue}
+                      inputmode={field.type === 'number' ? 'decimal' : undefined}
+                      list={field.type === 'genre' ? 'genre-names' : field.type === 'credit' ? 'artist-names' : undefined}
+                      autocomplete="off"
+                      aria-describedby="value-hint"
+                    />
+                    <span class="hint" id="value-hint">
+                      {field.type === 'number' && 'Scores run 0–100; personal scores up to 110. '}
+                      {opsFor(field).includes('in') && 'For “is any of”, separate values with commas. '}
+                      {opsFor(field).includes('is_null') && 'Leave empty for “is empty” and “is set”.'}
+                    </span>
+                  </div>
+                  {(field.type === 'number' || field.type === 'date') && (
+                    <div class="field">
+                      <label for="value_to">And <span class="hint">(for “between”)</span></label>
+                      <input class="input" id="value_to" name="value_to" value={secondValue} inputmode={field.type === 'number' ? 'decimal' : undefined} autocomplete="off" />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            {genres.length > 0 && <datalist id="genre-names">{genres.map((g) => <option value={g} />)}</datalist>}
+            {artists.length > 0 && <datalist id="artist-names">{artists.map((a) => <option value={a} />)}</datalist>}
+
+            <div class="buttons">
+              <button class="button button--primary" type="submit">{editing ? 'Update filter' : 'Add filter'}</button>
+              <a class="cancel" href={urlFor(definition)}>Cancel</a>
+            </div>
+          </form>
+        )
+      }
+    </section>
+
+    <details class="shape">
+      <summary>Order and size · {shape.join(' · ')}</summary>
+      <form method="get" action="/query">
+        <input type="hidden" name="d" value={encodeDefinition(definition)} />
+        {savedId && <input type="hidden" name="saved" value={savedId} />}
+        <input type="hidden" name="action" value="shape" />
+        <div class="shape-fields">
+          <div class="field">
+            <label for="sort">Sort by</label>
+            <select class="input" id="sort" name="sort">
+              {sortable.map(([key, f]) => <option value={key} selected={sort.field === key}>{f.label}</option>)}
+            </select>
+          </div>
+          <div class="field">
+            <label for="dir">Direction</label>
+            <select class="input" id="dir" name="dir">
+              <option value="desc" selected={sort.dir === 'desc'}>Highest first</option>
+              <option value="asc" selected={sort.dir === 'asc'}>Lowest first</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="limit">How many</label>
+            <input class="input" id="limit" name="limit" type="number" min="1" max="500" value={definition.limit} />
+          </div>
+          {
+            groups.length > 0 && (
+              <>
+                <div class="field">
+                  <label for="group_by">Limit per</label>
+                  <select class="input" id="group_by" name="group_by">
+                    <option value="" selected={!definition.group}>No limit</option>
+                    {groups.map(([key, g]) => <option value={key} selected={definition.group?.by === key}>{g.label}</option>)}
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="per_group">Up to</label>
+                  <input class="input" id="per_group" name="per_group" type="number" min="1" max="50" value={definition.group?.limit_per_group ?? 5} />
+                </div>
+              </>
+            )
+          }
+          {
+            definition.entity === 'recording' && (
+              <div class="field">
+                <label for="collapse">Versions</label>
+                <select class="input" id="collapse" name="collapse">
+                  <option value="on" selected={definition.collapse_by_work}>One per song</option>
+                  <option value="off" selected={!definition.collapse_by_work}>All versions</option>
+                </select>
+              </div>
+            )
+          }
+        </div>
+        <button class="button" type="submit">Apply</button>
+      </form>
+    </details>
+
+    <section aria-labelledby="results-heading" class="results">
+      <div class="results-head">
+        <h2 id="results-heading">{results.length} {results.length === 1 ? 'result' : 'results'}</h2>
+        <div class="save">
+          <a class="button button--primary" href={saveHref}>{saved ? 'Save changes' : 'Save as playlist'}</a>
+        </div>
+      </div>
+      <ResultList results={results} />
+    </section>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  h1 {
+    font-size: var(--step-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  h3 {
+    font-size: var(--step-0);
+  }
+
+  .muted,
+  .hint {
+    color: var(--text-muted);
+  }
+
+  .hint {
+    font-size: var(--step--1);
+    font-weight: 400;
+  }
+
+  .error {
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-s);
+    color: var(--danger);
+  }
+
+  .tabs {
+    display: flex;
+    gap: var(--space-1);
+    padding: var(--space-1);
+    border-radius: 999px;
+    background: var(--surface-1);
+    justify-self: start;
+  }
+
+  .tabs a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    padding-inline: var(--space-4);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .tabs a[aria-current] {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .filters {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .chip.editing {
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+  }
+
+  .chip-edit,
+  .chip-add {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    padding-inline: var(--space-4);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .chip-edit:hover {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+
+  .chip-remove {
+    display: grid;
+    place-items: center;
+    width: var(--target);
+    border-left: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+
+  .chip-remove:hover {
+    background: color-mix(in srgb, var(--danger) 18%, transparent);
+  }
+
+  .chip-remove svg {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+
+  .chip-add {
+    border: 1px dashed var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+  }
+
+  .chip-add:hover {
+    border-color: var(--text-subtle);
+    color: var(--text);
+  }
+
+  .panel {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(11rem, 100%), 1fr));
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .fields a {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    padding-inline: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-s);
+    text-decoration: none;
+  }
+
+  .fields a:hover {
+    border-color: var(--text-subtle);
+  }
+
+  .condition {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  @media (min-width: 40rem) {
+    .condition {
+      grid-template-columns: 12rem 1fr 1fr;
+      align-items: start;
+    }
+  }
+
+  fieldset.field {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    display: flex;
+    gap: var(--space-4);
+    align-items: center;
+  }
+
+  fieldset.field legend {
+    font-weight: 600;
+    margin-bottom: var(--space-2);
+  }
+
+  fieldset.field label {
+    display: inline-flex;
+    gap: var(--space-2);
+    align-items: center;
+    min-height: var(--target);
+  }
+
+  .buttons {
+    display: flex;
+    gap: var(--space-4);
+    align-items: center;
+  }
+
+  .cancel {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+  }
+
+  .shape {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+  }
+
+  .shape summary {
+    display: flex;
+    align-items: center;
+    min-height: 3.25rem;
+    padding-inline: var(--space-4);
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .shape form {
+    display: grid;
+    gap: var(--space-4);
+    justify-items: start;
+    padding: 0 var(--space-4) var(--space-4);
+  }
+
+  .shape-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(11rem, 100%), 1fr));
+    gap: var(--space-4);
+    width: 100%;
+  }
+
+  .results {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .results-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+</style>

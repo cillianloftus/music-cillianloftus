@@ -1,0 +1,76 @@
+---
+/**
+ * A composite score: quality out of 100, with impact shown separately as
+ * the flat points it adds. Read aloud as a sentence, not a bare number.
+ */
+
+interface Props {
+  quality?: number | null | undefined;
+  personal?: number | null | undefined;
+  size?: 's' | 'm' | 'l';
+}
+
+const { quality, personal, size = 'm' } = Astro.props;
+const rounded = quality == null ? null : Math.round(quality);
+const impact = quality != null && personal != null ? Math.round(personal - quality) : 0;
+const label =
+  rounded == null
+    ? 'Not rated'
+    : `Score ${rounded} out of 100${impact > 0 ? `, plus ${impact} for impact` : ''}`;
+---
+
+{
+  rounded == null ? (
+    <span class={`score score--${size} score--none`}>
+      <span aria-hidden="true">–</span>
+      <span class="visually-hidden">{label}</span>
+    </span>
+  ) : (
+    <span class={`score score--${size}`} data-tier={rounded >= 85 ? 'high' : undefined}>
+      <span aria-hidden="true" class="tabular">
+        {rounded}
+        {impact > 0 && <span class="impact">+{impact}</span>}
+      </span>
+      <span class="visually-hidden">{label}</span>
+    </span>
+  )
+}
+
+<style>
+  .score {
+    display: inline-flex;
+    align-items: baseline;
+    font-weight: 750;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+  }
+
+  .score--s {
+    font-size: var(--step-0);
+  }
+
+  .score--m {
+    font-size: var(--step-1);
+  }
+
+  .score--l {
+    font-size: var(--step-3);
+  }
+
+  .score[data-tier='high'] {
+    color: var(--accent);
+  }
+
+  .score--none {
+    color: var(--text-subtle);
+    font-weight: 500;
+  }
+
+  .impact {
+    margin-left: 0.15em;
+    font-size: 0.6em;
+    color: var(--accent);
+    vertical-align: super;
+  }
+</style>

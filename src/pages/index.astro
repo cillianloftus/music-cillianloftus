@@ -1,16 +1,69 @@
 ---
+import Base from '../layouts/Base.astro';
+import AlbumCard from '../components/AlbumCard.astro';
+import { ownerId } from '../lib/auth/user';
+import { recentReleaseGroups } from '../lib/catalogue';
+
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+const albums = await recentReleaseGroups(viewerId);
 ---
 
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<link rel="icon" href="/favicon.ico" />
-		<meta name="viewport" content="width=device-width" />
-		<meta name="generator" content={Astro.generator} />
-		<title>Astro</title>
-	</head>
-	<body>
-		<h1>Astro</h1>
-	</body>
-</html>
+<Base title="music">
+  <div class="wrap">
+    <h1>Recently added</h1>
+
+    {
+      albums.length === 0 ? (
+        <div class="empty">
+          <p>Nothing in the catalogue yet.</p>
+          {Astro.locals.user && (
+            <a class="button button--primary" href="/edit/import">
+              Import an album
+            </a>
+          )}
+        </div>
+      ) : (
+        <ul class="grid" role="list">
+          {albums.map((album, i) => (
+            <li>
+              <AlbumCard album={album} priority={i < 2} />
+            </li>
+          ))}
+        </ul>
+      )
+    }
+  </div>
+</Base>
+
+<style>
+  h1 {
+    font-size: var(--step-2);
+    margin-bottom: var(--space-5);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));
+    gap: var(--space-6) var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  @media (min-width: 40rem) {
+    .grid {
+      grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+      gap: var(--space-6) var(--space-5);
+    }
+  }
+
+  .empty {
+    display: grid;
+    gap: var(--space-4);
+    justify-items: start;
+    padding: var(--space-6);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-l);
+    color: var(--text-muted);
+  }
+</style>

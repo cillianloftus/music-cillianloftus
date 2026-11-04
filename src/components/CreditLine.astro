@@ -1,0 +1,25 @@
+---
+import type { CreditPart } from '../lib/catalogue';
+
+interface Props {
+  credits: CreditPart[];
+  /** Links each artist. Off inside a link already (cards). */
+  link?: boolean;
+}
+
+const { credits, link = true } = Astro.props;
+---
+
+{
+  credits.length === 0 ? (
+    <span>Unknown artist</span>
+  ) : (
+    credits.map((part, i) => (
+      <Fragment>
+        {link ? <a href={`/artist/${part.artist_id}`}>{part.name}</a> : part.name}
+        {/* The final join phrase is usually empty; trailing text is dropped. */}
+        {i < credits.length - 1 ? part.join_phrase || ', ' : ''}
+      </Fragment>
+    ))
+  )
+}

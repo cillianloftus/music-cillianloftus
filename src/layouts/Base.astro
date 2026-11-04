@@ -1,0 +1,61 @@
+---
+import '../styles/global.css';
+import SiteHeader from '../components/SiteHeader.astro';
+import { THEME_COOKIE, themeFrom } from '../lib/theme';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description = 'Albums and tracks, rated by Cillian Loftus.' } = Astro.props;
+const theme = themeFrom(Astro.cookies.get(THEME_COOKIE)?.value);
+const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · music · Cillian Loftus`;
+---
+
+<!doctype html>
+<html lang="en-IE" data-theme={theme}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content={theme === 'light' ? '#f6f3ec' : '#0e0e10'} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <SiteHeader theme={theme} />
+    <main id="main" tabindex="-1">
+      <slot />
+    </main>
+  </body>
+</html>
+
+<style>
+  .skip-link {
+    position: absolute;
+    top: var(--space-2);
+    left: var(--space-2);
+    z-index: 10;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-s);
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 600;
+    transform: translateY(-200%);
+  }
+
+  .skip-link:focus {
+    transform: none;
+  }
+
+  main {
+    padding-block: var(--space-5) var(--space-7);
+  }
+
+  main:focus {
+    outline: none;
+  }
+</style>

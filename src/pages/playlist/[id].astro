@@ -1,0 +1,90 @@
+---
+import Base from '../../layouts/Base.astro';
+import DefinitionChips from '../../components/DefinitionChips.astro';
+import ResultList from '../../components/ResultList.astro';
+import SpotifyPanel from '../../components/SpotifyPanel.astro';
+import { getDefinition } from '../../lib/definitions';
+import { runDefinition } from '../../lib/query/run';
+import { encodeDefinition } from '../../lib/query/builder';
+
+const saved = await getDefinition(Astro.params.id!);
+if (!saved) return Astro.rewrite('/404');
+
+// A playlist reflects its owner's ratings, whoever is looking at it.
+const results = await runDefinition(saved.definition, {
+  userId: saved.user_id,
+  pins: saved.pins,
+  excludes: saved.excludes,
+});
+const user = Astro.locals.user;
+---
+
+<Base title={saved.name} description={saved.description ?? undefined}>
+  <div class="wrap page">
+    <header>
+      <p class="eyebrow">Playlist · {saved.owner_name}</p>
+      <h1>{saved.name}</h1>
+      {saved.description && <p class="muted">{saved.description}</p>}
+      <DefinitionChips definition={saved.definition} />
+      {
+        user?.id === saved.user_id && (
+          <p class="actions">
+            <a class="button" href={`/query?d=${encodeDefinition(saved.definition)}&saved=${saved.id}`}>Edit filters</a>
+            <a class="button button--quiet" href={`/edit/definition/${saved.id}`}>Edit as JSON</a>
+          </p>
+        )
+      }
+    </header>
+
+    {
+      user?.id === saved.user_id && (
+        <SpotifyPanel
+          definitionId={saved.id}
+          spotifyPlaylistId={saved.spotify_playlist_id}
+          entity={saved.definition.entity}
+          userId={user.id}
+        />
+      )
+    }
+
+    {
+      saved.spotify_playlist_id && user?.id !== saved.user_id && (
+        <p>
+          <a href={`https://open.spotify.com/playlist/${saved.spotify_playlist_id}`} rel="external">Open in Spotify</a>
+        </p>
+      )
+    }
+
+    <section aria-label="Results">
+      <ResultList results={results} />
+    </section>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  h1 {
+    font-size: var(--step-3);
+    font-weight: 800;
+  }
+
+  .muted {
+    color: var(--text-muted);
+    max-width: 40rem;
+  }
+</style>

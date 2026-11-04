@@ -1,0 +1,288 @@
+---
+/**
+ * Manual entry: for music on no database at all. Paste a tracklist;
+ * Preview shows exactly what will be created (the dry run, ARCHITECTURE.md
+ * §5); Add writes it through the same import writer as everything else.
+ */
+import { env } from 'cloudflare:workers';
+import Base from '../../../layouts/Base.astro';
+import { formatDuration } from '../../../lib/format';
+import { MAX_TRACKS, buildManualPlan, parseTracklist, validateManual, type ManualInput } from '../../../lib/import/manual';
+import type { ReleaseGroupType } from '../../../lib/import/plan';
+import { writePlan } from '../../../lib/import/write';
+
+const TYPES: [ReleaseGroupType, string][] = [
+  ['album', 'Album'],
+  ['ep', 'EP'],
+  ['single', 'Single'],
+  ['mixtape', 'Mixtape'],
+  ['compilation', 'Compilation'],
+  ['soundtrack', 'Soundtrack'],
+  ['live', 'Live album'],
+];
+
+let input: ManualInput = { artist: '', title: '', type: 'album', date: '', genres: '', tracklist: '' };
+let errors: string[] = [];
+let previewing = false;
+let duplicates: { id: string; title: string }[] = [];
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const text = (name: string) => form.get(name)?.toString() ?? '';
+  const type = text('type') as ReleaseGroupType;
+  input = {
+    artist: text('artist'),
+    title: text('title'),
+    type: TYPES.some(([t]) => t === type) ? type : 'album',
+    date: text('date'),
+    genres: text('genres'),
+    tracklist: text('tracklist'),
+  };
+  errors = validateManual(input);
+
+  if (errors.length === 0 && form.get('intent') === 'save') {
+    const result = await writePlan(buildManualPlan(input));
+    return Astro.redirect(`/album/${result.releaseGroupId}`, 303);
+  }
+  if (errors.length > 0) Astro.response.status = 422;
+  previewing = errors.length === 0;
+
+  if (previewing) {
+    const { results } = await env.DB.prepare(
+      `SELECT g.id, g.title FROM release_group g
+       JOIN artist_credit c ON c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary'
+       JOIN artist a ON a.id = c.artist_id
+       WHERE lower(g.title) = lower(?) AND lower(a.name) = lower(?)`,
+    )
+      .bind(input.title.trim(), input.artist.trim())
+      .all<{ id: string; title: string }>();
+    duplicates = results;
+  }
+}
+
+const tracks = previewing ? parseTracklist(input.tracklist) : [];
+const discs = new Set(tracks.map((t) => t.disc)).size;
+---
+
+<Base title="Add by hand">
+  <div class="wrap page">
+    <header>
+      <p><a class="back" href="/edit/import">← Import</a></p>
+      <h1>Add by hand</h1>
+      <p class="muted">For music on no database: mixtapes, demos, bedroom releases. Paste the tracklist.</p>
+    </header>
+
+    {
+      errors.length > 0 && (
+        <div class="errors" role="alert">
+          <ul>{errors.map((e) => <li>{e}</li>)}</ul>
+        </div>
+      )
+    }
+
+    <form method="post" class="form">
+      <div class="row">
+        <div class="field">
+          <label for="artist">Artist</label>
+          <input class="input" id="artist" name="artist" value={input.artist} required autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="title">Title</label>
+          <input class="input" id="title" name="title" value={input.title} required autocomplete="off" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="type">Type</label>
+          <select class="input" id="type" name="type">
+            {TYPES.map(([value, label]) => <option value={value} selected={input.type === value}>{label}</option>)}
+          </select>
+        </div>
+        <div class="field">
+          <label for="date">Released <span class="optional">(optional)</span></label>
+          <input class="input" id="date" name="date" value={input.date} placeholder="2019 or 2019-08" autocomplete="off" aria-describedby="date-hint" />
+          <span class="hint" id="date-hint">Only as precise as you know: a year is fine.</span>
+        </div>
+      </div>
+      <div class="field">
+        <label for="genres">Genres <span class="optional">(optional)</span></label>
+        <input class="input" id="genres" name="genres" value={input.genres} placeholder="bedroom pop, lo-fi" autocomplete="off" aria-describedby="genres-hint" />
+        <span class="hint" id="genres-hint">Comma-separated. Saved as your own tags, which win over imported ones.</span>
+      </div>
+      <div class="field">
+        <label for="tracklist">Tracklist</label>
+        <textarea class="input tracklist" id="tracklist" name="tracklist" rows="12" spellcheck="false" aria-describedby="tracklist-hint">{input.tracklist}</textarea>
+        <span class="hint" id="tracklist-hint">
+          One track per line. Numbers, durations (3:41) and “(feat. Name)” are understood; “Disc 2” starts a
+          new disc. Up to {MAX_TRACKS} tracks; leave it empty for an announced album.
+        </span>
+      </div>
+
+      <div class="buttons">
+        <button class="button" type="submit" name="intent" value="preview">Preview</button>
+        {previewing && <button class="button button--primary" type="submit" name="intent" value="save">Add to catalogue</button>}
+      </div>
+    </form>
+
+    {
+      previewing && (
+        <section class="preview" aria-labelledby="preview-heading">
+          <h2 id="preview-heading">What will be added</h2>
+          {duplicates.length > 0 && (
+            <p class="warning" role="status">
+              The catalogue already has{' '}
+              {duplicates.map((d, i) => (
+                <>
+                  {i > 0 && ', '}
+                  <a href={`/album/${d.id}`}>{d.title}</a>
+                </>
+              ))}{' '}
+              by {input.artist}. Adding this creates a separate album.
+            </p>
+          )}
+          <p>
+            <strong>{input.title}</strong> by {input.artist}
+            <span class="muted">
+              {' · '}
+              {TYPES.find(([t]) => t === input.type)?.[1]}
+              {input.date && ` · ${input.date}`}
+              {` · ${tracks.length} ${tracks.length === 1 ? 'track' : 'tracks'}`}
+              {discs > 1 && ` on ${discs} discs`}
+            </span>
+          </p>
+          {tracks.length > 0 && (
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">#</th>
+                  <th scope="col">Title</th>
+                  <th scope="col">Featuring</th>
+                  <th scope="col">Length</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tracks.map((t) => (
+                  <tr>
+                    <td class="tabular">{discs > 1 ? `${t.disc}.${t.position}` : t.position}</td>
+                    <td>{t.title}</td>
+                    <td>{t.featured.join(', ')}</td>
+                    <td class="tabular">{formatDuration(t.length_ms) ?? ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )
+    }
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+    max-width: 48rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  h1 {
+    font-size: var(--step-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .back {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+  }
+
+  .muted,
+  .optional {
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+
+  .form {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .row {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  @media (min-width: 40rem) {
+    .row {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .tracklist {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    resize: vertical;
+  }
+
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .errors {
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-m);
+    color: var(--danger);
+  }
+
+  .errors ul {
+    margin: 0;
+    padding-left: 1.2rem;
+  }
+
+  .preview {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+    overflow-x: auto;
+  }
+
+  .warning {
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--accent);
+    background: var(--surface-2);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--step--1);
+  }
+
+  th,
+  td {
+    padding: var(--space-2) var(--space-3) var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  thead th {
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+</style>

@@ -1,0 +1,604 @@
+---
+import Base from '../../layouts/Base.astro';
+import CoverArt from '../../components/CoverArt.astro';
+import CreditLine from '../../components/CreditLine.astro';
+import Score from '../../components/Score.astro';
+import { ownerId } from '../../lib/auth/user';
+import {
+  contributors,
+  editions,
+  genresFor,
+  redirectFor,
+  releaseGroup,
+  tracklist,
+  type Contributor,
+  type Edition,
+} from '../../lib/catalogue';
+import { formatPartialDate, yearOf } from '../../lib/dates';
+import { describeDuration, formatDuration, roleLabel, typeLabel } from '../../lib/format';
+
+const id = Astro.params.id!;
+const user = Astro.locals.user;
+const viewerId = user?.id ?? (await ownerId());
+
+const album = await releaseGroup(id, viewerId);
+if (!album) {
+  const merged = await redirectFor('release_group', id);
+  if (merged) return Astro.redirect(`/album/${merged}`, 301);
+  return Astro.rewrite('/404');
+}
+
+const allEditions = await editions(album.id);
+const standardId = album.canonical_release_id;
+
+// ?edition= picks which edition's tracklist to show; anything unknown falls
+// back to the standard edition, the one album scores are computed from.
+const requested = Astro.url.searchParams.get('edition');
+const shown = allEditions.find((e) => e.id === requested) ?? allEditions.find((e) => e.id === standardId) ?? null;
+const releaseId = shown?.id ?? null;
+const isStandard = releaseId === standardId;
+
+const [tracks, standardTracks, genres, people] = await Promise.all([
+  releaseId ? tracklist(releaseId, viewerId) : Promise.resolve([]),
+  !isStandard && standardId ? tracklist(standardId, viewerId) : Promise.resolve([]),
+  genresFor('release_group', album.id),
+  releaseId ? contributors(releaseId) : Promise.resolve([]),
+]);
+
+// Tracks on this edition but not the standard one: bonus tracks, which do
+// not count towards the album score.
+const standardRecordings = new Set(standardTracks.map((t) => t.recording_id));
+const isBonus = (recordingId: string) => !isStandard && !standardRecordings.has(recordingId);
+const bonusCount = isStandard ? 0 : tracks.filter((t) => isBonus(t.recording_id)).length;
+const missingCount = isStandard
+  ? 0
+  : standardTracks.filter((t) => !tracks.some((s) => s.recording_id === t.recording_id)).length;
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const differences = [
+  bonusCount > 0 ? `${plural(bonusCount, 'bonus track')} not on the standard edition` : null,
+  missingCount > 0 ? `${plural(missingCount, 'standard track')} missing` : null,
+].filter(Boolean);
+const editionNote = `${
+  differences.length > 0 ? differences.join(', and ') : 'Same recordings as the standard edition'
+}. Album scores always use the standard edition.`.replace(/^./, (c) => c.toUpperCase());
+
+const editionLabel = (e: Edition) =>
+  [e.format, yearOf(e.date), e.country].filter(Boolean).join(' · ') || e.title;
+const editionHref = (e: Edition) =>
+  e.id === standardId ? `${Astro.url.pathname}#tracklist-heading` : `${Astro.url.pathname}?edition=${e.id}#tracklist-heading`;
+
+const discs = [...new Set(tracks.map((t) => t.disc))];
+const albumArtistKey = album.credits.map((c) => c.artist_id).join();
+const totalMs = tracks.reduce((sum, t) => sum + (t.length_ms ?? 0), 0);
+const released = formatPartialDate(album.first_release_date, album.date_precision);
+
+const byRole = new Map<string, Contributor[]>();
+for (const person of people) {
+  byRole.set(person.role, [...(byRole.get(person.role) ?? []), person]);
+}
+
+const here = Astro.url.pathname + Astro.url.search;
+const rateHref = (type: string, entityId: string) =>
+  `/edit/rate/${type}/${entityId}?return_to=${encodeURIComponent(here)}`;
+const artistNames = album.credits.map((c) => c.name).join(', ');
+---
+
+<Base title={`${album.title} by ${artistNames}`}>
+  <article class="wrap album">
+    <header class="hero">
+      <div class="art">
+        <CoverArt
+          artKey={album.art_key}
+          title={album.title}
+          alt={`Cover of ${album.title}`}
+          sizes="(min-width: 48rem) 20rem, calc(100vw - 32px)"
+          priority
+        />
+      </div>
+
+      <div class="intro">
+        <p class="eyebrow">
+          {typeLabel(album.type)}
+          {yearOf(album.first_release_date) && <> · <time datetime={album.first_release_date!}>{yearOf(album.first_release_date)}</time></>}
+          {album.status !== 'released' && <> · {album.status === 'announced' ? 'Announced' : 'Cancelled'}</>}
+        </p>
+        <h1>{album.title}</h1>
+        <p class="by"><CreditLine credits={album.credits} /></p>
+
+        <div class="score-row">
+          <Score quality={album.quality_score} personal={album.personal_score} size="l" />
+          {
+            album.quality_score != null && album.track_count ? (
+              <p class="coverage">
+                {album.rated_track_count} of {album.track_count} tracks rated
+              </p>
+            ) : null
+          }
+        </div>
+
+        {album.impact_note && <blockquote class="impact-note"><p>{album.impact_note}</p></blockquote>}
+
+        {
+          genres.length > 0 && (
+            <ul class="genres" aria-label="Genres">
+              {genres.map((genre) => <li>{genre.name}</li>)}
+            </ul>
+          )
+        }
+
+        {
+          user && (
+            <p class="actions">
+              <a class="button button--primary" href={rateHref('release_group', album.id)}>
+                Rate album
+              </a>
+            </p>
+          )
+        }
+      </div>
+    </header>
+
+    <section class="tracks" aria-labelledby="tracklist-heading">
+      <h2 id="tracklist-heading">Tracklist</h2>
+
+      {
+        allEditions.length > 1 && (
+          <nav class="edition-switch" aria-label="Choose edition">
+            <ul role="list">
+              {allEditions.map((edition) => (
+                <li>
+                  <a href={editionHref(edition)} aria-current={edition.id === releaseId ? 'true' : undefined}>
+                    <span class="switch-label">{editionLabel(edition)}</span>
+                    <span class="switch-detail">
+                      {edition.track_count} tracks{edition.id === standardId && ' · standard'}
+                    </span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        )
+      }
+
+      {
+        shown && !isStandard && (
+          <p class="edition-note">{editionNote}</p>
+        )
+      }
+
+      {
+        tracks.length === 0 ? (
+          <p class="muted">No tracklist yet.</p>
+        ) : (
+          discs.map((disc) => (
+            <Fragment>
+              {discs.length > 1 && <h3 class="disc">Disc {disc}</h3>}
+              <ol class="tracklist" role="list">
+                {tracks
+                  .filter((track) => track.disc === disc)
+                  .map((track) => (
+                    <li class="track">
+                      <span class="position tabular" aria-hidden="true">{track.position}</span>
+                      <div class="title">
+                        <span class="name">
+                          <span class="visually-hidden">Track {track.position}: </span>
+                          {track.title}
+                          {isBonus(track.recording_id) && <span class="tag">Bonus</span>}
+                        </span>
+                        {track.credits.map((c) => c.artist_id).join() !== albumArtistKey && (
+                          <span class="track-artist">
+                            <CreditLine credits={track.credits} />
+                          </span>
+                        )}
+                      </div>
+                      <span class="length tabular">
+                        {track.length_ms != null && (
+                          <>
+                            <span aria-hidden="true">{formatDuration(track.length_ms)}</span>
+                            <span class="visually-hidden">{describeDuration(track.length_ms)}</span>
+                          </>
+                        )}
+                      </span>
+                      <span class="track-score">
+                        <Score quality={track.quality_score} personal={track.personal_score} size="s" />
+                      </span>
+                      {user && (
+                        <a class="rate" href={rateHref('recording', track.recording_id)}>
+                          Rate<span class="visually-hidden"> {track.title}</span>
+                        </a>
+                      )}
+                    </li>
+                  ))}
+              </ol>
+            </Fragment>
+          ))
+        )
+      }
+
+      {totalMs > 0 && <p class="total muted">{tracks.length} tracks · {formatDuration(totalMs)}</p>}
+    </section>
+
+    <div class="aside">
+    {
+      byRole.size > 0 && (
+        <section class="credits" aria-labelledby="credits-heading">
+          <h2 id="credits-heading">Credits</h2>
+          <dl>
+            {[...byRole].map(([role, list]) => (
+              <div>
+                <dt>{roleLabel(role, list.length)}</dt>
+                <dd>
+                  {list.map((person, i) => (
+                    <Fragment>
+                      <a href={`/artist/${person.artist_id}`}>{person.name}</a>
+                      {i < list.length - 1 && ', '}
+                    </Fragment>
+                  ))}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )
+    }
+
+    <section class="editions" aria-labelledby="editions-heading">
+      <h2 id="editions-heading">{allEditions.length === 1 ? 'Edition' : 'Editions'}</h2>
+      {
+        allEditions.length === 0 ? (
+          <p class="muted">No editions yet{album.status === 'announced' ? ': this album is announced' : ''}.</p>
+        ) : (
+          <ul role="list">
+            {allEditions.map((edition) => (
+              <li>
+                <a
+                  class="edition-title"
+                  href={editionHref(edition)}
+                  aria-current={edition.id === releaseId ? 'true' : undefined}
+                >
+                  {edition.title}
+                </a>
+                <span class="muted">
+                  {[
+                    edition.id === standardId && allEditions.length > 1 ? 'Standard' : null,
+                    `${edition.track_count} tracks`,
+                    formatPartialDate(edition.date, edition.date_precision),
+                    edition.country,
+                    edition.label,
+                    edition.format,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )
+      }
+      {
+        user && album.mbid && (
+          <p class="muted">
+            More editions are on MusicBrainz. Paste a release link into{' '}
+            <a href="/edit/import">Import</a> to add one here.
+          </p>
+        )
+      }
+      {released && <p class="muted">First released {released}.</p>}
+      {
+        album.mbid && (
+          <p>
+            <a href={`https://musicbrainz.org/release-group/${album.mbid}`} rel="external">
+              View on MusicBrainz
+            </a>
+          </p>
+        )
+      }
+    </section>
+    </div>
+  </article>
+</Base>
+
+<style>
+  /* minmax(0, 1fr): wide children such as the scrolling edition switcher
+     must scroll inside the column, not widen the page. */
+  .album,
+  .aside {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-7);
+    align-content: start;
+  }
+
+  .hero {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .art {
+    align-self: start;
+    max-width: 24rem;
+    box-shadow: var(--shadow);
+    border-radius: var(--radius-m);
+  }
+
+  .intro {
+    display: grid;
+    gap: var(--space-3);
+    align-content: end;
+  }
+
+  h1 {
+    font-size: var(--step-3);
+    font-weight: 800;
+  }
+
+  .by {
+    font-size: var(--step-1);
+    font-weight: 600;
+  }
+
+  .score-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+    margin-top: var(--space-2);
+  }
+
+  .coverage,
+  .muted {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .impact-note {
+    margin: 0;
+    padding-left: var(--space-4);
+    border-left: 3px solid var(--accent);
+    color: var(--text-muted);
+    font-style: italic;
+    max-width: 40rem;
+  }
+
+  .genres {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .genres li {
+    padding: 0.2rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .actions {
+    margin-top: var(--space-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+    margin-bottom: var(--space-4);
+  }
+
+  .disc {
+    font-size: var(--step--1);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: var(--space-5) 0 var(--space-2);
+  }
+
+  .tracklist {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .track {
+    display: grid;
+    grid-template-columns: 1.75rem minmax(0, 1fr) auto auto;
+    align-items: center;
+    column-gap: var(--space-3);
+    min-height: 3.5rem;
+    padding-block: var(--space-2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .track:has(.rate) {
+    grid-template-columns: 1.75rem minmax(0, 1fr) auto auto auto;
+  }
+
+  .position {
+    color: var(--text-subtle);
+    text-align: right;
+  }
+
+  .title {
+    display: grid;
+    min-width: 0;
+  }
+
+  .name {
+    font-weight: 550;
+  }
+
+  .track-artist {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .length {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .track-score {
+    min-width: 2.25rem;
+    text-align: right;
+  }
+
+  .rate {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    padding-inline: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: var(--step--1);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .rate:hover {
+    border-color: var(--text-subtle);
+  }
+
+  .total {
+    margin-top: var(--space-3);
+  }
+
+  .credits dl {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  .credits dt {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .credits dd {
+    margin: 0;
+  }
+
+  .editions ul {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0 0 var(--space-4);
+    padding: 0;
+    list-style: none;
+  }
+
+  .editions li {
+    display: grid;
+  }
+
+  .edition-title[aria-current] {
+    font-weight: 700;
+    text-decoration-color: var(--accent);
+    text-decoration-thickness: 2px;
+  }
+
+  /* Edition switcher: a row of pills that scrolls sideways on a phone
+     rather than wrapping into a tall block above the tracks. */
+  .edition-switch {
+    margin: 0 calc(var(--gutter) * -1) var(--space-4);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .edition-switch ul {
+    display: flex;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 2px var(--gutter);
+    list-style: none;
+    width: max-content;
+  }
+
+  .edition-switch a {
+    display: grid;
+    min-height: var(--target);
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    text-decoration: none;
+    line-height: 1.25;
+  }
+
+  .edition-switch a:hover {
+    border-color: var(--text-subtle);
+  }
+
+  .edition-switch a[aria-current] {
+    border-color: var(--accent);
+    background: var(--surface-2);
+  }
+
+  .switch-label {
+    font-weight: 650;
+    font-size: var(--step--1);
+  }
+
+  .switch-detail {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .edition-note {
+    margin-bottom: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--accent);
+    background: var(--surface-1);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .tag {
+    display: inline-block;
+    margin-left: var(--space-2);
+    padding: 0 0.45rem;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    color: var(--accent);
+    font-size: 0.75rem;
+    font-weight: 650;
+    vertical-align: 0.1em;
+  }
+
+  @media (min-width: 48rem) {
+    .edition-switch {
+      margin-inline: 0;
+    }
+
+    .edition-switch ul {
+      padding-inline: 2px;
+    }
+  }
+
+  .editions p + p {
+    margin-top: var(--space-2);
+  }
+
+  @media (min-width: 48rem) {
+    .album {
+      grid-template-columns: 20rem minmax(0, 1fr);
+      column-gap: var(--space-7);
+      row-gap: var(--space-7);
+    }
+
+    .hero {
+      grid-column: 1 / -1;
+      grid-template-columns: 20rem minmax(0, 1fr);
+      gap: var(--space-7);
+    }
+
+    .tracks {
+      grid-column: 2;
+      grid-row: 2;
+    }
+
+    .aside {
+      grid-column: 1;
+      grid-row: 2;
+    }
+  }
+</style>

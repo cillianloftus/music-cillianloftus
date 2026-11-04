@@ -1,0 +1,17 @@
+{
+  "extends": "astro/tsconfigs/strict",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    // scripts/ runs under Node's type stripping, which needs .ts in imports.
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "src/**/*.test.ts",
+    "src/test",
+    "scripts",
+    "vitest.config.ts",
+    "./worker-configuration.d.ts",
+    "src/env.d.ts"
+  ]
+}

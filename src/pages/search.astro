@@ -1,0 +1,166 @@
+---
+import Base from '../layouts/Base.astro';
+import AlbumCard from '../components/AlbumCard.astro';
+import ResultList from '../components/ResultList.astro';
+import { ownerId } from '../lib/auth/user';
+import { MIN_QUERY_LENGTH, search } from '../lib/search';
+
+const q = Astro.url.searchParams.get('q') ?? '';
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+const results = await search(q, viewerId);
+const total = results.artists.length + results.albums.length + results.tracks.length;
+const searched = q.trim().length >= MIN_QUERY_LENGTH;
+---
+
+<Base title={q ? `Search: ${q}` : 'Search'}>
+  <div class="wrap page" data-search>
+    <form role="search" method="get" action="/search">
+      <label for="q" class="visually-hidden">Search artists, albums and tracks</label>
+      <input
+        class="input search-input"
+        id="q"
+        name="q"
+        type="search"
+        value={q}
+        placeholder="Artists, albums, tracks"
+        autocomplete="off"
+        spellcheck="false"
+        enterkeyhint="search"
+        autofocus={!q}
+      />
+    </form>
+
+    <p class="status" role="status" aria-live="polite">
+      {searched ? (total === 0 ? `Nothing found for “${q}”.` : `${total} ${total === 1 ? 'result' : 'results'}`) : ''}
+    </p>
+
+    <div class="results" data-results>
+      {
+        results.artists.length > 0 && (
+          <section aria-labelledby="artists-heading">
+            <h2 id="artists-heading">Artists</h2>
+            <ul class="artists" role="list">
+              {results.artists.map((artist) => (
+                <li>
+                  <a href={`/artist/${artist.id}`}>{artist.name}</a>
+                  {artist.disambiguation && <span class="muted">· {artist.disambiguation}</span>}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )
+      }
+      {
+        results.albums.length > 0 && (
+          <section aria-labelledby="albums-heading">
+            <h2 id="albums-heading">Albums</h2>
+            <ul class="albums" role="list">
+              {results.albums.map((album) => (
+                <li>
+                  <AlbumCard album={album} />
+                </li>
+              ))}
+            </ul>
+          </section>
+        )
+      }
+      {
+        results.tracks.length > 0 && (
+          <section aria-labelledby="tracks-heading">
+            <h2 id="tracks-heading">Tracks</h2>
+            <ResultList results={results.tracks} ranked={false} />
+          </section>
+        )
+      }
+    </div>
+  </div>
+</Base>
+
+<script>
+  // Search as you type: fetch this same page for the new query and swap in
+  // its results and status. The URL follows, so results can be shared and
+  // the back button works. Stale responses are dropped.
+  const root = document.querySelector<HTMLElement>('[data-search]')!;
+  const input = root.querySelector<HTMLInputElement>('input[name="q"]')!;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let latest = 0;
+
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const request = ++latest;
+      const url = new URL('/search', location.origin);
+      if (input.value.trim()) url.searchParams.set('q', input.value);
+      const response = await fetch(url, { headers: { Accept: 'text/html' } });
+      if (request !== latest || !response.ok) return;
+
+      const next = new DOMParser().parseFromString(await response.text(), 'text/html');
+      root.querySelector('[data-results]')!.replaceWith(next.querySelector('[data-results]')!);
+      root.querySelector('[role="status"]')!.textContent = next.querySelector('[role="status"]')!.textContent;
+      history.replaceState(null, '', url);
+    }, 150);
+  });
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .search-input {
+    font-size: var(--step-1);
+    min-height: 3.25rem;
+    border-radius: 999px;
+    padding-inline: var(--space-5);
+  }
+
+  .status {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    min-height: 1.5em;
+  }
+
+  .results {
+    display: grid;
+    gap: var(--space-6);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+    margin-bottom: var(--space-3);
+  }
+
+  .artists {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .artists li {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    min-height: 3rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .artists a {
+    font-weight: 600;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .albums {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));
+    gap: var(--space-6) var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+</style>

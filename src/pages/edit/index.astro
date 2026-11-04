@@ -1,0 +1,89 @@
+---
+import Base from '../../layouts/Base.astro';
+
+const sections = [
+  { href: '/edit/import', title: 'Import', text: 'Add an album or edition from MusicBrainz.' },
+  { href: '/query', title: 'New playlist', text: 'Build a saved query with filter chips.' },
+  { href: '/edit/jobs', title: 'Jobs', text: 'Imports, pushes and backups, with errors and retries.' },
+  { href: '/edit/backups', title: 'Backups', text: 'Daily copies of every table, and how to restore one.' },
+  { href: '/edit/spotify', title: 'Spotify', text: 'Connection and authorisation expiry.' },
+];
+---
+
+<Base title="Manage">
+  <div class="wrap page">
+    <h1>Manage</h1>
+    <ul role="list">
+      {
+        sections.map((s) => (
+          <li>
+            <a href={s.href}>{s.title}</a>
+            <p>{s.text}</p>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+    max-width: 40rem;
+  }
+
+  h1 {
+    font-size: var(--step-2);
+  }
+
+  ul {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    position: relative;
+    display: grid;
+    gap: var(--space-1);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+  }
+
+  li:hover {
+    border-color: var(--text-subtle);
+  }
+
+  a {
+    font-weight: 700;
+    font-size: var(--step-1);
+    text-decoration: none;
+  }
+
+  /* The whole card is the link target. */
+  a::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-m);
+  }
+
+  a:focus-visible {
+    outline: none;
+  }
+
+  a:focus-visible::after {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  p {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+</style>

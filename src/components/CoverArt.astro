@@ -1,0 +1,74 @@
+---
+/**
+ * Album art from stored derivatives. Square and sized up front, so it never
+ * shifts layout. Without art, a quiet tile built from the title stands in.
+ */
+
+interface Props {
+  artKey: string | null;
+  title: string;
+  /** Empty when the title is already announced next to the image. */
+  alt?: string;
+  sizes: string;
+  /** For the one above-the-fold image on a page. */
+  priority?: boolean;
+}
+
+const { artKey, title, alt = '', sizes, priority = false } = Astro.props;
+const base = artKey ? `/${artKey}` : null;
+const initials = title
+  .replace(/[^\p{L}\p{N}\s]/gu, '')
+  .split(/\s+/)
+  .filter(Boolean)
+  .slice(0, 2)
+  .map((word) => word[0]!.toUpperCase())
+  .join('');
+---
+
+{
+  base ? (
+    <img
+      class="cover"
+      src={`${base}/500.jpg`}
+      srcset={`${base}/250.jpg 250w, ${base}/500.jpg 500w, ${base}/1200.jpg 1200w`}
+      sizes={sizes}
+      width="500"
+      height="500"
+      alt={alt}
+      loading={priority ? 'eager' : 'lazy'}
+      fetchpriority={priority ? 'high' : undefined}
+      decoding="async"
+    />
+  ) : (
+    <div class="cover cover--empty" role={alt ? 'img' : undefined} aria-label={alt || undefined} aria-hidden={alt ? undefined : 'true'}>
+      <span>{initials}</span>
+    </div>
+  )
+}
+
+<style>
+  .cover {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: var(--radius-m);
+    background: var(--surface-2);
+    object-fit: cover;
+  }
+
+  .cover--empty {
+    display: grid;
+    place-items: center;
+    background:
+      radial-gradient(circle at 30% 25%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
+      var(--surface-2);
+    color: var(--text-subtle);
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    container-type: inline-size;
+  }
+
+  /* Sized against the tile itself, so it reads at any card width. */
+  .cover--empty span {
+    font-size: 28cqi;
+  }
+</style>

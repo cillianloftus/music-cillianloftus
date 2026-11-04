@@ -1,0 +1,106 @@
+---
+import Base from '../../layouts/Base.astro';
+import AlbumCard from '../../components/AlbumCard.astro';
+import { ownerId } from '../../lib/auth/user';
+import { artist as getArtist, artistAppearances, artistReleaseGroups, redirectFor } from '../../lib/catalogue';
+import { roleLabel } from '../../lib/format';
+
+const id = Astro.params.id!;
+const artist = await getArtist(id);
+if (!artist) {
+  const merged = await redirectFor('artist', id);
+  if (merged) return Astro.redirect(`/artist/${merged}`, 301);
+  return Astro.rewrite('/404');
+}
+
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+const [albums, appearances] = await Promise.all([
+  artistReleaseGroups(artist.id, viewerId),
+  artistAppearances(artist.id),
+]);
+---
+
+<Base title={artist.name}>
+  <div class="wrap page">
+    <header>
+      <p class="eyebrow">Artist</p>
+      <h1>{artist.name}</h1>
+      {artist.disambiguation && <p class="muted">{artist.disambiguation}</p>}
+      {
+        appearances.length > 0 && (
+          <p class="muted">
+            Also credited as {appearances.map((a) => `${roleLabel(a.role).toLowerCase()} on ${a.count}`).join(', ')}.
+          </p>
+        )
+      }
+    </header>
+
+    <section aria-labelledby="albums-heading">
+      <h2 id="albums-heading">Releases</h2>
+      {
+        albums.length === 0 ? (
+          <p class="muted">No releases under this name in the catalogue.</p>
+        ) : (
+          <ul class="grid" role="list">
+            {albums.map((album) => (
+              <li>
+                <AlbumCard album={album} />
+              </li>
+            ))}
+          </ul>
+        )
+      }
+    </section>
+
+    {
+      artist.mbid && (
+        <p>
+          <a href={`https://musicbrainz.org/artist/${artist.mbid}`} rel="external">
+            View on MusicBrainz
+          </a>
+        </p>
+      )
+    }
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  h1 {
+    font-size: var(--step-3);
+    font-weight: 800;
+  }
+
+  h2 {
+    font-size: var(--step-1);
+    margin-bottom: var(--space-4);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));
+    gap: var(--space-6) var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  @media (min-width: 40rem) {
+    .grid {
+      grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+    }
+  }
+</style>

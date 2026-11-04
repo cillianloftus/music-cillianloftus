@@ -1,0 +1,230 @@
+---
+/**
+ * The rating inbox (ARCHITECTURE.md §7): one item at a time, ordered so
+ * the next thing worth rating is always on top. Designed around the gut
+ * score: one tap rates it and the next item appears.
+ */
+import { env } from 'cloudflare:workers';
+import Base from '../../layouts/Base.astro';
+import CoverArt from '../../components/CoverArt.astro';
+import CreditLine from '../../components/CreditLine.astro';
+import GutScale from '../../components/GutScale.astro';
+import { releaseGroupsByIds } from '../../lib/catalogue';
+import { yearOf } from '../../lib/dates';
+import { typeLabel } from '../../lib/format';
+import { hydrateTracks } from '../../lib/query/run';
+import { ratingQueue, type QueueEntry } from '../../lib/queue';
+import { spotifyLink } from '../../lib/spotify/links';
+
+const user = Astro.locals.user!;
+const queue = await ratingQueue(user.id);
+const entry: QueueEntry | undefined = queue[0];
+
+interface Item {
+  title: string;
+  credits: import('../../lib/catalogue').CreditPart[];
+  artKey: string | null;
+  meta: string;
+  spotifyUrl: string;
+  detailHref: string;
+}
+
+let item: Item | null = null;
+if (entry?.entity_type === 'release_group') {
+  const [album] = await releaseGroupsByIds([entry.entity_id], user.id);
+  const spotify = await env.DB.prepare('SELECT spotify_id FROM release_group WHERE id = ?')
+    .bind(entry.entity_id)
+    .first<{ spotify_id: string | null }>();
+  if (album) {
+    item = {
+      title: album.title,
+      credits: album.credits,
+      artKey: album.art_key,
+      meta: [typeLabel(album.type), yearOf(album.first_release_date)].filter(Boolean).join(' · '),
+      spotifyUrl: spotifyLink('album', spotify?.spotify_id ?? null, `${album.credits[0]?.name ?? ''} ${album.title}`),
+      detailHref: `/album/${album.id}`,
+    };
+  }
+} else if (entry?.entity_type === 'recording') {
+  const [track] = await hydrateTracks([entry.entity_id], user.id);
+  if (track) {
+    item = {
+      title: track.title,
+      credits: track.credits,
+      artKey: track.art_key,
+      meta: ['Track', track.album_title].filter(Boolean).join(' · '),
+      spotifyUrl: spotifyLink('track', track.spotify_id, `${track.credits[0]?.name ?? ''} ${track.title}`),
+      detailHref: track.album_id ? `/album/${track.album_id}` : '/',
+    };
+  }
+}
+
+function reasonText(e: QueueEntry): string {
+  const r = e.reason;
+  switch (r.kind) {
+    case 'handoff':
+      return 'You opened this in Spotify. How was it?';
+    case 'artist':
+      return `You rate ${r.artist} highly (${r.score} on average).`;
+    case 'plays':
+      return `Played ${r.plays} times, never rated.`;
+    case 'examine':
+      return `Gut score ${r.gut}. Worth a closer look?`;
+    case 'recent':
+      return 'Recently added.';
+    case 'partial':
+      return `${r.rated} ${r.rated === 1 ? 'track' : 'tracks'} rated, but not the album as a whole.`;
+    default:
+      return 'Not rated yet.';
+  }
+}
+
+const isAlbum = entry?.entity_type === 'release_group';
+const rateHref = entry ? `/edit/rate/${entry.entity_type}/${entry.entity_id}?return_to=/edit/queue` : '';
+---
+
+<Base title="Queue">
+  <div class="wrap page">
+    {
+      !entry || !item ? (
+        <section class="empty">
+          <h1>Nothing to rate</h1>
+          <p class="muted">Everything in the catalogue has a rating. Import something new to keep going.</p>
+          <a class="button button--primary" href="/edit/import">Import</a>
+        </section>
+      ) : (
+        <article class="item" aria-labelledby="item-title">
+          <p class="progress">
+            <span class="tabular">{queue.length}</span> in the queue
+            {entry.skipped && <span class="skipped"> · skipped before</span>}
+          </p>
+
+          <div class="art">
+            <CoverArt artKey={item.artKey} title={item.title} alt={`Cover of ${item.title}`} sizes="(min-width: 40rem) 20rem, 70vw" priority />
+          </div>
+
+          <header>
+            <p class="eyebrow">{item.meta}</p>
+            <h1 id="item-title">
+              <a href={item.detailHref}>{item.title}</a>
+            </h1>
+            <p class="by">
+              <CreditLine credits={item.credits} link={false} />
+            </p>
+            <p class="reason">{reasonText(entry)}</p>
+          </header>
+
+          <GutScale
+            entityType={entry.entity_type}
+            entityId={entry.entity_id}
+            returnTo="/edit/queue"
+            legend={isAlbum ? 'Rate the album' : 'Rate the track'}
+            hint={entry.reason.kind === 'examine' ? 'A new gut score, or open the full breakdown below.' : 'One tap saves it and moves on.'}
+          />
+
+          <div class="actions">
+            <a
+              class="button"
+              href={item.spotifyUrl}
+              target="_blank"
+              rel="noopener"
+              data-handoff
+              data-entity-type={entry.entity_type}
+              data-entity-id={entry.entity_id}
+            >
+              Open in Spotify<span class="visually-hidden"> (opens in a new tab)</span>
+            </a>
+            <a class="button" href={rateHref}>Full breakdown</a>
+            <form method="post" action="/api/write/queue/skip">
+              <input type="hidden" name="entity_type" value={entry.entity_type} />
+              <input type="hidden" name="entity_id" value={entry.entity_id} />
+              <button class="button button--quiet" type="submit">Skip</button>
+            </form>
+          </div>
+        </article>
+      )
+    }
+  </div>
+</Base>
+
+<script>
+  // Record the handoff so this item waits at the top on return. Beacons
+  // survive the page being backgrounded as Spotify opens.
+  for (const link of document.querySelectorAll<HTMLAnchorElement>('[data-handoff]')) {
+    link.addEventListener('click', () => {
+      const body = new FormData();
+      body.set('entity_type', link.dataset.entityType!);
+      body.set('entity_id', link.dataset.entityId!);
+      navigator.sendBeacon('/api/write/queue/handoff', body);
+    });
+  }
+</script>
+
+<style>
+  .page {
+    max-width: 40rem;
+  }
+
+  .item {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .progress {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .skipped {
+    color: var(--text-subtle);
+  }
+
+  .art {
+    width: min(20rem, 70vw);
+    box-shadow: var(--shadow);
+    border-radius: var(--radius-m);
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  h1 {
+    font-size: var(--step-2);
+    font-weight: 800;
+  }
+
+  h1 a {
+    text-decoration: none;
+  }
+
+  h1 a:hover {
+    text-decoration: underline;
+  }
+
+  .by {
+    font-size: var(--step-1);
+    font-weight: 600;
+  }
+
+  .reason {
+    color: var(--text-muted);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .empty {
+    display: grid;
+    gap: var(--space-4);
+    justify-items: start;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+</style>

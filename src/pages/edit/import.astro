@@ -1,0 +1,110 @@
+---
+import Base from '../../layouts/Base.astro';
+
+const error = Astro.url.searchParams.get('error');
+const previous = Astro.url.searchParams.get('source') ?? '';
+---
+
+<Base title="Import">
+  <div class="wrap page">
+    <header>
+      <h1>Import</h1>
+      <p class="muted">
+        From MusicBrainz, or by hand. Spotify links and local files come next.
+      </p>
+    </header>
+
+    <form method="post" action="/api/write/import" novalidate>
+      <div class="field">
+        <label for="source">MusicBrainz link or ID</label>
+        <input
+          class="input"
+          id="source"
+          name="source"
+          type="text"
+          inputmode="url"
+          autocomplete="off"
+          spellcheck="false"
+          required
+          value={previous}
+          aria-describedby={error ? 'source-hint source-error' : 'source-hint'}
+          aria-invalid={error ? 'true' : undefined}
+        />
+        <span class="hint" id="source-hint">
+          An album (release group) or a specific edition (release) page, e.g.
+          https://musicbrainz.org/release-group/…
+        </span>
+        {
+          error && (
+            <span class="error" id="source-error" role="alert">
+              That is not a MusicBrainz release or release group link.
+            </span>
+          )
+        }
+      </div>
+      <button class="button button--primary" type="submit">Import</button>
+    </form>
+
+    <p class="manual">
+      Not on MusicBrainz? <a href="/edit/import/manual">Add it by hand</a>: paste the tracklist.
+    </p>
+
+    <section aria-labelledby="how-heading" class="how">
+      <h2 id="how-heading">What happens</h2>
+      <ul>
+        <li>The import runs as a job, usually finished within a few seconds.</li>
+        <li>An album already in the catalogue gains the new edition rather than a duplicate.</li>
+        <li>Existing details are only ever filled in, never overwritten.</li>
+      </ul>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    max-width: 40rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  h1 {
+    font-size: var(--step-2);
+  }
+
+  h2 {
+    font-size: var(--step-0);
+    margin-bottom: var(--space-2);
+  }
+
+  form {
+    display: grid;
+    gap: var(--space-4);
+    justify-items: start;
+  }
+
+  form .field {
+    width: 100%;
+  }
+
+  .muted,
+  .how {
+    color: var(--text-muted);
+  }
+
+  .how ul {
+    margin: 0;
+    padding-left: 1.2rem;
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .error {
+    color: var(--danger);
+    font-weight: 600;
+  }
+</style>

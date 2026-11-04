@@ -1,0 +1,182 @@
+---
+import Base from '../../layouts/Base.astro';
+import { recentJobs } from '../../lib/jobs/queue';
+
+const jobs = await recentJobs();
+const active = jobs.some((job) => job.status === 'queued' || job.status === 'running');
+
+const when = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Dublin' });
+const kindLabel: Record<string, string> = { import_release: 'Import', spotify_push: 'Spotify push' };
+
+function describe(kind: string, payloadJson: string): { label: string; href: string | null; linkText: string } {
+  try {
+    const payload = JSON.parse(payloadJson);
+    if (kind === 'spotify_push') {
+      const result = payload.result;
+      return {
+        label: result ? `${result.pushed} of ${result.selected} tracks pushed` : '',
+        href: `/playlist/${payload.definitionId}`,
+        linkText: 'Open playlist',
+      };
+    }
+    const target = payload.target ? `MusicBrainz ${payload.target.entity} ${payload.target.mbid.slice(0, 8)}…` : '';
+    const href = payload.result?.releaseGroupId ? `/album/${payload.result.releaseGroupId}` : null;
+    return { label: target, href, linkText: 'Open album' };
+  } catch {
+    return { label: '', href: null, linkText: '' };
+  }
+}
+---
+
+<Base title="Jobs">
+  <div class="wrap page" data-jobs data-active={active ? 'true' : undefined}>
+    <header>
+      <h1>Jobs</h1>
+      <p class="muted" role="status">
+        {active ? 'Work in progress. This list updates as jobs finish.' : ''}
+      </p>
+    </header>
+
+    {
+      jobs.length === 0 ? (
+        <p class="muted">No jobs yet. <a href="/edit/import">Import something.</a></p>
+      ) : (
+        <ol class="jobs" role="list">
+          {jobs.map((job) => {
+            const { label, href, linkText } = describe(job.kind, job.payload_json);
+            return (
+              <li class="job" data-status={job.status}>
+                <div class="what">
+                  <span class="kind">{kindLabel[job.kind] ?? job.kind}</span>
+                  <span class="muted">{label}</span>
+                </div>
+                <span class="status">{job.status}</span>
+                <time class="muted" datetime={job.created_at}>
+                  {when.format(new Date(job.created_at))}
+                </time>
+                {job.status === 'done' && href && (
+                  <a class="open" href={href}>{linkText}</a>
+                )}
+                {job.status === 'failed' && (
+                  <>
+                    <p class="error">{job.error}</p>
+                    <form method="post" action="/api/write/jobs/retry">
+                      <input type="hidden" name="id" value={job.id} />
+                      <button class="button" type="submit">Retry</button>
+                    </form>
+                  </>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )
+    }
+  </div>
+</Base>
+
+<script>
+  // While anything is queued or running, re-fetch this page every few
+  // seconds and swap in the new list. Focus and scroll are untouched; the
+  // status line announces when everything has finished.
+  const root = document.querySelector<HTMLElement>('[data-jobs]');
+
+  async function poll() {
+    if (!root?.dataset.active) return;
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const response = await fetch(location.href, { headers: { Accept: 'text/html' } });
+    if (!response.ok) return;
+    const next = new DOMParser()
+      .parseFromString(await response.text(), 'text/html')
+      .querySelector<HTMLElement>('[data-jobs]');
+    if (!next) return;
+
+    root.querySelector('.jobs')?.replaceWith(next.querySelector('.jobs')!);
+    if (next.dataset.active) {
+      poll();
+    } else {
+      delete root.dataset.active;
+      root.querySelector('[role="status"]')!.textContent = 'All jobs finished.';
+    }
+  }
+
+  poll();
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  h1 {
+    font-size: var(--step-2);
+  }
+
+  .muted {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .jobs {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .job {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-2) var(--space-4);
+    align-items: center;
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+  }
+
+  .what {
+    display: grid;
+  }
+
+  .kind {
+    font-weight: 650;
+  }
+
+  .status {
+    justify-self: end;
+    padding: 0.15rem 0.6rem;
+    border-radius: 999px;
+    background: var(--surface-2);
+    font-size: var(--step--1);
+    font-weight: 650;
+  }
+
+  .job[data-status='done'] .status {
+    color: var(--accent);
+  }
+
+  .job[data-status='failed'] {
+    border-color: var(--danger);
+  }
+
+  .job[data-status='failed'] .status {
+    color: var(--danger);
+  }
+
+  .open {
+    justify-self: end;
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    font-weight: 600;
+  }
+
+  .error {
+    grid-column: 1 / -1;
+    color: var(--danger);
+    font-size: var(--step--1);
+  }
+</style>

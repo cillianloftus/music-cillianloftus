@@ -1,0 +1,321 @@
+---
+import { env } from 'cloudflare:workers';
+import Base from '../../../../layouts/Base.astro';
+import CoverArt from '../../../../components/CoverArt.astro';
+import CreditLine from '../../../../components/CreditLine.astro';
+import GutScale from '../../../../components/GutScale.astro';
+import { artistLines } from '../../../../lib/catalogue';
+import {
+  ALBUM_AXES,
+  CRAFT_AXES,
+  ratingHistory,
+  safeReturnPath,
+  type RatableEntity,
+} from '../../../../lib/ratings';
+
+const { type, id } = Astro.params as { type: string; id: string };
+if (type !== 'recording' && type !== 'release_group') return Astro.rewrite('/404');
+const entityType: RatableEntity = type;
+const user = Astro.locals.user!;
+
+interface Subject {
+  title: string;
+  album_id: string | null;
+  album_title: string | null;
+  art_key: string | null;
+}
+
+// The thing being rated, with album context for a recording.
+const subject =
+  entityType === 'recording'
+    ? await env.DB.prepare(
+        `SELECT rec.title, g.id AS album_id, g.title AS album_title, r.art_key
+         FROM recording rec
+         LEFT JOIN track t ON t.recording_id = rec.id
+         LEFT JOIN release r ON r.id = t.release_id
+         LEFT JOIN release_group g ON g.id = r.release_group_id
+         WHERE rec.id = ?
+         ORDER BY r.date IS NULL, r.date
+         LIMIT 1`,
+      )
+        .bind(id)
+        .first<Subject>()
+    : await env.DB.prepare(
+        `SELECT g.title, g.id AS album_id, NULL AS album_title, r.art_key
+         FROM release_group g
+         LEFT JOIN v_release_group_canonical c ON c.release_group_id = g.id
+         LEFT JOIN release r ON r.id = c.release_id
+         WHERE g.id = ?`,
+      )
+        .bind(id)
+        .first<Subject>();
+if (!subject) return Astro.rewrite('/404');
+
+const [lines, history] = await Promise.all([
+  artistLines(entityType, [id]),
+  ratingHistory(user.id, entityType, id),
+]);
+const credits = lines.get(id) ?? [];
+const current = history[0];
+
+const fallbackReturn = subject.album_id ? `/album/${subject.album_id}` : '/';
+const returnTo = safeReturnPath(Astro.url.searchParams.get('return_to'), fallbackReturn);
+const error = Astro.url.searchParams.get('error');
+
+const axes = entityType === 'recording' ? CRAFT_AXES : ALBUM_AXES;
+const axisHints: Record<string, string> = {
+  production: 'How it sounds: recording, mix, arrangement.',
+  songwriting: 'Melody, structure, harmony.',
+  lyrics: 'The words on their own terms.',
+  performance: 'Delivery, feel, playing.',
+  sequencing: 'Order, pacing, transitions.',
+  cohesion: 'Whether it holds together as one thing.',
+  ambition: 'What it reaches for.',
+};
+const capitalise = (s: string) => s[0]!.toUpperCase() + s.slice(1);
+
+const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Dublin' });
+---
+
+<Base title={`Rate ${subject.title}`}>
+  <div class="wrap page">
+    <p><a class="back" href={returnTo}>← Back</a></p>
+
+    <header class="subject">
+      <div class="thumb">
+        <CoverArt artKey={subject.art_key} title={subject.album_title ?? subject.title} sizes="5rem" />
+      </div>
+      <div>
+        <p class="eyebrow">{entityType === 'recording' ? 'Rate track' : 'Rate album'}</p>
+        <h1>{subject.title}</h1>
+        <p class="muted">
+          <CreditLine credits={credits} link={false} />
+          {subject.album_title && <> · {subject.album_title}</>}
+        </p>
+      </div>
+    </header>
+
+    {error && <p class="error" role="alert">{error}</p>}
+
+    <GutScale
+      entityType={entityType}
+      entityId={id}
+      returnTo={returnTo}
+      current={current?.depth === 'gut' ? current.gut_score : null}
+    />
+
+    <details class="detailed" open={current?.depth === 'detailed' || undefined}>
+      <summary>Full breakdown</summary>
+      <form method="post" action="/api/write/rating">
+        <input type="hidden" name="entity_type" value={entityType} />
+        <input type="hidden" name="entity_id" value={id} />
+        <input type="hidden" name="return_to" value={returnTo} />
+
+        <p class="muted">
+          Each axis is out of 10, halves allowed. Leave any blank that does not apply. A gut score
+          given here too is what calibrates gut scores against considered ones.
+        </p>
+
+        <div class="axes">
+          <div class="field">
+            <label for="gut_score">Gut score</label>
+            <input class="input" id="gut_score" name="gut_score" type="number" inputmode="decimal" min="0" max="10" step="0.5" value={current?.gut_score ?? ''} />
+          </div>
+          {
+            axes.map((axis) => (
+              <div class="field">
+                <label for={axis}>{capitalise(axis)}</label>
+                <input
+                  class="input"
+                  id={axis}
+                  name={axis}
+                  type="number"
+                  inputmode="decimal"
+                  min="0"
+                  max="10"
+                  step="0.5"
+                  value={current?.[axis] ?? ''}
+                  aria-describedby={`${axis}-hint`}
+                />
+                <span class="hint" id={`${axis}-hint`}>{axisHints[axis]}</span>
+              </div>
+            ))
+          }
+        </div>
+
+        <fieldset class="impact">
+          <legend>
+            <span class="legend-title">Impact</span>
+            <span class="muted">
+              Rare on purpose. Not quality: whether there was life before this record and life after.
+            </span>
+          </legend>
+          <div class="field">
+            <label for="impact">Impact, out of 10</label>
+            <input class="input narrow" id="impact" name="impact" type="number" inputmode="decimal" min="0" max="10" step="0.5" value={current?.impact ?? ''} />
+          </div>
+          <div class="field">
+            <label for="impact_note">When and what</label>
+            <textarea class="input" id="impact_note" name="impact_note" rows="2" maxlength="500" aria-describedby="impact-note-hint">{current?.impact_note ?? ''}</textarea>
+            <span class="hint" id="impact-note-hint">Public. A line about where you were.</span>
+          </div>
+        </fieldset>
+
+        <button class="button button--primary" type="submit">Save rating</button>
+      </form>
+    </details>
+
+    {
+      history.length > 0 && (
+        <section aria-labelledby="history-heading" class="history">
+          <h2 id="history-heading">History</h2>
+          <p class="muted">Every rating is kept. The newest is the one that counts.</p>
+          <ol role="list">
+            {history.map((row) => (
+              <li>
+                <time datetime={row.rated_at}>{ratedAt.format(new Date(row.rated_at))}</time>
+                <span>
+                  {row.gut_score != null && <>Gut {row.gut_score}</>}
+                  {row.depth === 'detailed' &&
+                    [...axes]
+                      .filter((axis) => row[axis] != null)
+                      .map((axis) => ` · ${capitalise(axis)} ${row[axis]}`)
+                      .join('')}
+                  {row.impact != null && <> · Impact {row.impact}</>}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )
+    }
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    max-width: 40rem;
+  }
+
+  .back {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+  }
+
+  .subject {
+    display: grid;
+    grid-template-columns: 5rem minmax(0, 1fr);
+    gap: var(--space-4);
+    align-items: center;
+  }
+
+  h1 {
+    font-size: var(--step-2);
+    font-weight: 800;
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .muted {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .error {
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-s);
+    color: var(--danger);
+  }
+
+  fieldset {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  legend {
+    display: grid;
+    gap: var(--space-1);
+    padding: 0;
+    margin-bottom: var(--space-4);
+  }
+
+  .legend-title {
+    font-size: var(--step-1);
+    font-weight: 700;
+  }
+
+  .detailed {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  summary {
+    display: flex;
+    align-items: center;
+    min-height: 3.5rem;
+    padding-inline: var(--space-5);
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .detailed form {
+    display: grid;
+    gap: var(--space-5);
+    padding: 0 var(--space-5) var(--space-5);
+  }
+
+  .axes {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  @media (min-width: 36rem) {
+    .axes {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .impact {
+    display: grid;
+    gap: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border);
+  }
+
+  .narrow {
+    max-width: 8rem;
+  }
+
+  .detailed button[type='submit'] {
+    justify-self: start;
+  }
+
+  .history ol {
+    display: grid;
+    gap: var(--space-2);
+    margin: var(--space-4) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .history li {
+    display: grid;
+    grid-template-columns: 11rem 1fr;
+    gap: var(--space-3);
+    font-size: var(--step--1);
+  }
+
+  .history time {
+    color: var(--text-muted);
+  }
+</style>
