@@ -15,6 +15,7 @@ const searched = q.trim().length >= MIN_QUERY_LENGTH;
 
 <Base title={q ? `Search: ${q}` : 'Search'}>
   <div class="wrap page" data-search>
+    <h1 class="visually-hidden">{q ? `Search results for “${q}”` : 'Search'}</h1>
     <form role="search" method="get" action="/search">
       <label for="q" class="visually-hidden">Search artists, albums and tracks</label>
       <input
