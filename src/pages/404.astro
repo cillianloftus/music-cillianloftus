@@ -1,24 +1,34 @@
 ---
 import Base from '../layouts/Base.astro';
+import PageHeader from '../components/PageHeader.astro';
 
 Astro.response.status = 404;
 ---
 
 <Base title="Not found">
-  <div class="wrap">
-    <h1>Not found</h1>
-    <p>There is nothing at this address. It may have been merged into another entry.</p>
-    <p><a href="/">Back to albums</a></p>
+  <div class="wrap page">
+    <PageHeader title="Not found" />
+    <p class="muted">Nothing lives here, or it was merged into something else.</p>
+    <p class="ways">
+      <a class="button" href="/">Home</a>
+      <a class="button button--quiet" href="/search">Search</a>
+    </p>
   </div>
 </Base>
 
 <style>
-  .wrap {
+  .page {
     display: grid;
     gap: var(--space-4);
+    justify-items: start;
   }
 
-  h1 {
-    font-size: var(--step-2);
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .ways {
+    display: flex;
+    gap: var(--space-3);
   }
 </style>
