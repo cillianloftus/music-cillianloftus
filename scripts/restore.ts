@@ -2,7 +2,13 @@
  * Restores a backup into an empty, migrated D1 database.
  *
  *   npm run restore -- <backup.json | backup.json.gz> --local [--persist-to <dir>]
- *   npm run restore -- <backup.json | backup.json.gz> --remote
+ *   npm run restore -- <backup.json | backup.json.gz> --remote [--resume]
+ *
+ * A remote restore goes in parts of about 1.5MB, each its own transaction,
+ * each retried if the connection drops, so one blip near the end of a large
+ * library does not throw the whole upload away. A part that landed before
+ * its answer was lost is harmless to send again. If it still gives up,
+ * --resume carries on into the partly restored database.
  *
  * Runs directly under Node (type stripping), using only the dependency-free
  * format module, so it works even if the rest of the stack does not.
@@ -12,8 +18,9 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { gunzipSync } from 'node:zlib';
-import { backupToSql, summarise, type Backup } from '../src/lib/backup/format.ts';
+import { backupToSql, backupToSqlParts, summarise, type Backup } from '../src/lib/backup/format.ts';
 
 const DATABASE = 'music-db';
 
@@ -26,6 +33,7 @@ const args = process.argv.slice(2);
 const file = args.find((a) => !a.startsWith('--') && args[args.indexOf(a) - 1] !== '--persist-to');
 const remote = args.includes('--remote');
 const local = args.includes('--local');
+const resume = args.includes('--resume');
 const persistIndex = args.indexOf('--persist-to');
 const persistTo = persistIndex >= 0 ? args[persistIndex + 1] : undefined;
 
@@ -70,16 +78,62 @@ const check = wrangler([
 ]);
 if (check.status !== 0) fail(`could not read the target database. Has it been migrated?\n${check.stderr}`);
 const existing = Number(/"n":\s*(\d+)/.exec(check.stdout)?.[1] ?? NaN);
-if (existing !== 0) fail('the target database already holds data. Restores only go into an empty database.');
+if (existing !== 0 && !resume) fail('the target database already holds data. Restores only go into an empty database.');
+if (resume && !remote) fail('--resume is for a remote restore that stopped partway.');
 
 const dir = mkdtempSync(join(tmpdir(), 'music-restore-'));
-const sqlFile = join(dir, 'restore.sql');
-writeFileSync(sqlFile, sql);
 
 console.log(
   `Restoring the backup from ${backup.created_at}: ${summary.tables} tables, ${summary.rows} rows, ` +
     `${summary.ratings} ratings, into the ${remote ? 'remote' : 'local'} database…`,
 );
-const result = wrangler(['--yes', '--file', sqlFile], true);
-if (result.status !== 0) fail('wrangler reported an error (above). Nothing after the failing statement was applied.');
+
+if (!remote) {
+  const sqlFile = join(dir, 'restore.sql');
+  writeFileSync(sqlFile, sql);
+  const result = wrangler(['--yes', '--file', sqlFile], true);
+  if (result.status !== 0) fail('wrangler reported an error (above). Nothing after the failing statement was applied.');
+  console.log('\nRestored.');
+  process.exit(0);
+}
+
+/** Which tables point at which, read from the migrations in a scratch in-memory database. */
+function foreignKeys(): Map<string, string[]> {
+  const db = new DatabaseSync(':memory:');
+  for (const m of localMigrations) db.exec(readFileSync(join('migrations', m), 'utf8'));
+  const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>;
+  return new Map(
+    tables.map(({ name }) => [name, (db.prepare('SELECT "table" AS t FROM pragma_foreign_key_list(?)').all(name) as Array<{ t: string }>).map((r) => r.t)]),
+  );
+}
+
+const parts = backupToSqlParts(backup, foreignKeys());
+// When resuming, the emptiness guard (part 1) would refuse; everything after it is safe to resend.
+const first = resume ? 1 : 0;
+const waits = [5, 15, 30, 60, 120];
+for (let i = first; i < parts.length; i++) {
+  const partFile = join(dir, `part-${i + 1}.sql`);
+  writeFileSync(partFile, parts[i]!);
+  const label = `Part ${i + 1} of ${parts.length} (${(parts[i]!.length / 1e6).toFixed(1)}MB)`;
+  for (let attempt = 0; ; attempt++) {
+    process.stdout.write(`${label}${attempt ? `, try ${attempt + 1}` : ''}… `);
+    const result = wrangler(['--yes', '--file', partFile]);
+    if (result.status === 0) {
+      console.log('done');
+      break;
+    }
+    const why = `${result.stdout}\n${result.stderr}`;
+    // A refusal from the database will not change on a retry; only the connection might.
+    const connection = /fetch failed|connectivity|ECONNRESET|ETIMEDOUT|socket|network|timed? ?out|5\d\d/i.test(why);
+    if (!connection || attempt >= waits.length) {
+      console.log('failed');
+      console.error(why.trim());
+      fail(
+        `part ${i + 1} did not go in. Parts before it are in place. Fix the cause, then run the same command with --resume.`,
+      );
+    }
+    console.log(`connection dropped, retrying in ${waits[attempt]}s`);
+    spawnSync(process.execPath, ['-e', `setTimeout(() => {}, ${waits[attempt]! * 1000})`]);
+  }
+}
 console.log('\nRestored.');

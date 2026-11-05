@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../../test/d1';
 import { insert, migratedDb, seedLibrary } from '../../test/db';
 import { dumpDatabase } from './dump';
-import { backupToSql, restoreOrder, summarise, type Backup } from './format';
+import { backupToSql, backupToSqlParts, restoreOrder, summarise, type Backup } from './format';
 
 let source: DatabaseSync;
 
@@ -28,16 +28,28 @@ function tableRows(db: DatabaseSync, table: string) {
   return db.prepare(`SELECT * FROM "${table}" ORDER BY rowid`).all();
 }
 
-function restore(backup: Backup): DatabaseSync {
-  const target = migratedDb();
-  target.exec('BEGIN');
+function foreignKeysOf(db: DatabaseSync) {
+  const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>;
+  return new Map(
+    tables.map(({ name }) => [name, (db.prepare('SELECT "table" AS t FROM pragma_foreign_key_list(?)').all(name) as Array<{ t: string }>).map((r) => r.t)]),
+  );
+}
+
+/** As D1 runs a file: one transaction, rolled back whole if anything fails. */
+function inTransaction(db: DatabaseSync, sql: string) {
+  db.exec('BEGIN');
   try {
-    target.exec(backupToSql(JSON.parse(JSON.stringify(backup)))); // through JSON, as a file would be
-    target.exec('COMMIT');
+    db.exec(sql);
+    db.exec('COMMIT');
   } catch (error) {
-    target.exec('ROLLBACK');
+    db.exec('ROLLBACK');
     throw error;
   }
+}
+
+function restore(backup: Backup): DatabaseSync {
+  const target = migratedDb();
+  inTransaction(target, backupToSql(JSON.parse(JSON.stringify(backup)))); // through JSON, as a file would be
   return target;
 }
 
@@ -70,6 +82,28 @@ describe('backup and restore', () => {
     // One unrelated artist: no key would clash, so only the guard can stop it.
     insert(target, 'artist', [{ id: 'unrelated', name: 'Someone', sort_name: 'Someone', source: 'manual' }]);
     expect(() => target.exec(backupToSql(backup))).toThrow(/CHECK constraint failed: n = 0/);
+  });
+
+  it('restores the same in parts, even when every part is sent twice', async () => {
+    const backup = await dumpDatabase();
+    const parts = backupToSqlParts(JSON.parse(JSON.stringify(backup)), foreignKeysOf(source), 2_000);
+    expect(parts.length).toBeGreaterThan(3);
+    const target = migratedDb();
+    // Each part is its own transaction, as each wrangler call is; a lost answer means sending it again.
+    for (const part of parts) {
+      inTransaction(target, part);
+      inTransaction(target, part);
+    }
+    for (const table of Object.keys(backup.tables)) {
+      expect(tableRows(target, table), table).toEqual(tableRows(source, table));
+    }
+  });
+
+  it('still refuses existing data when restoring in parts', async () => {
+    const backup = await dumpDatabase();
+    const target = migratedDb();
+    insert(target, 'artist', [{ id: 'unrelated', name: 'Someone', sort_name: 'Someone', source: 'manual' }]);
+    expect(() => inTransaction(target, backupToSqlParts(backup, foreignKeysOf(source))[0]!)).toThrow(/CHECK constraint failed: n = 0/);
   });
 
   it('rejects files that are not backups', () => {
