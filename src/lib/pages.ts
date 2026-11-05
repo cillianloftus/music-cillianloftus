@@ -141,6 +141,8 @@ export interface GenreDetail {
   albums: number;
   /** The same, always counting everything beneath it. */
   tracksBeneath: number;
+  /** Tagged with this genre itself, not one beneath it. */
+  tracksDirect: number;
 }
 
 /**
@@ -173,14 +175,20 @@ export async function genreDetail(id: string, deep = false): Promise<GenreDetail
        SELECT (SELECT count(DISTINCT recording_id) FROM v_recording_genre WHERE genre_id IN (SELECT id FROM tree)) AS tracks,
               (SELECT count(DISTINCT release_group_id) FROM v_release_group_genre WHERE genre_id IN (SELECT id FROM tree)) AS albums,
               (WITH RECURSIVE below(id) AS (SELECT ?1 UNION SELECT e.genre_id FROM v_genre_edge e JOIN below ON e.parent_id = below.id)
-               SELECT count(DISTINCT recording_id) FROM v_recording_genre WHERE genre_id IN (SELECT id FROM below)) AS tracksBeneath`,
+               SELECT count(DISTINCT recording_id) FROM v_recording_genre WHERE genre_id IN (SELECT id FROM below)) AS tracksBeneath,
+              (SELECT count(DISTINCT recording_id) FROM v_recording_genre WHERE genre_id = ?1) AS tracksDirect`,
     ).bind(id),
     env.DB.prepare(
       `SELECT g.id, g.name, e.is_primary AS "primary" FROM v_genre_edge e JOIN genre g ON g.id = e.parent_id
        WHERE e.genre_id = ? ORDER BY e.is_primary DESC, g.name`,
     ).bind(id),
   ]);
-  const count = (counts!.results[0] ?? { tracks: 0, albums: 0, tracksBeneath: 0 }) as { tracks: number; albums: number; tracksBeneath: number };
+  const count = (counts!.results[0] ?? { tracks: 0, albums: 0, tracksBeneath: 0, tracksDirect: 0 }) as {
+    tracks: number;
+    albums: number;
+    tracksBeneath: number;
+    tracksDirect: number;
+  };
   return {
     ...genre,
     ancestors: ancestors!.results as { id: string; name: string }[],
@@ -189,6 +197,7 @@ export async function genreDetail(id: string, deep = false): Promise<GenreDetail
     tracks: count.tracks,
     albums: count.albums,
     tracksBeneath: count.tracksBeneath,
+    tracksDirect: count.tracksDirect,
   };
 }
 

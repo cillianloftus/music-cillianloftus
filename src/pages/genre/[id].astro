@@ -61,19 +61,18 @@ const list = (items: string[]) =>
       <h1>{genre.name}</h1>
       <p class="facts">
         {genre.tracks} {genre.tracks === 1 ? 'track' : 'tracks'} · {genre.albums} {genre.albums === 1 ? 'album' : 'albums'}
-        {genre.children.length > 0 && <span class="muted">{deep ? ' · counting everything beneath it' : ' · tagged with it directly'}</span>}
       </p>
       {
+        /* Just this genre, or with everything beneath it: a toggle, not a sentence. */
         genre.children.length > 0 && genre.tracksBeneath !== genre.tracks && (
-          <p class="scope">
-            {deep ? (
-              <a href={`/genre/${id}`}>Only what is tagged {genre.name}</a>
-            ) : (
-              <a href={`/genre/${id}?beneath=1`}>
-                Include its subgenres ({genre.tracksBeneath} {genre.tracksBeneath === 1 ? 'track' : 'tracks'})
-              </a>
-            )}
-          </p>
+          <nav class="scope" aria-label="Which tracks">
+            <a href={`/genre/${id}`} aria-current={deep ? undefined : 'page'}>
+              {genre.name} <span class="tabular">{genre.tracksDirect}</span>
+            </a>
+            <a href={`/genre/${id}?beneath=1`} aria-current={deep ? 'page' : undefined}>
+              With subgenres <span class="tabular">{genre.tracksBeneath}</span>
+            </a>
+          </nav>
         )
       }
       {
@@ -116,7 +115,7 @@ const list = (items: string[]) =>
     {
       tracks.length > 0 && (
         <section aria-labelledby="tracks-heading">
-          <h2 id="tracks-heading">Best tracks</h2>
+          <h2 id="tracks-heading">Favourite tracks</h2>
           <ResultList results={tracks} />
         </section>
       )
@@ -270,5 +269,41 @@ const list = (items: string[]) =>
     .grid {
       grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
     }
+  }
+
+  /* Two choices in one pill, as the sort on Artists. */
+  .scope {
+    display: inline-flex;
+    width: fit-content;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface-1) 70%, transparent);
+  }
+
+  .scope a {
+    display: inline-flex;
+    gap: var(--space-2);
+    min-height: 2.25rem;
+    align-items: center;
+    padding: 0 var(--space-4);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .scope a span {
+    opacity: 0.7;
+  }
+
+  .scope a[aria-current='page'] {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .scope a:hover {
+    color: var(--text);
   }
 </style>
