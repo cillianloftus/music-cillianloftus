@@ -1,0 +1,391 @@
+---
+/**
+ * Search as an overlay over the current page: opens from the header's
+ * search button, "/" or Ctrl/Cmd+K; closes on Escape, a click outside, or
+ * following a result. Results come as you type. Without JavaScript the
+ * search button simply goes to the search page.
+ */
+---
+
+<dialog class="search-overlay" data-search-overlay aria-label="Search">
+  <form method="get" action="/search" class="search-box" role="search">
+    <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="10.5" cy="10.5" r="6"></circle>
+      <path d="M15 15l5 5"></path>
+    </svg>
+    <label for="overlay-q" class="visually-hidden">Search artists, albums and tracks</label>
+    <input
+      id="overlay-q"
+      name="q"
+      type="search"
+      placeholder="Artists, albums, tracks"
+      autocomplete="off"
+      spellcheck="false"
+      data-1p-ignore
+      data-lpignore="true"
+      data-bwignore
+      data-form-type="other"
+    />
+    <button type="button" class="close" data-close aria-label="Close search">Esc</button>
+  </form>
+  <div class="results" data-results aria-live="polite"></div>
+</dialog>
+
+<script>
+  type Row = { href: string; title: string; detail: string; art: string | null; score?: number | null };
+  type Found = { q: string; canImport?: boolean; artists: Row[]; albums: Row[]; tracks: Row[] };
+
+  const dialog = document.querySelector<HTMLDialogElement>('[data-search-overlay]');
+  const input = dialog?.querySelector<HTMLInputElement>('input');
+  const results = dialog?.querySelector<HTMLElement>('[data-results]');
+  let timer: number | undefined;
+  let latest = '';
+
+  function open() {
+    if (!dialog || dialog.open) return;
+    dialog.showModal();
+    input?.select();
+  }
+  function close() {
+    dialog?.close();
+  }
+
+  // The header's search button opens the overlay instead of the page.
+  document.querySelectorAll<HTMLAnchorElement>('a.search-link').forEach((link) =>
+    link.addEventListener('click', (event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+      event.preventDefault();
+      open();
+    }),
+  );
+  document.addEventListener('keydown', (event) => {
+    const typing = (event.target as HTMLElement).closest('input, textarea, select, [contenteditable]');
+    if ((event.key === 'k' && (event.metaKey || event.ctrlKey)) || (event.key === '/' && !typing)) {
+      event.preventDefault();
+      open();
+    }
+  });
+  // A click on the backdrop (the dialog itself, outside its box) closes it.
+  dialog?.addEventListener('click', (event) => {
+    if (event.target === dialog) close();
+  });
+  dialog?.querySelector('[data-close]')?.addEventListener('click', close);
+
+  function row(r: Row): HTMLLIElement {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = r.href;
+    const art = document.createElement('span');
+    art.className = 'art';
+    if (r.art) {
+      const img = document.createElement('img');
+      img.src = `/${r.art}/250.jpg`;
+      img.alt = '';
+      img.loading = 'lazy';
+      art.appendChild(img);
+    }
+    const text = document.createElement('span');
+    text.className = 'text';
+    const title = document.createElement('span');
+    title.className = 'title';
+    title.textContent = r.title;
+    const detail = document.createElement('span');
+    detail.className = 'detail';
+    detail.textContent = r.detail;
+    text.appendChild(title);
+    text.appendChild(detail);
+    a.appendChild(art);
+    a.appendChild(text);
+    if (r.score != null) {
+      const score = document.createElement('span');
+      score.className = 'score tabular';
+      score.textContent = String(r.score);
+      a.appendChild(score);
+    }
+    li.appendChild(a);
+    return li;
+  }
+
+  function render(found: Found) {
+    if (!results) return;
+    const groups: [string, Row[]][] = [
+      ['Artists', found.artists],
+      ['Albums', found.albums],
+      ['Tracks', found.tracks],
+    ];
+    const sections = groups
+      .filter(([, rows]) => rows.length)
+      .map(([name, rows]) => {
+        const section = document.createElement('section');
+        const h = document.createElement('h2');
+        h.textContent = name;
+        const ul = document.createElement('ul');
+        ul.setAttribute('role', 'list');
+        rows.forEach((r) => ul.appendChild(row(r)));
+        section.appendChild(h);
+        section.appendChild(ul);
+        return section;
+      });
+    // Nobody here by that name: offer to bring their discography in.
+    const offer = () => {
+      const a = document.createElement('a');
+      a.className = 'import-offer';
+      a.href = `/manage/import?${new URLSearchParams({ artist: found.q })}#disco-heading`;
+      a.textContent = `Import “${found.q}” from MusicBrainz →`;
+      return a;
+    };
+    const canOffer = found.canImport && found.q.length >= 2 && found.artists.length === 0;
+    if (sections.length === 0) {
+      const p = document.createElement('p');
+      p.className = 'empty';
+      if (found.q.length < 2) {
+        results.replaceChildren();
+        return;
+      }
+      p.textContent = `Nothing called “${found.q}” here yet.`;
+      results.replaceChildren(p, ...(canOffer ? [offer()] : []));
+    } else {
+      const all = document.createElement('a');
+      all.className = 'all';
+      all.href = `/search?q=${encodeURIComponent(found.q)}`;
+      all.textContent = 'All results';
+      results.replaceChildren(...sections, ...(canOffer ? [offer()] : []), all);
+    }
+  }
+
+  input?.addEventListener('input', () => {
+    window.clearTimeout(timer);
+    const q = input.value.trim();
+    latest = q;
+    timer = window.setTimeout(async () => {
+      if (q.length < 2) return render({ q, artists: [], albums: [], tracks: [] });
+      try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+        const found = (await res.json()) as Found;
+        if (found.q === latest) render(found);
+      } catch {
+        /* Offline: the Enter key still goes to the search page. */
+      }
+    }, 150);
+  });
+
+  // Up and down move through results; Enter in the box opens the first.
+  dialog?.addEventListener('keydown', (event) => {
+    const links = [...(results?.querySelectorAll<HTMLAnchorElement>('a') ?? [])];
+    const at = links.indexOf(document.activeElement as HTMLAnchorElement);
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      (links[at + 1] ?? links[0])?.focus();
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (at <= 0) input?.focus();
+      else links[at - 1]?.focus();
+    } else if (event.key === 'Enter' && document.activeElement === input && links[0] && input?.value.trim()) {
+      event.preventDefault();
+      location.href = links[0].href;
+    }
+  });
+</script>
+
+<style>
+  .search-overlay {
+    width: min(40rem, calc(100vw - 2 * var(--gutter)));
+    max-height: min(80vh, 44rem);
+    margin: 10vh auto auto;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+    color: var(--text);
+    box-shadow: 0 30px 80px -20px rgb(0 0 0 / 0.5);
+    overflow: hidden;
+  }
+
+  .search-overlay[open] {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    animation: drop 0.16s ease-out;
+  }
+
+  .search-overlay::backdrop {
+    background: rgb(0 0 0 / 0.35);
+    backdrop-filter: blur(3px);
+  }
+
+  .search-box {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .search-icon {
+    flex: none;
+    width: 1.25rem;
+    height: 1.25rem;
+    fill: none;
+    stroke: var(--text-subtle);
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+
+  .search-box input {
+    flex: 1;
+    min-width: 0;
+    min-height: var(--target);
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: var(--step-1);
+    outline: none;
+  }
+
+  .close {
+    flex: none;
+    padding: 0.2rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-s);
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .results {
+    overflow-y: auto;
+    padding: var(--space-2) var(--space-2) var(--space-3);
+  }
+
+  .results :global(h2) {
+    margin: var(--space-3) var(--space-3) var(--space-1);
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .results :global(ul) {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .results :global(li a) {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-m);
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .results :global(li a:hover),
+  .results :global(li a:focus-visible) {
+    background: var(--surface-2);
+    outline: none;
+  }
+
+  .results :global(.art) {
+    flex: none;
+    width: 2.5rem;
+    height: 2.5rem;
+    overflow: hidden;
+    border-radius: var(--radius-s);
+    background: var(--surface-2);
+  }
+
+  .results :global(.art img) {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .results :global(.text) {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .results :global(.title) {
+    overflow: hidden;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .results :global(.detail) {
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .results :global(.score) {
+    flex: none;
+    font-weight: 800;
+  }
+
+  .results :global(.all) {
+    display: inline-flex;
+    margin: var(--space-3) var(--space-3) 0;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+  }
+
+  .results :global(.empty) {
+    padding: var(--space-4);
+    color: var(--text-muted);
+  }
+
+  @keyframes drop {
+    from {
+      opacity: 0;
+      transform: translateY(-0.5rem);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .search-overlay[open] {
+      animation: none;
+    }
+  }
+
+  .results :global(.import-offer) {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    margin: var(--space-2) var(--space-3) 0;
+    padding: 0 var(--space-4);
+    border: 1px dashed var(--accent);
+    border-radius: var(--radius-m);
+    color: var(--accent);
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  .results :global(.import-offer:hover) {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+
+  /* Before anything is typed it is one clean bar: no empty panel or rule. */
+  .results:empty {
+    display: none;
+  }
+
+  .search-overlay:has(.results:empty) .search-box {
+    border-bottom: 0;
+  }
+
+  .search-overlay:has(.results:empty) {
+    grid-template-rows: auto;
+  }
+</style>

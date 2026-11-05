@@ -1,0 +1,171 @@
+---
+/**
+ * A sideways row of cards. On touch screens it is a swipe that snaps to
+ * each card; with a mouse, round buttons either side scroll it smoothly a
+ * screen at a time. A button fades out and stops responding when there is
+ * nothing more that way, and the row's edges fade where more is hidden.
+ * No scrollbar either way. Without JavaScript it still scrolls (by swipe,
+ * trackpad or shift-wheel), and the buttons are simply not there.
+ */
+
+interface Props {
+  /** Names the row for the buttons: "Scroll highest rated forward". */
+  label: string;
+  /** Width of each card. */
+  item?: string;
+}
+
+const { label, item = 'min(11rem, 42vw)' } = Astro.props;
+---
+
+<div class="shelf" data-shelf style={`--item: ${item}`}>
+  <button class="nav prev" type="button" data-dir="-1" aria-label={`Scroll ${label} back`} hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+  </button>
+  <div class="track" data-track>
+    <slot />
+  </div>
+  <button class="nav next" type="button" data-dir="1" aria-label={`Scroll ${label} forward`} hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
+  </button>
+</div>
+
+<script>
+  const smooth = () => (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth');
+
+  for (const shelf of document.querySelectorAll<HTMLElement>('[data-shelf]')) {
+    const track = shelf.querySelector<HTMLElement>('[data-track]')!;
+    const prev = shelf.querySelector<HTMLButtonElement>('.prev')!;
+    const next = shelf.querySelector<HTMLButtonElement>('.next')!;
+    prev.hidden = next.hidden = false;
+
+    // Each end: is there anything more that way?
+    const update = () => {
+      const start = track.scrollLeft <= 2;
+      const end = track.scrollLeft + track.clientWidth >= track.scrollWidth - 2;
+      prev.disabled = start;
+      next.disabled = end;
+      shelf.dataset.start = String(start);
+      shelf.dataset.end = String(end);
+    };
+
+    for (const button of [prev, next]) {
+      button.addEventListener('click', () => {
+        const step = Math.max(track.clientWidth * 0.85, 160) * Number(button.dataset.dir);
+        track.scrollBy({ left: step, behavior: smooth() });
+      });
+    }
+    track.addEventListener('scroll', update, { passive: true });
+    new ResizeObserver(update).observe(track);
+    update();
+  }
+</script>
+
+<style>
+  .shelf {
+    position: relative;
+    margin: 0 calc(var(--gutter) * -1);
+  }
+
+  .track {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: var(--gutter);
+    scrollbar-width: none;
+    /* Fade the edges where there is more to see. */
+    --fade-start: 0px;
+    --fade-end: 2.5rem;
+    mask-image: linear-gradient(
+      to right,
+      transparent 0,
+      black var(--fade-start),
+      black calc(100% - var(--fade-end)),
+      transparent 100%
+    );
+  }
+
+  .track::-webkit-scrollbar {
+    display: none;
+  }
+
+  .shelf[data-start='false'] .track {
+    --fade-start: 2.5rem;
+  }
+
+  .shelf[data-end='true'] .track {
+    --fade-end: 0px;
+  }
+
+  /* The list inside: one row of fixed-width cards. */
+  .track :global(> ol),
+  .track :global(> ul) {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: var(--item);
+    gap: var(--space-5);
+    margin: 0;
+    padding: var(--space-3) var(--gutter) var(--space-2);
+    list-style: none;
+  }
+
+  .track :global(> ol > li),
+  .track :global(> ul > li) {
+    scroll-snap-align: start;
+  }
+
+  .nav {
+    position: absolute;
+    top: calc(var(--item) / 2 - 1rem);
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+    backdrop-filter: blur(8px);
+    color: var(--text);
+    box-shadow: var(--shadow);
+    cursor: pointer;
+    transition:
+      opacity 0.2s,
+      transform 0.2s;
+  }
+
+  .nav:hover {
+    transform: scale(1.06);
+  }
+
+  .nav svg {
+    width: 1.25rem;
+    height: 1.25rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .prev {
+    left: calc(var(--gutter) - 0.5rem);
+  }
+
+  .next {
+    right: calc(var(--gutter) - 0.5rem);
+  }
+
+  /* Nothing more that way: gone from sight and from the pointer. */
+  .nav:disabled {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* Touch screens swipe; the buttons are for mice. */
+  @media (hover: none), (pointer: coarse) {
+    .nav {
+      display: none;
+    }
+  }
+</style>

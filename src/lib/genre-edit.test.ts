@@ -3,7 +3,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { d1 } from '../test/d1';
 import { migratedDb, seedLibrary } from '../test/db';
-import { createGenre, deriveAlbumGenres, genreKey, GenreError, moveGenre, plainGenreName, wikidataParents } from './genres';
+import { addParent, createGenre, deriveAlbumGenres, genreKey, GenreError, moveGenre, plainGenreName, removeParent, wikidataParents } from './genres';
+import { compile } from './query/compile';
+import { definitionSchema } from './query/schema';
 import { insert } from '../test/db';
 
 let db: DatabaseSync;
@@ -109,5 +111,32 @@ describe('deriving album genres', () => {
     expect(derived()).toEqual([{ entity_id: 'rg-b', genre_id: 'g-rock', weight: 0.5 }]);
     // The imported tag on Album A is still there.
     expect(db.prepare(`SELECT source FROM genre_tag WHERE entity_type = 'release_group' AND entity_id = 'rg-a'`).all()).toEqual([{ source: 'musicbrainz' }]);
+  });
+});
+
+describe('more than one parent', () => {
+  it('finds a genre under every parent it has, in playlist queries', async () => {
+    // b2 is tagged rock. File rock under pop as well: a "pop" query then finds b2.
+    const popTracks = () => {
+      const { sql, params } = compile(definitionSchema.parse({ entity: 'recording', where: { field: 'genre', op: 'in_tree', value: 'pop' }, collapse_by_work: false, limit: 50 }), { userId: 'u-owner' });
+      return (db.prepare(sql).all(...(params as never[])) as { id: string }[]).map((r) => r.id);
+    };
+    expect(popTracks()).not.toContain('b2');
+    await addParent('g-rock', 'pop');
+    expect(popTracks()).toContain('b2');
+    await removeParent('g-rock', 'g-pop');
+    expect(popTracks()).not.toContain('b2');
+  });
+
+  it('refuses a cycle through any mix of primary and further parents', async () => {
+    // pop > indie pop > bedroom pop. pop under bedroom pop would loop.
+    await expect(addParent('g-pop', 'bedroom pop')).rejects.toThrow('beneath itself');
+    await addParent('g-rock', 'bedroom pop');
+    // Now rock is beneath bedroom pop; bedroom pop may not go beneath rock.
+    await expect(moveGenre('g-bedroom', 'rock')).rejects.toThrow(GenreError);
+  });
+
+  it('will not add the main parent twice', async () => {
+    await expect(addParent('g-indie', 'pop')).rejects.toThrow('main parent');
   });
 });

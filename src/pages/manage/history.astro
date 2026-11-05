@@ -1,0 +1,379 @@
+---
+/**
+ * Listening history (build step 13): import Spotify's extended streaming
+ * history, then the comparison that makes it worth having — what is rated
+ * highly against what is actually played.
+ */
+import Base from '../../layouts/Base.astro';
+import { divergence, historySummary, type Divergence } from '../../lib/history';
+
+const user = Astro.locals.user!;
+const [summary, gaps] = await Promise.all([historySummary(user.id), divergence(user.id)]);
+const day = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString('en-GB')} ${n === 1 ? one : many}`;
+const lists: { id: string; heading: string; explain: string; rows: Divergence[] }[] = [
+  {
+    id: 'underplayed',
+    heading: 'Rated highly, rarely played',
+    explain: 'Scored near the top of your library, played near the bottom.',
+    rows: gaps.underplayed,
+  },
+  {
+    id: 'overplayed',
+    heading: 'Played a lot, rated lower',
+    explain: 'In heavy rotation, though the score says otherwise.',
+    rows: gaps.overplayed,
+  },
+];
+---
+
+<Base title="Listening history">
+  <div class="wrap page">
+    <header>
+      <h1>Listening history</h1>
+      <p class="muted">
+        From Spotify’s extended streaming history: request it under Privacy settings, “Download your data”. It arrives as
+        a zip after a few days.
+      </p>
+    </header>
+
+    <section class="summary" aria-labelledby="summary-heading">
+      <h2 id="summary-heading" class="visually-hidden">So far</h2>
+      {
+        summary.plays === 0 ? (
+          <p class="muted">No plays imported yet.</p>
+        ) : (
+          <dl>
+            <div>
+              <dt>Plays</dt>
+              <dd class="tabular">{summary.plays.toLocaleString('en-GB')}</dd>
+            </div>
+            <div>
+              <dt>Tracks played</dt>
+              <dd class="tabular">{summary.recordings.toLocaleString('en-GB')}</dd>
+            </div>
+            <div>
+              <dt>Hours</dt>
+              <dd class="tabular">{Math.round(summary.hours).toLocaleString('en-GB')}</dd>
+            </div>
+            <div>
+              <dt>Covering</dt>
+              <dd>
+                {day(summary.first)} to {day(summary.last)}
+              </dd>
+            </div>
+          </dl>
+        )
+      }
+    </section>
+
+    <section class="import" aria-labelledby="import-heading" data-import hidden>
+      <h2 id="import-heading">Import</h2>
+      <label class="drop" data-drop>
+        <input type="file" accept=".zip,.json,application/zip,application/json" multiple class="visually-hidden" data-picker />
+        <strong>Choose the export</strong>
+        <span class="muted">The zip as downloaded, or the Streaming_History_Audio JSON files from it.</span>
+      </label>
+      <p class="status" role="status" data-status></p>
+      <progress hidden data-progress></progress>
+      <button class="button button--primary" type="button" hidden data-go></button>
+      <p class="hint muted">
+        Only plays of tracks already in the catalogue are kept, matched by Spotify id or by title and artist. Importing
+        again later picks up albums added since, and never counts a play twice.
+      </p>
+    </section>
+    <noscript><p class="muted">Reading the export needs JavaScript.</p></noscript>
+
+    {
+      lists.map((list) => (
+        <section class="gaps" aria-labelledby={list.id}>
+          <h2 id={list.id}>{list.heading}</h2>
+          <p class="muted explain">{list.explain}</p>
+          {list.rows.length === 0 ? (
+            <p class="muted">{summary.plays === 0 ? 'Import some history to see this.' : 'Nothing stands out.'}</p>
+          ) : (
+            <ol role="list">
+              {list.rows.map((d) => (
+                <li>
+                  <span class="what">
+                    <a href={`/track/${d.recording_id}`}>{d.title}</a>
+                    <span class="by muted">{[d.artist, d.album_title].filter(Boolean).join(' · ')}</span>
+                  </span>
+                  <span class="numbers tabular">
+                    <span>
+                      <strong>{Math.round(d.quality_score)}</strong>
+                      <span class="muted"> score</span>
+                    </span>
+                    <span>
+                      <strong>{d.plays}</strong>
+                      <span class="muted"> {d.plays === 1 ? 'play' : 'plays'}</span>
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      ))
+    }
+    <p class="muted foot">{summary.plays > 0 && `Plays counted from ${plural(summary.recordings, 'track')} in the catalogue.`}</p>
+  </div>
+</Base>
+
+<script>
+  import { collectHistory, isAudioHistory, MATCH_BATCH, PLAY_BATCH, type ParsedPlay, type ParsedTrack } from '../../lib/history-parse';
+  import { zipEntries } from '../../lib/zip';
+
+  const $ = <T extends Element>(s: string) => document.querySelector<T>(s)!;
+  const section = $<HTMLElement>('[data-import]');
+  const picker = $<HTMLInputElement>('[data-picker]');
+  const drop = $<HTMLElement>('[data-drop]');
+  const status = $<HTMLElement>('[data-status]');
+  const progress = $<HTMLProgressElement>('[data-progress]');
+  const go = $<HTMLButtonElement>('[data-go]');
+  section.hidden = false;
+
+  let pending: { recording_id: string; played_at: string; ms_played: number }[] = [];
+  const n = (x: number) => x.toLocaleString('en-GB');
+
+  async function post<T>(url: string, body: unknown): Promise<T> {
+    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const json = (await response.json()) as T & { error?: string };
+    if (!response.ok) throw new Error(json.error ?? 'The server refused that.');
+    return json;
+  }
+
+  async function load(files: File[]) {
+    go.hidden = true;
+    const tracks = new Map<string, ParsedTrack>();
+    const plays: ParsedPlay[] = [];
+    try {
+      status.textContent = 'Reading…';
+      for (const file of files) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (file.name.toLowerCase().endsWith('.zip')) {
+          for (const entry of zipEntries(bytes).filter((e) => isAudioHistory(e.name))) {
+            status.textContent = `Reading ${entry.name.split('/').at(-1)}…`;
+            collectHistory(JSON.parse(new TextDecoder().decode(await entry.read())), tracks, plays);
+          }
+        } else {
+          collectHistory(JSON.parse(new TextDecoder().decode(bytes)), tracks, plays);
+        }
+      }
+    } catch (error) {
+      status.textContent = `That could not be read: ${error instanceof Error ? error.message : 'unknown error'}`;
+      return;
+    }
+    if (plays.length === 0) {
+      status.textContent = 'No music plays found. Choose the zip, or the Streaming_History_Audio files inside it.';
+      return;
+    }
+
+    status.textContent = `${n(plays.length)} plays of ${n(tracks.size)} tracks. Matching against the catalogue…`;
+    const all = [...tracks.values()];
+    const matches: Record<string, { recording_id: string }> = {};
+    try {
+      for (let i = 0; i < all.length; i += MATCH_BATCH) {
+        Object.assign(matches, (await post<{ matches: typeof matches }>('/api/write/history/match', { tracks: all.slice(i, i + MATCH_BATCH) })).matches);
+      }
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : 'Matching failed.';
+      return;
+    }
+
+    pending = plays.flatMap((p) => (matches[p.uri] ? [{ recording_id: matches[p.uri]!.recording_id, played_at: p.played_at, ms_played: p.ms_played }] : []));
+    const matchedTracks = Object.keys(matches).length;
+    status.textContent = `${n(matchedTracks)} of ${n(tracks.size)} tracks are in the catalogue, with ${n(pending.length)} plays between them.`;
+    if (pending.length) {
+      go.textContent = `Import ${n(pending.length)} plays`;
+      go.hidden = false;
+      go.disabled = false;
+    }
+  }
+
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    progress.hidden = false;
+    progress.max = pending.length;
+    let added = 0;
+    try {
+      for (let i = 0; i < pending.length; i += PLAY_BATCH) {
+        progress.value = i;
+        status.textContent = `Importing ${n(Math.min(i + PLAY_BATCH, pending.length))} of ${n(pending.length)}…`;
+        added += (await post<{ added: number }>('/api/write/history/plays', { plays: pending.slice(i, i + PLAY_BATCH) })).added;
+      }
+      status.textContent = `${n(added)} new plays added${added < pending.length ? `; ${n(pending.length - added)} were already here` : ''}. Reloading…`;
+      setTimeout(() => location.reload(), 1200);
+    } catch (error) {
+      status.textContent = `Stopped after ${n(added)} new plays: ${error instanceof Error ? error.message : 'error'}. Run it again to finish; nothing is counted twice.`;
+      go.disabled = false;
+    } finally {
+      progress.hidden = true;
+    }
+  });
+
+  picker.addEventListener('change', () => void load([...(picker.files ?? [])]));
+  drop.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    drop.dataset.over = '';
+  });
+  drop.addEventListener('dragleave', () => delete drop.dataset.over);
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    delete drop.dataset.over;
+    void load([...(e.dataTransfer?.files ?? [])]);
+  });
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    --content-max: 48rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  dl {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  dl > div {
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+  }
+
+  dt {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  dd {
+    margin: 0;
+    font-size: var(--step-1);
+    font-weight: 750;
+  }
+
+  .import {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+  }
+
+  .drop {
+    display: grid;
+    place-items: center;
+    gap: var(--space-1);
+    width: 100%;
+    min-height: 8rem;
+    padding: var(--space-5);
+    border: 2px dashed var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+    text-align: center;
+    cursor: pointer;
+  }
+
+  .drop:hover,
+  .drop[data-over] {
+    border-color: var(--accent);
+  }
+
+  .drop:focus-within {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .drop strong {
+    font-size: var(--step-1);
+  }
+
+  .status:empty {
+    display: none;
+  }
+
+  progress {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  .hint {
+    font-size: var(--step--1);
+  }
+
+  .gaps {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .explain {
+    font-size: var(--step--1);
+  }
+
+  .gaps ol {
+    margin: var(--space-2) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .gaps li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .what {
+    display: grid;
+    min-width: 0;
+  }
+
+  .what > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .what a {
+    font-weight: 700;
+  }
+
+  .by {
+    font-size: var(--step--1);
+  }
+
+  .numbers {
+    display: grid;
+    justify-items: end;
+    font-size: var(--step--1);
+    white-space: nowrap;
+  }
+
+  .numbers strong {
+    font-size: var(--step-0);
+  }
+
+  .foot:empty {
+    display: none;
+  }
+</style>

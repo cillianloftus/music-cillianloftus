@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { migratedDb, seedLibrary } from '../test/db';
 import { claimNext, complete, enqueue, fail, retry } from './jobs/queue';
-import { addRating, ratingHistory, ratingInput } from './ratings';
+import { addRating, ratingFormFields, ratingHistory, ratingInput } from './ratings';
 
 let db: DatabaseSync;
 
@@ -73,6 +73,15 @@ describe('ratings', () => {
     const history = await ratingHistory('u-owner', 'recording', recording);
     expect(history.map((row) => row.depth)).toEqual(['detailed', 'gut']);
     expect(history[0]).toMatchObject({ production: 7.5, lyrics: null });
+  });
+
+  it('records axes that do not apply, apart from ones not yet rated', async () => {
+    const form = { entity_type: 'recording', entity_id: recording, gut_score: '9', production: '8', lyrics: '7', na_lyrics: 'on' };
+    await addRating('u-owner', ratingInput.parse(ratingFormFields(form)));
+    const [latest] = await ratingHistory('u-owner', 'recording', recording);
+    // The tick wins over the 7: an instrumental has no lyrics to score.
+    expect(latest).toMatchObject({ production: 8, lyrics: null, songwriting: null, not_applicable: ['lyrics'] });
+    expect(() => db.prepare("UPDATE rating SET not_applicable = '[]'").run()).toThrow('append-only');
   });
 
   it.each([

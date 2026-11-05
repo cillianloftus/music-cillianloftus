@@ -123,7 +123,7 @@ try {
     <form method="post" class="editor">
       <div class="field">
         <label for="name">Name</label>
-        <input class="input" id="name" name="name" type="text" maxlength="100" value={name} />
+        <input class="input" id="name" name="name" type="text" maxlength="100" value={name} autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
       </div>
       <div class="field">
         <label for="description">Description <span class="optional">(optional)</span></label>
@@ -223,7 +223,7 @@ try {
   .page {
     display: grid;
     gap: var(--space-6);
-    max-width: 52rem;
+    --content-max: 52rem;
   }
 
   header {

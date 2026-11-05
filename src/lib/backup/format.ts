@@ -41,6 +41,9 @@ export function isExcluded(table: string): boolean {
   );
 }
 
+/** Tables the migrations fill with built-in rows (credit roles). */
+const SEEDED = new Set(['credit_role']);
+
 /** Tables whose insert triggers check that a polymorphic entity exists. */
 const POLYMORPHIC = ['artist_credit', 'genre_tag', 'rating'];
 const CATALOGUE = ['artist', 'work', 'recording', 'release_group', 'release', 'track', 'genre'];
@@ -115,7 +118,9 @@ export function backupToSql(backup: Backup): string {
         .slice(i, i + ROWS_PER_INSERT)
         .map((row) => `(${row.map(literal).join(', ')})`)
         .join(',\n  ');
-      lines.push(`INSERT INTO ${ident(table)} (${columns}) VALUES\n  ${values};`);
+      // Built-in rows a migration already seeded are replaced by the backup's.
+      const verb = SEEDED.has(table) ? 'INSERT OR REPLACE' : 'INSERT';
+      lines.push(`${verb} INTO ${ident(table)} (${columns}) VALUES\n  ${values};`);
     }
   }
   return lines.join('\n') + '\n';

@@ -80,15 +80,20 @@ function leafLabel(name: string, r: number): { lines: string[]; size: number } |
           <figure>
             <svg viewBox={`0 0 ${SIZE} ${SIZE}`} aria-hidden="true" focusable="false">
               {circles.map((c) => {
-                const label = c.leaf && !c.self ? leafLabel(c.name, c.r) : null;
+                const label = c.leaf ? leafLabel(c.name, c.r) : null;
+                const groupSize = Math.min(22, Math.max(13, c.r / 7));
+                const genreId = c.genreId;
+                const parentName = c.parent ? circles.find((p) => p.id === c.parent)?.name : null;
                 return (
-                  <g>
-                    <title>{`${c.name}: ${c.value} ${c.value === 1 ? 'track' : 'tracks'}${c.self ? ' tagged directly' : ''}`}</title>
+                  <a href={`/genre/${genreId}`} tabindex="-1" class="genre-link">
+                    <title>
+                      {`${c.name}: ${c.value} ${c.value === 1 ? 'track' : 'tracks'}${c.self ? ` tagged just “${c.name}”` : ''}${c.secondary && !c.self && parentName ? ` (also filed under ${parentName})` : ''}`}
+                    </title>
                     <circle
                       cx={c.x.toFixed(1)}
                       cy={c.y.toFixed(1)}
                       r={c.r.toFixed(1)}
-                      class:list={[c.leaf ? 'leaf' : `group depth-${Math.min(c.depth, 3)}`, { self: c.self }]}
+                      class:list={[c.leaf ? 'leaf' : `group depth-${Math.min(c.depth, 3)}`, { secondary: c.secondary && !c.self }]}
                       style={`--h: ${hueOf(c.family)}${c.leaf ? `; --mix: ${mix(c.value)}` : ''}`}
                     />
                     {label && (
@@ -107,12 +112,19 @@ function leafLabel(name: string, r: number): { lines: string[]; size: number } |
                         ))}
                       </text>
                     )}
-                    {!c.leaf && c.r >= 70 && clearAtTop(c) && (
-                      <text x={c.x.toFixed(1)} y={(c.y - c.r + 20).toFixed(1)} class="group-label" text-anchor="middle">
+                    {!c.leaf && c.r >= 60 && clearAtTop(c) && (
+                      <text
+                        x={c.x.toFixed(1)}
+                        y={(c.y - c.r + groupSize * 1.35).toFixed(1)}
+                        class="group-label"
+                        font-size={groupSize.toFixed(1)}
+                        text-anchor="middle"
+                        style={`--h: ${hueOf(c.family)}`}
+                      >
                         {c.name}
                       </text>
                     )}
-                  </g>
+                  </a>
                 );
               })}
             </svg>
@@ -172,23 +184,23 @@ function leafLabel(name: string, r: number): { lines: string[]; size: number } |
     font-family: var(--font-sans);
   }
 
+  /* Groups: a wash of their family's colour with an outline of it,
+     deepening with depth, so a family reads as one body. */
   .group {
-    fill: transparent;
-    stroke: var(--border);
+    stroke: oklch(0.42 0.07 var(--h));
     stroke-width: 1.5;
   }
 
-  /* Groups: a faint wash of their family's colour, deepening with depth. */
   .depth-1 {
-    fill: oklch(0.2 0.025 var(--h));
+    fill: oklch(0.23 0.04 var(--h));
   }
 
   .depth-2 {
-    fill: oklch(0.24 0.035 var(--h));
+    fill: oklch(0.27 0.05 var(--h));
   }
 
   .depth-3 {
-    fill: oklch(0.28 0.045 var(--h));
+    fill: oklch(0.31 0.06 var(--h));
   }
 
   /* Leaves: 0.34 to 0.48 lightness under light text. */
@@ -197,16 +209,20 @@ function leafLabel(name: string, r: number): { lines: string[]; size: number } |
     transition: fill 0.2s;
   }
 
+  :global([data-theme='light']) .group {
+    stroke: oklch(0.78 0.07 var(--h));
+  }
+
   :global([data-theme='light']) .depth-1 {
-    fill: oklch(0.96 0.015 var(--h));
+    fill: oklch(0.94 0.03 var(--h));
   }
 
   :global([data-theme='light']) .depth-2 {
-    fill: oklch(0.93 0.025 var(--h));
+    fill: oklch(0.91 0.04 var(--h));
   }
 
   :global([data-theme='light']) .depth-3 {
-    fill: oklch(0.9 0.035 var(--h));
+    fill: oklch(0.88 0.05 var(--h));
   }
 
   /* Light mode: 0.88 down to 0.72 under dark text. */
@@ -214,12 +230,24 @@ function leafLabel(name: string, r: number): { lines: string[]; size: number } |
     fill: oklch(calc(0.88 - var(--mix) * 0.16) calc(0.04 + var(--mix) * 0.06) var(--h));
   }
 
-  .leaf.self {
-    stroke: oklch(0.75 0.12 var(--h));
-    stroke-dasharray: 3 3;
+  .genre-link {
+    cursor: pointer;
   }
 
-  g:hover .leaf {
+  /* A genre drawn again under a further parent: the same colour, but as an
+     outline, so it reads as a reference to the genre filed elsewhere. */
+  .leaf.secondary {
+    fill-opacity: 0.25;
+    stroke: oklch(0.7 0.1 var(--h));
+    stroke-width: 2;
+    stroke-dasharray: 5 4;
+  }
+
+  :global([data-theme='light']) .leaf.secondary {
+    stroke: oklch(0.55 0.1 var(--h));
+  }
+
+  .genre-link:hover > .leaf {
     stroke: var(--text);
     stroke-width: 2;
   }
@@ -230,13 +258,17 @@ function leafLabel(name: string, r: number): { lines: string[]; size: number } |
     pointer-events: none;
   }
 
+  /* Group names in their family's colour: 0.85 lightness on the dark wash,
+     0.38 on the light one, both well over 4.5:1. */
   .group-label {
-    fill: var(--text-muted);
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    fill: oklch(0.85 0.07 var(--h));
+    font-weight: 750;
+    letter-spacing: -0.01em;
     pointer-events: none;
+  }
+
+  :global([data-theme='light']) .group-label {
+    fill: oklch(0.38 0.08 var(--h));
   }
 
   .empty {

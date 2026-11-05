@@ -13,8 +13,10 @@ import {
   artistTopTracks,
   redirectFor,
 } from '../../lib/catalogue';
-import { yearOf } from '../../lib/dates';
-import { roleLabel } from '../../lib/format';
+import { artistImages } from '../../lib/artist-images';
+import { ageOf, artistAbout, artistGenres, lifeWords } from '../../lib/artists';
+import { groupCredits } from '../../lib/credits';
+import { formatPartialDate, yearOf } from '../../lib/dates';
 
 const id = Astro.params.id!;
 const artist = await getArtist(id);
@@ -25,24 +27,95 @@ if (!artist) {
 }
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const [albums, appearances, topTracks, collaborators] = await Promise.all([
+const [albums, appearances, topTracks, collaborators, about, images, genres] = await Promise.all([
   artistReleaseGroups(artist.id, viewerId),
   artistAppearances(artist.id),
   artistTopTracks(artist.id, viewerId, 5),
   artistCollaborators(artist.id, 8),
+  artistAbout(artist.id),
+  artistImages(artist.id),
+  artistGenres(artist.id),
 ]);
+// Releases by kind, each newest first: the records, then the shorter ones.
+// Sections that earn their place: mixtapes get their own only when there
+// are enough of them (Logic's dozen, not Quadeca's one), and so do EPs and
+// singles; otherwise they join the section above. Live albums, compilations
+// and soundtracks are always their own, since they are a different thing.
+const ENOUGH = 3;
+const ofType = (t: string) => albums.filter((a) => a.type === t).length;
+const ownMixtapes = ofType('mixtape') >= ENOUGH;
+const ownEps = ofType('ep') >= ENOUGH;
+const ownSingles = ofType('single') >= ENOUGH;
+// Only the kinds actually present, so one stray single isn't 'EPs and singles'.
+const smallTypes = [...(ownEps ? [] : ['ep']), ...(ownSingles ? [] : ['single'])].filter((t) => ofType(t) > 0);
+const SHELVES = [
+  {
+    key: 'albums',
+    heading: ownMixtapes ? 'Albums' : ofType('mixtape') ? 'Albums and mixtapes' : 'Albums',
+    types: ownMixtapes ? ['album'] : ['album', 'mixtape'],
+  },
+  ...(ownMixtapes ? [{ key: 'mixtapes', heading: 'Mixtapes', types: ['mixtape'] }] : []),
+  // A few EPs and singles share one shelf; EPs come before singles either way.
+  ...(smallTypes.length
+    ? [{ key: 'short', heading: smallTypes.length === 2 ? 'EPs and singles' : smallTypes[0] === 'ep' ? 'EPs' : 'Singles', types: smallTypes }]
+    : []),
+  ...(ownEps ? [{ key: 'eps', heading: 'EPs', types: ['ep'] }] : []),
+  ...(ownSingles ? [{ key: 'singles', heading: 'Singles', types: ['single'] }] : []),
+  { key: 'live', heading: 'Live', types: ['live'] },
+  { key: 'compilations', heading: 'Compilations', types: ['compilation'] },
+  { key: 'soundtracks', heading: 'Soundtracks', types: ['soundtrack'] },
+];
+const shelves = SHELVES.map((s) => ({ ...s, items: albums.filter((a) => s.types.includes(a.type)) })).filter((s) => s.items.length > 0);
+const user = Astro.locals.user;
+const refreshed = Astro.url.searchParams.get('refreshed');
+
+// "Born 14 November 2000 (25) · Los Angeles". Their kind (person, group)
+// stays behind the scenes: it decides "Born" or "Formed", nothing more.
+const words = lifeWords(about.kind);
+const age = ageOf(about);
+const born = formatPartialDate(about.begin_date, about.begin_precision);
+const died = formatPartialDate(about.end_date, about.end_precision);
+const identity = [
+  born ? `${words.begin} ${born}${age !== null ? ` (${age})` : ''}` : null,
+  died ? `${words.end} ${died}` : null,
+  about.area,
+].filter(Boolean);
+// Names they go by. Search hints stay searchable but are often misspellings
+// ("Fleedwood Mac"), so they are shown only when they are a real name
+// MusicBrainz filed loosely: never for a group, and only alongside a legal name.
+const otherNames = about.aliases.filter((a) => a.kind !== 'search' || (about.kind === 'person' && about.aliases.some((b) => b.kind === 'legal')));
+const firstImage = images[0];
+// "Photo: Name, CC BY-SA 4.0 · Wikimedia Commons", without saying the source twice.
+const captionOf = (img: (typeof images)[number]) =>
+  [...new Set([[img.credit, img.licence].filter(Boolean).join(', '), ({ spotify: 'Spotify', wikimedia: 'Wikimedia Commons', deezer: 'Deezer', genius: 'Genius' } as Record<string, string>)[img.source] ?? ''])]
+    .filter(Boolean)
+    .join(' · ');
 
 // The wash behind the name: their best-rated album's cover, else the latest.
 const rated = albums.filter((a) => a.quality_score != null).sort((a, b) => b.quality_score! - a.quality_score!);
-const backdrop = (rated[0] ?? albums.at(-1))?.art_key ?? null;
+const backdrop = (rated[0] ?? albums[0])?.art_key ?? null;
 const scores = rated.map((a) => a.quality_score!);
 const average = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
 const years = albums.map((a) => yearOf(a.first_release_date)).filter((y): y is string => y !== null).sort();
-const span = years.length ? (years[0] === years.at(-1) ? years[0] : `${years[0]}–${years.at(-1)}`) : null;
+// Still going (something out in the last two years, not split or died):
+// "9 releases since 2019". Otherwise the closed span: "12 releases · 1975–1987".
+const thisYear = new Date().getUTCFullYear();
+const active = years.length > 0 && Number(years.at(-1)) >= thisYear - 2 && !about.end_date;
+const span = years.length
+  ? active
+    ? `since ${years[0]}`
+    : years[0] === years.at(-1)
+      ? years[0]
+      : `${years[0]}–${years.at(-1)}`
+  : null;
 
+// Their credits beyond being the artist, by kind, in a panel beside the best tracks.
+const otherRoles = appearances.filter((a) => a.family !== 'artist');
+const roleFamilies = groupCredits(otherRoles, (r) => r).map((g) => ({ name: g.name, roles: g.items }));
+const count = albums.length ? `${albums.length} ${albums.length === 1 ? 'release' : 'releases'}` : null;
 const facts = [
-  albums.length ? `${albums.length} ${albums.length === 1 ? 'release' : 'releases'}` : null,
-  span,
+  active && count ? `${count} ${span}` : count,
+  active && count ? null : span,
   average !== null ? `averaging ${average} across ${rated.length} rated` : null,
 ].filter(Boolean);
 ---
@@ -55,65 +128,231 @@ const facts = [
   <div class="wrap page">
     <Backdrop artKey={backdrop} height="30rem" />
 
-    <header class="hero">
-      <p class="eyebrow">Artist</p>
-      <h1>{artist.name}</h1>
-      {artist.disambiguation && <p class="muted">{artist.disambiguation}</p>}
-      {facts.length > 0 && <p class="facts">{facts.join(' · ')}</p>}
+    <header class:list={['hero', { 'with-portrait': images.length > 0 }]}>
       {
-        appearances.length > 0 && (
-          <ul class="roles" role="list" aria-label="Also credited as">
-            {appearances.map((a) => (
-              <li>
-                {roleLabel(a.role)} <span class="tabular">{a.count}</span>
-              </li>
-            ))}
-          </ul>
+        firstImage && (
+          <figure class="portrait" data-portrait>
+            <div class="frames" data-frames tabindex={images.length > 1 ? 0 : undefined} aria-label={images.length > 1 ? `Pictures of ${artist.name}` : undefined}>
+              {images.map((img, i) => (
+                <img
+                  src={`/${img.key}`}
+                  alt={i === 0 ? artist.name : `${artist.name}, picture ${i + 1}`}
+                  width={img.width ?? 800}
+                  height={img.height ?? 800}
+                  loading={i === 0 ? 'eager' : 'lazy'}
+                  decoding="async"
+                  data-credit={captionOf(img)}
+                  data-href={img.source_url ?? ''}
+                />
+              ))}
+            </div>
+            {
+              images.length > 1 && (
+                <div class="dots" data-dots hidden>
+                  {images.map((_, i) => (
+                    <button type="button" aria-label={`Picture ${i + 1} of ${images.length}`} aria-current={i === 0 ? 'true' : undefined} data-dot={i} />
+                  ))}
+                </div>
+              )
+            }
+            <figcaption class="credit">
+              <details data-menu>
+                <summary aria-label="Picture credit">
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <circle cx="8" cy="8" r="6.5" />
+                    <path d="M8 7.2v4M8 4.8v.1" />
+                  </svg>
+                </summary>
+                <p>
+                  <span data-caption>{captionOf(firstImage)}</span>
+                  {firstImage.source_url && (
+                    <>
+                      {' '}
+                      <a href={firstImage.source_url} data-caption-link rel="external noopener" target="_blank">
+                        Source<span class="visually-hidden"> (opens in a new tab)</span>
+                      </a>
+                    </>
+                  )}
+                </p>
+              </details>
+            </figcaption>
+          </figure>
         )
       }
+      <div class="hero-text">
+        <div class="who">
+        {
+          user && (
+            <details class="manage" data-manage data-menu>
+              <summary>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></svg>
+                Manage
+              </summary>
+              <form method="post" action="/api/write/artist/refresh" class="manage-menu">
+                <input type="hidden" name="id" value={artist.id} />
+                <a href={`/edit/artist/${artist.id}`}>Edit details, names and pictures</a>
+                <button type="submit">Refresh details and pictures</button>
+                {albums.length > 0 && (
+                  <button type="submit" formaction="/api/write/artist/catalogue" data-catalogue>
+                    Refresh all {albums.length} releases
+                  </button>
+                )}
+                {artist.mbid && (
+                  <a href={`/manage/import?${new URLSearchParams({ artist: `https://musicbrainz.org/artist/${artist.mbid}` })}#disco-heading`}>
+                    Import their discography
+                  </a>
+                )}
+              </form>
+            </details>
+          )
+        }
+        {refreshed === '1' && <p role="status" class="muted small">Updated.</p>}
+        {refreshed === 'failed' && <p role="alert" class="muted small">That lookup failed; try again shortly.</p>}
+        <p class="eyebrow">Artist</p>
+        <h1>{artist.name}</h1>
+        {
+          (identity.length > 0 || artist.disambiguation) && (
+            <p class="identity">{[...identity, artist.disambiguation].filter(Boolean).join(' · ')}</p>
+          )
+        }
+        {otherNames.length > 0 && <p class="muted aka">Also known as {otherNames.map((a) => a.name).join(', ')}</p>}
+        {
+          about.members.length > 0 && (
+            <p class="muted">
+              Members:{' '}
+              {about.members.map((m, i) => (
+                <>
+                  {i > 0 && ', '}
+                  <a href={`/artist/${m.id}`}>{m.name}</a>
+                </>
+              ))}
+            </p>
+          )
+        }
+        {
+          about.memberOf.length > 0 && (
+            <p class="muted">
+              Member of{' '}
+              {about.memberOf.map((m, i) => (
+                <>
+                  {i > 0 && ', '}
+                  <a href={`/artist/${m.id}`}>{m.name}</a>
+                </>
+              ))}
+            </p>
+          )
+        }
+        {
+          about.sameAs.length > 0 && (
+            <p class="muted">
+              Same person as{' '}
+              {about.sameAs.map((m, i) => (
+                <>
+                  {i > 0 && ', '}
+                  <a href={`/artist/${m.id}`}>{m.name}</a>
+                </>
+              ))}
+            </p>
+          )
+        }
+        {
+          genres.length > 0 && (
+            <ul class="genres" role="list" aria-label="Genres">
+              {genres.map((g) => (
+                <li>
+                  <a href={`/genre/${g.id}`}>{g.name}</a>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+        </div>
+        <div class="what">
+        {facts.length > 0 && <p class="facts">{facts.join(' · ')}</p>}
+      
+        </div>
+      </div>
     </header>
 
     {
-      topTracks.length > 0 && (
-        <section aria-labelledby="tracks-heading">
-          <h2 id="tracks-heading">Best tracks</h2>
-          <ol class="tracks" role="list">
-            {topTracks.map((t, i) => (
-              <li>
-                <span class="rank tabular" aria-hidden="true">
-                  {i + 1}
-                </span>
-                <span class="thumb">
-                  <CoverArt artKey={t.art_key} title={t.album_title ?? t.title} sizes="3rem" />
-                </span>
-                <span class="track-text">
-                  {t.album_id ? <a href={`/album/${t.album_id}`}>{t.title}</a> : <span>{t.title}</span>}
-                  {t.album_title && <span class="muted small">{t.album_title}</span>}
-                </span>
-                <Score quality={t.quality_score} personal={t.personal_score} size="m" />
-              </li>
-            ))}
-          </ol>
-        </section>
+      (topTracks.length > 0 || roleFamilies.length > 0) && (
+        <div class="pair">
+    {
+          topTracks.length > 0 && (
+            <section aria-labelledby="tracks-heading">
+              <h2 id="tracks-heading">Best tracks</h2>
+              <ol class="tracks" role="list">
+                {topTracks.map((t, i) => (
+                  <li>
+                    <span class="rank tabular" aria-hidden="true">
+                      {i + 1}
+                    </span>
+                    <span class="thumb">
+                      <CoverArt artKey={t.art_key} title={t.album_title ?? t.title} sizes="3rem" />
+                    </span>
+                    <span class="track-text">
+                      <a href={`/track/${t.id}`}>{t.title}</a>
+                      {t.album_title && (t.album_id ? <a class="muted small album-link" href={`/album/${t.album_id}`}>{t.album_title}</a> : <span class="muted small">{t.album_title}</span>)}
+                    </span>
+                    <Score ranked quality={t.quality_score} personal={t.personal_score} size="m" />
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )
+        }
+
+          {
+            roleFamilies.length > 0 && (
+              <section aria-labelledby="credits-heading" class="credits-panel">
+                <h2 id="credits-heading">Credited as</h2>
+                <dl>
+                  {roleFamilies.map((f) => (
+                    <div>
+                      <dt>{f.name}</dt>
+                      <dd>
+                        <ul role="list">
+                          {f.roles.map((r) => (
+                            <li>
+                              <a href={`/artist/${artist.id}/as/${r.role}`}>{r.label}</a>
+                              <span class="tabular">{r.count}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            )
+          }
+        </div>
       )
     }
 
-    <section aria-labelledby="albums-heading">
-      <h2 id="albums-heading">Releases</h2>
-      {
-        albums.length === 0 ? (
+    {
+      albums.length === 0 ? (
+        <section aria-labelledby="albums-heading">
+          <h2 id="albums-heading">Releases</h2>
           <p class="muted">No releases under this name in the catalogue.</p>
-        ) : (
-          <ul class="grid" role="list">
-            {albums.map((album) => (
-              <li>
-                <AlbumCard album={album} />
-              </li>
-            ))}
-          </ul>
-        )
-      }
-    </section>
+        </section>
+      ) : (
+        shelves.map((shelf) => (
+          <section aria-labelledby={`releases-${shelf.key}`}>
+            <h2 id={`releases-${shelf.key}`}>
+              {shelf.heading} <span class="count tabular">{shelf.items.length}</span>
+            </h2>
+            <ul class="grid" role="list">
+              {shelf.items.map((album) => (
+                <li>
+                  <AlbumCard album={album} />
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))
+      )
+    }
 
     {
       collaborators.length > 0 && (
@@ -145,19 +384,298 @@ const facts = [
   </div>
 </Base>
 
+<script>
+  // Queue the whole catalogue without leaving the page; the tray follows each album.
+  const catalogue = document.querySelector<HTMLButtonElement>('[data-catalogue]');
+  catalogue?.addEventListener('click', async (event) => {
+    const form = catalogue.form;
+    if (!form) return;
+    event.preventDefault();
+    catalogue.disabled = true;
+    const label = catalogue.textContent;
+    catalogue.textContent = 'Queueing…';
+    catalogue.closest('details')?.removeAttribute('open');
+    try {
+      const res = await fetch(catalogue.formAction, { method: 'POST', body: new FormData(form), headers: { accept: 'application/json' } });
+      const { albums } = (await res.json()) as { albums: { title: string; jobs: string[] }[] };
+      const jobs = albums.flatMap((album) =>
+        album.jobs.map((id, n) => ({ id, label: album.jobs.length > 1 ? `${album.title} (${n + 1} of ${album.jobs.length})` : album.title })),
+      );
+      window.dispatchEvent(new CustomEvent('job:watch', { detail: { jobs } }));
+      catalogue.textContent = albums.length ? `Queued ${albums.length} ${albums.length === 1 ? 'release' : 'releases'}` : 'Nothing to look up';
+    } catch {
+      form.action = catalogue.formAction;
+      form.submit();
+    }
+    window.setTimeout(() => {
+      catalogue.textContent = label;
+      catalogue.disabled = false;
+    }, 4000);
+  });
+</script>
+
+<script>
+  // The portrait is a strip of pictures: swipe it, tap a dot, or let it
+  // move along on its own. It slides; it never fades. It stops moving by
+  // itself once touched, and never moves under reduced motion.
+  const portrait = document.querySelector<HTMLElement>('[data-portrait]');
+  const strip = portrait?.querySelector<HTMLElement>('[data-frames]');
+  const frames = strip ? [...strip.querySelectorAll<HTMLImageElement>('img')] : [];
+  if (portrait && strip && frames.length > 1) {
+    const dots = [...portrait.querySelectorAll<HTMLButtonElement>('[data-dot]')];
+    portrait.querySelector<HTMLElement>('[data-dots]')!.hidden = false;
+    const caption = portrait.querySelector<HTMLElement>('[data-caption]');
+    const link = portrait.querySelector<HTMLAnchorElement>('[data-caption-link]');
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let current = 0;
+    let touched = false;
+
+    const show = (i: number) => {
+      current = i;
+      dots.forEach((d, n) => (n === i ? d.setAttribute('aria-current', 'true') : d.removeAttribute('aria-current')));
+      const frame = frames[i]!;
+      if (caption) caption.textContent = frame.dataset.credit ?? '';
+      if (link) {
+        link.hidden = !frame.dataset.href;
+        if (frame.dataset.href) link.href = frame.dataset.href;
+      }
+    };
+    const go = (i: number) => strip.scrollTo({ left: i * strip.clientWidth, behavior: still ? 'auto' : 'smooth' });
+
+    // The picture in view decides the dot and the credit, however it got there.
+    strip.addEventListener(
+      'scroll',
+      () => {
+        const i = Math.round(strip.scrollLeft / strip.clientWidth);
+        if (i !== current && frames[i]) show(i);
+      },
+      { passive: true },
+    );
+    dots.forEach((dot, i) =>
+      dot.addEventListener('click', () => {
+        touched = true;
+        go(i);
+      }),
+    );
+    for (const event of ['pointerdown', 'wheel', 'keydown'] as const) strip.addEventListener(event, () => (touched = true), { passive: true });
+    strip.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowRight') go(Math.min(current + 1, frames.length - 1));
+      if (event.key === 'ArrowLeft') go(Math.max(current - 1, 0));
+    });
+
+    if (!still) {
+      setInterval(() => {
+        if (touched || document.hidden || portrait.matches(':hover')) return;
+        go((current + 1) % frames.length);
+      }, 7000);
+    }
+  }
+</script>
+
 <style>
+  h2 .count {
+    margin-left: var(--space-1);
+    color: var(--text-subtle);
+    font-size: 0.6em;
+    font-weight: 700;
+    vertical-align: middle;
+  }
+
   .page {
     display: grid;
     gap: var(--space-7);
   }
 
+  /* The picture's top meets the eyebrow's, as the cover does on album
+     and track pages; dots and credit hang beneath it. */
   .hero {
     display: grid;
-    gap: var(--space-3);
+    gap: var(--space-5);
     padding-top: var(--space-6);
   }
 
+  /* As on album pages: the picture's top meets the eyebrow, and the text
+     splits so its last line (the buttons) meets the picture's bottom. If
+     the text runs longer, the picture simply stays at the top. */
+  @media (min-width: 48rem) {
+    .hero.with-portrait {
+      grid-template-columns: 20rem minmax(0, 1fr);
+      column-gap: var(--space-7);
+    }
+
+    .hero-text {
+      justify-content: space-between;
+    }
+  }
+
+  .hero-text {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    min-width: 0;
+  }
+
+  .who,
+  .what {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .portrait {
+    position: relative;
+    align-self: start;
+    width: min(20rem, 80vw);
+    margin: 0;
+  }
+
+  /* A strip of square pictures that snaps one at a time. */
+  .frames {
+    display: flex;
+    aspect-ratio: 1;
+    border-radius: var(--radius-l);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    background: var(--surface-2);
+    box-shadow:
+      0 2px 4px rgb(0 0 0 / 0.3),
+      0 24px 60px -12px rgb(0 0 0 / 0.55);
+  }
+
+  .frames::-webkit-scrollbar {
+    display: none;
+  }
+
+  .frames:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 3px;
+  }
+
+  .frames img {
+    flex: 0 0 100%;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: 50% 25%;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+  }
+
+  /* Dots sit on the picture, on a soft dark pill so they read on any photo. */
+  .dots {
+    position: absolute;
+    bottom: var(--space-3);
+    left: 50%;
+    display: flex;
+    gap: 0;
+    padding: 0 var(--space-1);
+    border-radius: 999px;
+    background: rgb(0 0 0 / 0.35);
+    translate: -50% 0;
+  }
+
+  .dots button {
+    display: grid;
+    place-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .dots button::before {
+    content: '';
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    background: #fff;
+    opacity: 0.55;
+    transition:
+      opacity 0.2s,
+      transform 0.2s;
+  }
+
+  .dots button[aria-current='true']::before {
+    opacity: 1;
+    transform: scale(1.3);
+  }
+
+  /* The credit is one tap away rather than always printed under the face. */
+  .credit {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    max-width: calc(100% - var(--space-4));
+  }
+
+  .credit summary {
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    margin-left: auto;
+    border-radius: 50%;
+    background: rgb(0 0 0 / 0.35);
+    color: #fff;
+    list-style: none;
+    cursor: pointer;
+    opacity: 0.7;
+  }
+
+  .credit summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .credit summary:hover,
+  .credit details[open] summary {
+    opacity: 1;
+  }
+
+  .credit svg {
+    width: 1rem;
+    height: 1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+  }
+
+  .credit p {
+    margin-top: var(--space-1);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-s);
+    background: rgb(0 0 0 / 0.72);
+    color: #fff;
+    font-size: 0.75rem;
+    line-height: 1.35;
+  }
+
+  .credit a {
+    color: inherit;
+  }
+
+  .identity {
+    color: var(--text-muted);
+    font-size: var(--step-0);
+  }
+
+  .aka {
+    font-style: italic;
+  }
+
+  .refresh {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  /* The tight display name hangs its descenders low: room beneath it. */
   h1 {
+    margin-bottom: var(--space-3);
     font-size: clamp(2.6rem, 1.4rem + 5vw, 5.5rem);
     font-weight: 850;
     letter-spacing: -0.045em;
@@ -167,7 +685,8 @@ const facts = [
 
   .facts {
     color: var(--text-muted);
-    font-size: var(--step-1);
+    font-size: var(--step-0);
+    font-weight: 500;
   }
 
   h2 {
@@ -184,7 +703,7 @@ const facts = [
     font-size: var(--step--1);
   }
 
-  .roles {
+  .genres {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
@@ -193,19 +712,88 @@ const facts = [
     list-style: none;
   }
 
-  .roles li {
-    padding: 0.25rem 0.75rem;
-    border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  .genres a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2rem;
+    padding: 0 0.85rem;
+    border: 1px solid var(--border);
     border-radius: 999px;
     background: color-mix(in srgb, var(--surface-1) 60%, transparent);
-    color: var(--text-muted);
+    color: var(--text);
     font-size: var(--step--1);
+    font-weight: 600;
+    text-decoration: none;
   }
 
-  .roles .tabular {
-    margin-left: 0.25em;
-    color: var(--text);
+  .genres a:hover {
+    border-color: var(--accent);
+  }
+
+  /* Best tracks and their credits side by side where there is room. */
+  .pair {
+    display: grid;
+    gap: var(--space-7);
+  }
+
+  @media (min-width: 60rem) {
+    .pair {
+      grid-template-columns: minmax(0, 1fr) 20rem;
+      align-items: start;
+    }
+  }
+
+  .credits-panel {
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .credits-panel h2 {
+    font-size: var(--step-1);
+    margin-bottom: var(--space-3);
+  }
+
+  .credits-panel dl {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0 0 var(--space-3);
+  }
+
+  .credits-panel dt {
+    margin-bottom: var(--space-1);
+    color: var(--text-subtle);
+    font-size: var(--step--1);
     font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .credits-panel dd {
+    margin: 0;
+  }
+
+  /* Each kind of credit is one wrapped run of roles, so the panel stays
+     about as tall as the best tracks beside it. */
+  .credits-panel ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .credits-panel li {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.35em;
+    white-space: nowrap;
+  }
+
+  .credits-panel li .tabular {
+    font-weight: 750;
   }
 
   .tracks {
@@ -307,5 +895,106 @@ const facts = [
 
   .external {
     color: var(--text-muted);
+  }
+
+  .track-text .album-link {
+    font-weight: 400;
+    text-decoration: none;
+  }
+
+  .track-text .album-link:hover {
+    text-decoration: underline;
+  }
+
+  /* Role links read as a list, not a row of underlines: the line shows on hover. */
+  .credits-panel li a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .credits-panel li a:hover,
+  .credits-panel li a:focus-visible {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+
+  /* Owner tools tucked into one menu, top right of the text. */
+  .hero-text {
+    position: relative;
+  }
+
+  .manage {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 5;
+  }
+
+  .manage summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 2.25rem;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface-1) 80%, transparent);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .manage summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .manage summary svg {
+    width: 1rem;
+    height: 1rem;
+    fill: currentColor;
+  }
+
+  .manage[open] summary,
+  .manage summary:hover {
+    color: var(--text);
+    border-color: var(--text-subtle);
+  }
+
+  .manage-menu {
+    position: absolute;
+    top: calc(100% + var(--space-2));
+    right: 0;
+    display: grid;
+    min-width: 16rem;
+    padding: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    box-shadow: 0 12px 32px -12px rgb(0 0 0 / 0.35);
+  }
+
+  .manage-menu a,
+  .manage-menu button {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    padding: 0 var(--space-3);
+    border: 0;
+    border-radius: var(--radius-s);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--step--1);
+    font-weight: 600;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .manage-menu a:hover,
+  .manage-menu button:hover {
+    background: var(--surface-2);
   }
 </style>

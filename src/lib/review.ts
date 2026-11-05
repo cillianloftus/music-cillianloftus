@@ -137,6 +137,22 @@ export async function findAnomalies(): Promise<Finding[]> {
       (x, y) => (x.id === y.id ? null : pair('near_duplicate_release_group', 'release_group', x.id, y.id)),
     ),
   );
+  // "Title: Subtitle" or "Title - Subtitle" beside plain "Title", by the
+  // same artist: "Opening Night: The Complete Score" and "Opening Night".
+  const head = (title: string) => {
+    const m = /^(.+?)\s*(?::|\s[-–—]\s)\s*\S/u.exec(title);
+    return m ? normaliseTitle(m[1]!) : null;
+  };
+  const groupRows = rows<Group>(groups);
+  for (const x of groupRows) {
+    const h = head(x.title);
+    if (!h) continue;
+    for (const y of groupRows) {
+      if (y.id !== x.id && y.artist_id === x.artist_id && normaliseTitle(y.title) === h) {
+        findings.push(pair('near_duplicate_release_group', 'release_group', x.id, y.id));
+      }
+    }
+  }
 
   const single = (kind: AnomalyKind, entity_type: EntityType) => (r: { id?: string; release_group_id?: string }) =>
     ({ kind, entity_type, entity_a: (r.id ?? r.release_group_id)!, entity_b: null }) satisfies Finding;
@@ -359,7 +375,7 @@ export async function reviewEntities(anomalies: Anomaly[]): Promise<Map<string, 
     map.set(text(r.id), {
       id: text(r.id),
       title: text(r.title),
-      href: r.album_id ? `/album/${r.album_id}` : null,
+      href: `/track/${r.id}`,
       detail: [r.artists, r.albums ? `on ${r.albums}` : 'on no release'].filter(Boolean).join(' · '),
       source: text(r.source),
       mbid: (r.mbid as string | null) ?? null,

@@ -1,6 +1,17 @@
 import { env } from 'cloudflare:workers';
 import { storeCoverArt } from '../import/coverart';
+import { findCover } from '../covers';
 import { attachFiles } from '../import/files';
+import { fetchArtistImages } from '../artist-images';
+import { enrichArtist } from '../artists';
+import { fillCreditsFromGenius } from '../genius';
+import { detectAnomalies } from '../review';
+import { fillFromDeezer } from '../sources/deezer';
+import { deriveAlbumGenres } from '../genres';
+import { ownerId } from '../auth/user';
+import { connection, spotifyFor } from '../spotify/client';
+import { linkAlbumsToSpotify } from '../spotify/link';
+import { fillFromSpotify } from '../spotify/fill';
 import { importFromSpotify } from '../import/spotify';
 import { planFromMusicBrainz } from '../import/musicbrainz';
 import { writePlan } from '../import/write';
@@ -8,10 +19,46 @@ import { pushDefinition } from '../spotify/push';
 import { runBackup } from '../backup/store';
 import { claimNext, complete, fail, type JobPayloads, type JobRow } from './queue';
 
+/**
+ * The album's own artists, looked up straight away (who they are, other
+ * names, pictures) so a new artist's page is complete from the start.
+ * Best effort: the import has already succeeded.
+ */
+async function enrichImportedArtists(releaseGroupId: string): Promise<void> {
+  // Its Spotify album too, when Spotify is connected, so the link is right from the start.
+  const owner = await ownerId();
+  if (owner && (await connection(owner))) {
+    await linkAlbumsToSpotify(spotifyFor(owner), { only: releaseGroupId }).catch((error) => console.warn('Spotify link after import failed', error));
+    await fillFromSpotify(spotifyFor(owner), releaseGroupId).catch((error) => console.warn('Spotify fill after import failed', error));
+  }
+  const { results } = await env.DB.prepare(
+    `SELECT a.id FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+     WHERE c.entity_type = 'release_group' AND c.entity_id = ? AND c.role = 'primary' AND a.enriched_at IS NULL`,
+  )
+    .bind(releaseGroupId)
+    .all<{ id: string }>();
+  for (const { id } of results) {
+    try {
+      await enrichArtist(id);
+      await fetchArtistImages(id);
+    } catch (error) {
+      console.warn('Artist enrichment after import failed', id, error);
+    }
+  }
+  // Writers MusicBrainz lacks, then a fresh look for lookalikes: the same
+  // song on another release ("dustcutter" here, "DUSTCUTTER" there) is
+  // raised for review straight away rather than at night.
+  await fillCreditsFromGenius({ albumId: releaseGroupId, budgetMs: 15_000 }).catch((error) => console.warn('Genius after import failed', error));
+  await fillFromDeezer(releaseGroupId).catch((error) => console.warn('Deezer after import failed', error));
+  await detectAnomalies().catch((error) => console.warn('Review check after import failed', error));
+  await deriveAlbumGenres().catch((error) => console.warn('Genre derivation after import failed', error));
+}
+
 async function importRelease(job: JobRow): Promise<void> {
   const payload = JSON.parse(job.payload_json) as JobPayloads['import_release'];
   if (payload.source === 'spotify') {
     const result = await importFromSpotify(payload.target);
+    await enrichImportedArtists(result.releaseGroupId);
     await complete(job.id, { ...payload, result: { releaseGroupId: result.releaseGroupId, via: result.via } }, 1);
     return;
   }
@@ -27,13 +74,16 @@ async function importRelease(job: JobRow): Promise<void> {
   const releaseGroupMbid = plan.releaseGroup.mbid;
   if (!hasArt?.art_key && releaseMbid && releaseGroupMbid) {
     try {
-      await storeCoverArt({ releaseId: result.releaseId, releaseMbid, releaseGroupMbid });
+      // Its own scan, then its Spotify cover, then the album-wide front.
+      (await storeCoverArt({ releaseId: result.releaseId, releaseMbid, releaseGroupMbid, groupFallback: false })) ??
+        (await findCover(result.releaseId, { replace: false }));
     } catch (error) {
       console.warn('Cover art failed', error);
     }
   }
 
   const filesAttached = payload.files?.length ? await attachFiles(result.releaseId, payload.files) : undefined;
+  await enrichImportedArtists(result.releaseGroupId);
 
   // The file list has done its job; keep the payload small.
   const { files: _files, ...rest } = payload;

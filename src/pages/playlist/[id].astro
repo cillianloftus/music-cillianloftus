@@ -18,6 +18,7 @@ const results = await runDefinition(saved.definition, {
   excludes: saved.excludes,
 });
 const user = Astro.locals.user;
+const artSrc = saved.art_mode === 'uploaded' && saved.art_key ? `/playlist/${saved.id}/cover.jpg` : `/playlist/${saved.id}/art.svg`;
 
 const noun = saved.definition.entity === 'recording' ? 'track' : saved.definition.entity === 'release_group' ? 'album' : 'artist';
 const totalMs = results.reduce((sum, r) => sum + ('length_ms' in r && typeof r.length_ms === 'number' ? r.length_ms : 0), 0);
@@ -33,41 +34,58 @@ const summary = [
 
 <Base title={saved.name} description={saved.description ?? undefined}>
   <div class="wrap page">
-    <Backdrop src={`/playlist/${saved.id}/art.svg`} height="32rem" />
+    <Backdrop src={artSrc} height="32rem" />
     <header>
-      <img
-        class="art"
-        src={`/playlist/${saved.id}/art.svg`}
-        alt=""
-        width="640"
-        height="640"
-        decoding="async"
-      />
+      <div class="art-col">
+        <img class="art" src={artSrc} alt="" width="640" height="640" decoding="async" />
+        {
+          user?.id === saved.user_id && (
+            <form method="post" action="/api/write/playlist/art" enctype="multipart/form-data" class="art-tools" data-art-form>
+              <input type="hidden" name="id" value={saved.id} />
+              <label class="art-pick">
+                <input type="file" name="cover" accept="image/*" data-art-input />
+                <span>{saved.art_mode === 'uploaded' ? 'Change cover' : 'Use your own cover'}</span>
+              </label>
+              {saved.art_mode === 'uploaded' && (
+                <button class="art-reset" type="submit" name="intent" value="generated" formnovalidate>
+                  Back to generated
+                </button>
+              )}
+            </form>
+          )
+        }
+      </div>
       <div class="intro">
-      <p class="eyebrow">Playlist · {saved.owner_name}</p>
-      <h1>{saved.name}</h1>
-      {saved.description && <p class="muted">{saved.description}</p>}
-      <p class="count tabular">{summary}</p>
-      <DefinitionChips definition={saved.definition} />
-      {
-        user?.id === saved.user_id && (
-          <p class="actions">
-            <a class="button" href={`/query?d=${encodeDefinition(saved.definition)}&saved=${saved.id}`}>Edit filters</a>
-            <a class="button button--quiet" href={`/edit/definition/${saved.id}`}>Edit as JSON</a>
-          </p>
-        )
-      }
+        <div class="titles">
+          <p class="eyebrow">Playlist · {saved.owner_name}</p>
+          <h1>{saved.name}</h1>
+          {saved.description && <p class="muted">{saved.description}</p>}
+          <p class="count tabular">{summary}</p>
+        </div>
+        <div class="rules">
+          <DefinitionChips definition={saved.definition} />
+          {
+            user?.id === saved.user_id && (
+              <p class="actions">
+                <a class="button" href={`/query?d=${encodeDefinition(saved.definition)}&saved=${saved.id}`}>Edit filters</a>
+                <a class="button button--quiet" href={`/edit/definition/${saved.id}`}>Edit as JSON</a>
+              </p>
+            )
+          }
+        </div>
       </div>
     </header>
 
     {
       user?.id === saved.user_id && (
-        <SpotifyPanel
-          definitionId={saved.id}
-          spotifyPlaylistId={saved.spotify_playlist_id}
-          entity={saved.definition.entity}
-          userId={user.id}
-        />
+        <div class="spotify-strip">
+          <SpotifyPanel
+            definitionId={saved.id}
+            spotifyPlaylistId={saved.spotify_playlist_id}
+            entity={saved.definition.entity}
+            userId={user.id}
+          />
+        </div>
       )
     }
 
@@ -78,6 +96,32 @@ const summary = [
         </p>
       )
     }
+
+    <script>
+      // A chosen cover is cropped square and resized here, then sent as JPEG.
+      const form = document.querySelector<HTMLFormElement>('[data-art-form]');
+      const input = form?.querySelector<HTMLInputElement>('[data-art-input]');
+      input?.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        if (!file || !form) return;
+        try {
+          const bitmap = await createImageBitmap(file);
+          const side = Math.min(bitmap.width, bitmap.height);
+          const canvas = document.createElement('canvas');
+          canvas.width = canvas.height = Math.min(640, side);
+          canvas.getContext('2d')!.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
+          const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+          if (!blob) return;
+          const body = new FormData();
+          body.set('id', form.querySelector<HTMLInputElement>('input[name=id]')!.value);
+          body.set('cover', blob, 'cover.jpg');
+          await fetch(form.action, { method: 'POST', body });
+          location.reload();
+        } catch {
+          form.submit();
+        }
+      });
+    </script>
 
     <section aria-label="Results">
       <ResultList results={results} />
@@ -97,29 +141,43 @@ const summary = [
     gap: var(--space-3);
   }
 
+  /* As on album pages: the cover's top meets the eyebrow, the rules and
+     buttons sit along its bottom edge, and Spotify follows under the text. */
   header {
     display: grid;
     gap: var(--space-5);
-    align-items: end;
-    padding-top: var(--space-4);
+    padding-top: var(--space-6);
   }
 
   .intro {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: var(--space-5);
+    min-width: 0;
+  }
+
+  .titles,
+  .rules {
     display: grid;
     gap: var(--space-3);
-    min-width: 0;
   }
 
   @media (min-width: 48rem) {
     header {
-      grid-template-columns: 16rem minmax(0, 1fr);
-      gap: var(--space-7);
+      grid-template-columns: 20rem minmax(0, 1fr);
+      column-gap: var(--space-7);
+      row-gap: var(--space-5);
+    }
+
+    .art-col {
+      align-self: start;
     }
   }
 
   /* Generated from the playlist's contents; decorative, as the list below says it all in words. */
   .art {
-    width: min(16rem, 64vw);
+    width: min(20rem, 72vw);
     height: auto;
     border-radius: var(--radius-m);
     box-shadow:
@@ -143,5 +201,62 @@ const summary = [
   .muted {
     color: var(--text-muted);
     max-width: 40rem;
+  }
+
+  .art-col {
+    display: grid;
+    gap: var(--space-3);
+    width: min(20rem, 100%);
+  }
+
+  .art-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .art-pick,
+  .art-reset {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.25rem;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--step--1);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .art-pick:hover,
+  .art-reset:hover {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .art-pick:focus-within {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .art-pick input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  /* Spotify as one slim strip across the page, under the header. */
+  .spotify-strip :global(.spotify) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-5);
+    padding: var(--space-3) var(--space-5);
   }
 </style>

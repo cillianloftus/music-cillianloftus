@@ -1,0 +1,65 @@
+---
+/** The once-in-a-blue-moon full refresh, behind one clear confirmation. */
+import { env } from 'cloudflare:workers';
+import Base from '../../layouts/Base.astro';
+
+const counts = await env.DB.prepare(
+  `SELECT (SELECT count(*) FROM release_group) AS albums,
+          (SELECT count(*) FROM release_group g WHERE g.spotify_id IS NOT NULL
+             OR EXISTS (SELECT 1 FROM release r WHERE r.release_group_id = g.id AND r.mbid IS NOT NULL)) AS sourced,
+          (SELECT count(*) FROM artist) AS artists`,
+).first<{ albums: number; sourced: number; artists: number }>();
+---
+
+<Base title="Refresh everything">
+  <div class="wrap page">
+    <h1>Refresh everything</h1>
+    <div class="card">
+      <p>
+        Looks every album up again at MusicBrainz, Spotify and Deezer ({counts?.sourced ?? 0} of {counts?.albums ?? 0} have a source), and every
+        one of the {counts?.artists ?? 0} artists again for their details, bio and pictures. Genius credits are asked for again too.
+      </p>
+      <ul>
+        <li>Only gaps are filled. Nothing you edited changes.</li>
+        <li>It runs in the background over a while; the Jobs page shows it, and Pause stops it.</li>
+        <li>Artists and credits follow over the next nights, a batch at a time.</li>
+      </ul>
+      <form method="post" action="/api/write/refresh-all">
+        <input type="hidden" name="confirm" value="yes" />
+        <button class="button button--primary" type="submit">Refresh all {counts?.albums ?? 0} albums</button>
+        <a class="button button--quiet" href="/manage">Not now</a>
+      </form>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+    --content-max: 40rem;
+  }
+
+  .card {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  ul {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding-left: 1.2rem;
+    color: var(--text-muted);
+  }
+
+  form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+</style>

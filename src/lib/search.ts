@@ -60,7 +60,8 @@ export async function search(input: string, viewerId: string | null): Promise<Se
     ranked('release_group'),
     ranked('recording'),
   ]);
-  const ids = (result: D1Result<{ entity_id: string }> | undefined) => result?.results.map((r) => r.entity_id) ?? [];
+  // An artist can match by name and by an alias: keep each once, at its best rank.
+  const ids = (result: D1Result<{ entity_id: string }> | undefined) => [...new Set(result?.results.map((r) => r.entity_id) ?? [])];
 
   // Searching for an artist should find their records too, not only titles
   // that happen to contain the name: the top artists' albums follow the

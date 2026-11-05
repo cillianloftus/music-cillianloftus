@@ -1,0 +1,211 @@
+---
+/**
+ * Everything an artist is credited with in one role ("Quadeca, as writer"),
+ * album by album, newest first, each track with its score. Reached from the
+ * "Credited as" panel on their page.
+ */
+import { env } from 'cloudflare:workers';
+import Base from '../../../../layouts/Base.astro';
+import CoverArt from '../../../../components/CoverArt.astro';
+import Score from '../../../../components/Score.astro';
+import { ownerId } from '../../../../lib/auth/user';
+import { artist as artistById, artistLines } from '../../../../lib/catalogue';
+import { formatDuration } from '../../../../lib/format';
+import CreditLine from '../../../../components/CreditLine.astro';
+
+const { id, role } = Astro.params as { id: string; role: string };
+const [found, roleRow] = await Promise.all([
+  artistById(id),
+  env.DB.prepare(`SELECT id, label FROM credit_role WHERE id = ?`).bind(role).first<{ id: string; label: string }>(),
+]);
+if (!found || !roleRow) return Astro.rewrite('/404');
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+
+// Their credited tracks, each under the album it belongs to.
+const { results } = await env.DB.prepare(
+  `SELECT r.id, coalesce(t.title_on_release, r.title) AS title, r.length_ms, t.disc, t.position,
+          g.id AS album_id, g.title AS album_title, g.first_release_date AS album_date, x.art_key,
+          s.quality_score, s.personal_score
+   FROM artist_credit c
+   JOIN recording r ON r.id = c.entity_id
+   LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
+   LEFT JOIN release_group g ON g.id = ra.release_group_id
+   LEFT JOIN v_release_group_canonical v ON v.release_group_id = g.id
+   LEFT JOIN release x ON x.id = v.release_id
+   LEFT JOIN track t ON t.release_id = v.release_id AND t.recording_id = r.id
+   LEFT JOIN v_recording_score s ON s.recording_id = r.id AND s.user_id = ?3
+   WHERE c.entity_type = 'recording' AND c.artist_id = ?1 AND c.role = ?2
+   -- The album's own order; tracks only on another edition (a deluxe's
+   -- extras) follow, in that edition's order.
+   ORDER BY g.first_release_date IS NULL, g.first_release_date DESC, g.title,
+            t.position IS NULL, t.disc, t.position,
+            (SELECT min(t3.disc * 1000 + t3.position) FROM track t3 JOIN release x3 ON x3.id = t3.release_id
+             WHERE x3.release_group_id = g.id AND t3.recording_id = r.id),
+            r.title`,
+)
+  .bind(id, role, viewerId)
+  .all<{
+    id: string;
+    title: string;
+    length_ms: number | null;
+    album_id: string | null;
+    album_title: string | null;
+    album_date: string | null;
+    art_key: string | null;
+    quality_score: number | null;
+    personal_score: number | null;
+  }>();
+
+const lines = await artistLines('recording', results.map((r) => r.id));
+type Row = (typeof results)[number];
+const albums: { id: string | null; title: string; year: string | null; artKey: string | null; tracks: Row[] }[] = [];
+for (const row of results) {
+  const last = albums.at(-1);
+  if (last && last.id === row.album_id) last.tracks.push(row);
+  else albums.push({ id: row.album_id, title: row.album_title ?? 'Not on an album', year: row.album_date?.slice(0, 4) ?? null, artKey: row.art_key, tracks: [row] });
+}
+const rated = results.filter((r) => r.quality_score != null);
+const average = rated.length ? Math.round(rated.reduce((sum, r) => sum + r.quality_score!, 0) / rated.length) : null;
+const label = roleRow.label.toLowerCase();
+---
+
+<Base title={`${found.name} as ${label}`} description={`Every track ${found.name} is credited on as ${label}.`}>
+  <div class="wrap page">
+    <header class="head">
+      <p class="eyebrow"><a href={`/artist/${found.id}`}>{found.name}</a></p>
+      <h1>As {label}</h1>
+      <p class="facts">
+        {results.length} {results.length === 1 ? 'track' : 'tracks'} on {albums.length} {albums.length === 1 ? 'release' : 'releases'}
+        {average !== null && <> · averaging {average} across {rated.length} rated</>}
+      </p>
+    </header>
+
+    {
+      albums.map((album) => (
+        <section class="album" aria-label={album.title}>
+          <header class="album-head">
+            <span class="thumb">
+              <CoverArt artKey={album.artKey} title={album.title} sizes="3.5rem" />
+            </span>
+            <div>
+              {album.id ? <a class="album-title" href={`/album/${album.id}`}>{album.title}</a> : <span class="album-title">{album.title}</span>}
+              {album.year && <span class="muted">{album.year}</span>}
+            </div>
+          </header>
+          <ol role="list" class="tracks">
+            {album.tracks.map((t) => (
+              <li>
+                <span class="track-text">
+                  <a href={`/track/${t.id}`}>{t.title}</a>
+                  {/* The artist line only when it says more than "them". */}
+                  {(lines.get(t.id) ?? []).some((c) => c.artist_id !== found.id) && (
+                    <span class="muted small">
+                      <CreditLine credits={lines.get(t.id) ?? []} />
+                    </span>
+                  )}
+                </span>
+                <span class="muted small tabular">{t.length_ms ? formatDuration(t.length_ms) : ''}</span>
+                <Score ranked quality={t.quality_score} personal={t.personal_score} size="s" quietWhenEmpty />
+              </li>
+            ))}
+          </ol>
+        </section>
+      ))
+    }
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    --content-max: 48rem;
+  }
+
+  .head {
+    display: grid;
+    gap: var(--space-2);
+    padding-top: var(--space-5);
+  }
+
+  .eyebrow a {
+    color: inherit;
+  }
+
+  .facts,
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  .album {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .album-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .album-head > div {
+    display: grid;
+  }
+
+  .thumb {
+    flex: none;
+    width: 3.5rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .album-title {
+    font-size: var(--step-1);
+    font-weight: 750;
+    text-decoration: none;
+  }
+
+  a.album-title:hover {
+    text-decoration: underline;
+  }
+
+  .tracks {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .tracks li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 4.5rem;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tracks li > :global(.score) {
+    justify-self: end;
+  }
+
+  .track-text {
+    display: grid;
+    min-width: 0;
+  }
+
+  .track-text a {
+    overflow: hidden;
+    font-weight: 650;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .track-text a:hover {
+    text-decoration: underline;
+  }
+</style>

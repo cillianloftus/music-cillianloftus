@@ -19,15 +19,11 @@ export type ReleaseGroupType =
   | 'soundtrack'
   | 'live';
 
-export type CreditRole =
-  | 'primary'
-  | 'featured'
-  | 'remixer'
-  | 'producer'
-  | 'writer'
-  | 'engineer'
-  | 'performer'
-  | 'mixer';
+/**
+ * A credit_role id (migration 0018). Roles are data: the built-in ones are
+ * seeded, and more can be added from the app, so this is not a closed list.
+ */
+export type CreditRole = string;
 
 export type CreditEntity = 'release_group' | 'release' | 'recording';
 
@@ -87,6 +83,8 @@ export interface PlanRelease {
   label: string | null;
   format: string | null;
   spotify_id?: string | null;
+  /** UPC/EAN, digits only. */
+  barcode?: string | null;
 }
 
 export interface PlanTrack {

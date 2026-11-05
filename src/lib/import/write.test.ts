@@ -108,6 +108,34 @@ describe('writePlan', () => {
     });
   });
 
+  it('recognises an artist first imported from Spotify, and gives it the MusicBrainz id', async () => {
+    db.prepare(`INSERT INTO artist (id, name, sort_name, spotify_id, source) VALUES ('from-spotify', 'artist', 'Artist', 'sp-1', 'spotify')`).run();
+    await writePlan(plan());
+    expect(db.prepare(`SELECT id, mbid, spotify_id FROM artist`).all()).toEqual([{ id: 'from-spotify', mbid: 'm-artist', spotify_id: 'sp-1' }]);
+  });
+
+  it('never joins two artists whose MusicBrainz ids differ, whatever their names', async () => {
+    db.prepare(`INSERT INTO artist (id, name, sort_name, mbid, source) VALUES ('other', 'Artist', 'Artist', 'another-mbid', 'musicbrainz')`).run();
+    await writePlan(plan());
+    expect(count('artist')).toBe(2);
+  });
+
+  it('keeps the credits of a track edited by hand exactly as they are', async () => {
+    await writePlan(plan());
+    const rec = db.prepare(`SELECT id FROM recording WHERE mbid = 'm-rec2'`).get()!.id as string;
+    db.prepare(`INSERT INTO app_user (id, email, display_name, is_owner) VALUES ('u', 'u@example.com', 'U', 1)`).run();
+    db.prepare(`INSERT INTO field_override (entity_type, entity_id, field, value_json, user_id) VALUES ('recording', ?, 'credits', 'true', 'u')`).run(rec);
+    await writePlan(plan({ credits: [...plan().credits, { entity: 'recording', entity_key: 'm-rec2', artist_key: 'm-artist', role: 'writer', position: 1, credited_as: null, join_phrase: '' }] }));
+    expect(db.prepare(`SELECT count(*) AS n FROM artist_credit WHERE entity_id = ?`).get(rec)).toEqual({ n: 0 });
+  });
+
+  it('titles a recording as its release styles it, when only the capitals differ', async () => {
+    const p = plan();
+    p.tracks = [{ ...p.tracks[0]!, title_on_release: 'ONE' }, { ...p.tracks[1]!, title_on_release: 'Two (Live)' }];
+    await writePlan(p);
+    expect(db.prepare(`SELECT title FROM recording ORDER BY mbid`).all()).toEqual([{ title: 'ONE' }, { title: 'Two' }]);
+  });
+
   it('writes nothing when any part fails', async () => {
     const broken = plan({
       tracks: [{ recording_key: 'm-rec1', disc: 1, position: 0, title_on_release: null }], // position must be >= 1

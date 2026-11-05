@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { addRating, ratingInput, safeReturnPath } from '../../../lib/ratings';
+import { addRating, ratingFormFields, ratingInput, safeReturnPath } from '../../../lib/ratings';
 
 /**
  * Appends a rating. A plain form post, so rating works before (and without)
@@ -8,7 +8,7 @@ import { addRating, ratingInput, safeReturnPath } from '../../../lib/ratings';
 export const POST: APIRoute = async ({ request, redirect, locals }) => {
   const user = locals.user!; // Guaranteed by middleware on /api/write.
   const form = Object.fromEntries(await request.formData());
-  const parsed = ratingInput.safeParse(form);
+  const parsed = ratingInput.safeParse(ratingFormFields(form));
 
   const ratePage =
     typeof form.entity_type === 'string' && typeof form.entity_id === 'string'

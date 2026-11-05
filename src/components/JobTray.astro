@@ -1,0 +1,536 @@
+---
+/**
+ * A small tray in the corner that follows imports while Cillian carries on
+ * (queues more, or browses away: the list survives page loads in session
+ * storage). A finished import says so and leaves on its own; a failed one
+ * stays, with a way to the job to sort it out.
+ *
+ * Pages add to it with: dispatchEvent(new CustomEvent('job:watch', { detail: { id, label } })),
+ * or a whole batch at once with { detail: { jobs: [{ id, label }, …] } }.
+ *
+ * The oldest sits nearest the corner; as cards leave, the rest slide down
+ * into the space. More than a few at once (a whole catalogue) become one
+ * card with a count and a bar, with the list one tap away; failures always
+ * show on their own.
+ */
+---
+
+<job-tray>
+  <section class="tray" aria-label="Imports" hidden>
+    <div class="summary item" data-summary hidden>
+      <span class="icon" aria-hidden="true"></span>
+      <div class="text">
+        <span class="title" data-summary-title></span>
+        <span class="line" data-summary-line></span>
+        <span class="bar" aria-hidden="true"><span data-summary-bar></span></span>
+      </div>
+      <button type="button" class="toggle" data-summary-toggle aria-expanded="false">Show all</button>
+    </div>
+    <ol role="list" class="list"></ol>
+  </section>
+  <p class="visually-hidden" role="status" aria-live="polite"></p>
+</job-tray>
+
+<script>
+  type Item = { id: string; label: string; status: string; error?: string | null; albumId?: string | null; albumTitle?: string | null; doneAt?: number };
+  const KEY = 'job-tray';
+  /** How long a finished import stays; longer while the pointer or focus is on the tray. */
+  const LINGER_MS = 12000;
+  /** Beyond this many at once, one summary card stands for them. */
+  const MAX_CARDS = 4;
+  const DONE_KEY = 'job-tray-done';
+
+  class JobTray extends HTMLElement {
+    items: Item[] = [];
+    timer: number | undefined;
+
+    connectedCallback() {
+      try {
+        this.items = JSON.parse(sessionStorage.getItem(KEY) ?? '[]') as Item[];
+      } catch {
+        this.items = [];
+      }
+      // A finished import seen on the last page stays for the rest of its
+      // time here rather than vanishing on the page change.
+      this.items = this.items.filter((i) => i.status !== 'done' || (i.doneAt && Date.now() - i.doneAt < LINGER_MS));
+      for (const i of this.items) if (i.status === 'done') this.leaveLater(i.id, LINGER_MS - (Date.now() - i.doneAt!));
+      window.addEventListener('job:watch', (event) => {
+        const detail = (event as CustomEvent<{ id?: string; label?: string; jobs?: { id: string; label: string }[] }>).detail;
+        const jobs = detail.jobs ?? (detail.id ? [{ id: detail.id, label: detail.label ?? 'Import' }] : []);
+        if (jobs.length === 0) return;
+        if (this.items.length === 0) this.setDone(0);
+        for (const { id, label } of jobs) {
+          this.items.push({ id, label, status: 'queued' });
+          if (jobs.length <= MAX_CARDS) this.fresh.add(id);
+        }
+        this.announce(jobs.length === 1 ? `Importing ${jobs[0]!.label}.` : `Importing ${jobs.length} releases.`);
+        // Many events in a row (a page that sends one per job) still cost one render.
+        this.update();
+      });
+      this.querySelector('[data-summary-toggle]')?.addEventListener('click', () => {
+        this.expanded = !this.expanded;
+        this.render();
+      });
+      this.render();
+      this.poll();
+    }
+
+    expanded = false;
+    paused = false;
+    frame = 0;
+
+    /** Saves, draws and polls once per frame, however many changes asked for it. */
+    update() {
+      if (this.frame) return;
+      this.frame = requestAnimationFrame(() => {
+        this.frame = 0;
+        this.save();
+        this.render();
+        this.poll();
+      });
+    }
+
+    /** Finished in this batch, including ones already gone from view. */
+    doneCount(): number {
+      try {
+        return Number(sessionStorage.getItem(DONE_KEY) ?? 0);
+      } catch {
+        return this.done;
+      }
+    }
+
+    done = 0;
+
+    setDone(n: number) {
+      this.done = n;
+      try {
+        sessionStorage.setItem(DONE_KEY, String(n));
+      } catch {
+        /* In memory only. */
+      }
+    }
+
+    save() {
+      try {
+        sessionStorage.setItem(KEY, JSON.stringify(this.items));
+      } catch {
+        /* Storage unavailable: the tray still works for this page. */
+      }
+    }
+
+    announce(text: string) {
+      const live = this.querySelector('[role="status"]');
+      if (live) live.textContent = text;
+    }
+
+    poll() {
+      window.clearTimeout(this.timer);
+      const pending = this.items.filter((i) => i.status === 'queued' || i.status === 'running');
+      if (pending.length === 0) return;
+      this.timer = window.setTimeout(async () => {
+        try {
+          // The queue runs oldest first, so the oldest hundred are where news will be.
+          const res = await fetch('/api/write/jobs/status', {
+            method: 'POST',
+            headers: { accept: 'application/json', 'content-type': 'application/json' },
+            body: JSON.stringify({ ids: pending.slice(0, 100).map((i) => i.id) }),
+          });
+          const { jobs, paused } = (await res.json()) as {
+            jobs: { id: string; status: string; error: string | null; album_id: string | null; album_title: string | null }[];
+            paused?: boolean;
+          };
+          if (Boolean(paused) !== this.paused) {
+            this.paused = Boolean(paused);
+            this.nodes.forEach((node) => delete node.dataset.key);
+            this.render();
+          }
+          const byId = new Map(this.items.map((i) => [i.id, i]));
+          let finished = 0;
+          for (const job of jobs) {
+            const item = byId.get(job.id);
+            if (!item || item.status === job.status) continue;
+            item.status = job.status;
+            item.error = job.error;
+            item.albumId = job.album_id;
+            item.albumTitle = job.album_title;
+            if (job.status === 'done') {
+              item.doneAt = Date.now();
+              finished++;
+              this.announce(`Imported ${job.album_title ?? item.label}.`);
+              // In a big batch the summary counts it and clears with the rest.
+              if (this.items.length <= MAX_CARDS) this.leaveLater(item.id);
+            } else if (job.status === 'failed') {
+              this.announce(`Import of ${item.label} failed.`);
+            }
+          }
+          if (finished) this.setDone(this.doneCount() + finished);
+          this.save();
+          this.render();
+        } catch {
+          /* Offline for a moment: try again on the next tick. */
+        }
+        this.poll();
+      }, 1500);
+    }
+
+    dismiss(id: string) {
+      this.items = this.items.filter((i) => i.id !== id);
+      this.save();
+      this.render();
+    }
+
+    /** Dismisses a finished card after a while, but never from under the pointer or keyboard focus. */
+    leaveLater(id: string, after = LINGER_MS) {
+      window.setTimeout(() => {
+        const tray = this.querySelector('.tray');
+        if (tray && (tray.matches(':hover') || tray.contains(document.activeElement))) this.leaveLater(id);
+        else this.dismiss(id);
+      }, Math.max(1000, after));
+    }
+
+    /** Cards by job, updated in place: rebuilding them restarted the spinner and the slide-in. */
+    nodes = new Map<string, HTMLLIElement>();
+    fresh = new Set<string>();
+
+    render() {
+      const tray = this.querySelector<HTMLElement>('.tray')!;
+      const list = this.querySelector<HTMLElement>('.list')!;
+      tray.hidden = this.items.length === 0;
+      if (this.items.length === 0) this.expanded = false;
+
+      const grouped = this.items.length > MAX_CARDS;
+      // Expanded, a catalogue shows its first two hundred at most: enough to
+      // scroll, never so many the page stalls drawing them.
+      const shown = (grouped && !this.expanded ? this.items.filter((i) => i.status === 'failed') : this.items).slice(0, 200);
+      // Measuring every card forces layout; only worth it for a handful.
+      const glide = this.nodes.size <= MAX_CARDS * 2 && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+      // Where each card is now, to slide the survivors into place after.
+      const before = glide ? new Map([...this.nodes].map(([id, node]) => [id, node.getBoundingClientRect().top])) : new Map<string, number>();
+      this.renderSummary(grouped);
+      list.classList.toggle('scroll', grouped && this.expanded);
+
+      const showing = new Set(shown.map((i) => i.id));
+      for (const [id, node] of this.nodes) {
+        if (!showing.has(id)) {
+          node.remove();
+          this.nodes.delete(id);
+        }
+      }
+
+      let previous: HTMLLIElement | null = null;
+      for (const item of shown) {
+        let li = this.nodes.get(item.id);
+        if (!li) {
+          li = document.createElement('li');
+          li.className = 'item';
+          // Only a card added just now slides in; ones carried over from the last page simply appear.
+          if (this.fresh.delete(item.id)) li.classList.add('arriving');
+          this.nodes.set(item.id, li);
+        }
+        // Oldest first in the list, which is drawn bottom-up. Moved only when out of place.
+        const after: Element | null = previous ? previous.nextElementSibling : list.firstElementChild;
+        if (after !== li) list.insertBefore(li, after);
+        previous = li;
+        const phase = item.status === 'queued' || item.status === 'running' ? 'working' : item.status;
+        const key = `${phase}|${this.paused}|${item.albumTitle ?? ''}|${item.error ?? ''}`;
+        if (li.dataset.key !== key) {
+          li.dataset.key = key;
+          li.dataset.status = item.status;
+          this.fill(li, item);
+        }
+      }
+      this.fresh.clear();
+
+      // Cards that moved (one beneath them left) glide to their new place.
+      if (glide) {
+        for (const [id, node] of this.nodes) {
+          const was = before.get(id);
+          if (was === undefined) continue;
+          const shift = was - node.getBoundingClientRect().top;
+          if (Math.abs(shift) > 1) node.animate([{ transform: `translateY(${shift}px)` }, { transform: 'none' }], { duration: 220, easing: 'ease-out' });
+        }
+      }
+    }
+
+    clearing = false;
+
+    renderSummary(grouped: boolean) {
+      const card = this.querySelector<HTMLElement>('[data-summary]')!;
+      card.hidden = !grouped;
+      if (!grouped) return;
+      const working = this.items.filter((i) => i.status === 'queued' || i.status === 'running').length;
+      const failed = this.items.filter((i) => i.status === 'failed').length;
+      const done = this.doneCount();
+      const total = done + working + failed;
+      card.dataset.status = working > 0 ? 'running' : failed > 0 ? 'failed' : 'done';
+      this.querySelector('[data-summary-title]')!.textContent =
+        working > 0 ? `${this.paused ? 'Paused' : 'Importing'} ${total}` : `Imported ${done} of ${total}`;
+      // All done: the summary goes after a while, as a single card would.
+      if (working === 0 && failed === 0 && !this.clearing) {
+        this.clearing = true;
+        window.setTimeout(() => {
+          this.clearing = false;
+          if (this.items.every((i) => i.status === 'done')) {
+            this.items = [];
+            this.save();
+            this.render();
+          }
+        }, LINGER_MS);
+      }
+      this.querySelector('[data-summary-line]')!.textContent = [
+        `${done} done`,
+        working ? `${working} to go` : null,
+        failed ? `${failed} failed` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      this.querySelector<HTMLElement>('[data-summary-bar]')!.style.inlineSize = `${total ? Math.round((done / total) * 100) : 0}%`;
+      const toggle = this.querySelector<HTMLButtonElement>('[data-summary-toggle]')!;
+      toggle.textContent = this.expanded ? 'Hide' : 'Show all';
+      toggle.setAttribute('aria-expanded', String(this.expanded));
+    }
+
+    fill(li: HTMLLIElement, item: Item) {
+      const icon = document.createElement('span');
+      icon.className = 'icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = item.status === 'done' ? '✓' : item.status === 'failed' ? '!' : '';
+
+      const text = document.createElement('div');
+      text.className = 'text';
+      const title = document.createElement(item.status === 'done' && item.albumId ? 'a' : 'span');
+      title.className = 'title';
+      title.textContent = item.albumTitle ?? item.label;
+      if (title instanceof HTMLAnchorElement) title.href = `/album/${item.albumId}`;
+      const line = document.createElement('span');
+      line.className = 'line';
+      line.textContent =
+        item.status === 'done'
+          ? 'Imported'
+          : item.status === 'failed'
+            ? (item.error ?? 'Failed').slice(0, 140)
+            : this.paused && item.status === 'queued'
+              ? 'Paused'
+              : 'Importing…';
+      text.appendChild(title);
+      text.appendChild(line);
+
+      const parts: HTMLElement[] = [icon, text];
+      if (item.status === 'failed') {
+        const go = document.createElement('a');
+        go.className = 'go';
+        go.href = `/manage/jobs#job-${item.id}`;
+        go.textContent = 'Sort it out';
+        parts.push(go);
+      }
+      if (item.status === 'done' || item.status === 'failed') {
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'close';
+        close.setAttribute('aria-label', `Dismiss ${item.albumTitle ?? item.label}`);
+        close.textContent = '×';
+        close.addEventListener('click', () => this.dismiss(item.id));
+        parts.push(close);
+      }
+      li.replaceChildren(...parts);
+    }
+  }
+  customElements.define('job-tray', JobTray);
+</script>
+
+<style>
+  /* Drawn from the corner up: the summary nearest it, then the oldest card. */
+  .tray {
+    position: fixed;
+    right: max(var(--gutter), env(safe-area-inset-right));
+    bottom: max(var(--space-4), env(safe-area-inset-bottom));
+    z-index: 50;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: var(--space-2);
+    width: min(22rem, calc(100vw - 2 * var(--gutter)));
+  }
+
+  .tray[hidden] {
+    display: none;
+  }
+
+  .list {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .list.scroll {
+    max-height: min(50vh, 28rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--space-1);
+    margin: calc(var(--space-1) * -1);
+  }
+
+  .summary[hidden] {
+    display: none !important;
+  }
+
+  .tray :global(.bar) {
+    display: block;
+    height: 4px;
+    margin-top: var(--space-2);
+    border-radius: 999px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  .tray :global(.bar > span) {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--accent);
+    transition: inline-size 0.4s ease;
+  }
+
+  .toggle {
+    min-height: 2.25rem;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--step--1);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .tray :global(.item),
+  .summary {
+    display: grid;
+    grid-template-columns: 1.5rem minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-2) var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+  }
+
+  .tray :global(.item.arriving) {
+    animation: arrive 0.25s ease-out;
+  }
+
+  .tray :global(.item[data-status='failed']) {
+    border-color: var(--danger);
+  }
+
+  .tray :global(.icon) {
+    display: grid;
+    place-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    font-size: var(--step--1);
+    font-weight: 800;
+  }
+
+  /* Waiting and running: a turning ring. */
+  .tray :global(.item[data-status='queued'] .icon),
+  .tray :global(.item[data-status='running'] .icon),
+  .summary[data-status='running'] .icon {
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    animation: turn 0.9s linear infinite;
+  }
+
+  .summary[data-status='done'] .icon::after {
+    content: '✓';
+  }
+
+  .summary[data-status='failed'] .icon::after {
+    content: '!';
+  }
+
+  .summary[data-status='failed'] .icon {
+    background: var(--danger);
+    color: var(--bg);
+  }
+
+  .summary[data-status='done'] .icon,
+  .tray :global(.item[data-status='done'] .icon) {
+    background: var(--accent);
+    color: var(--bg);
+  }
+
+  .tray :global(.item[data-status='failed'] .icon) {
+    background: var(--danger);
+    color: var(--bg);
+  }
+
+  .tray :global(.text) {
+    display: grid;
+    min-width: 0;
+  }
+
+  .tray :global(.title) {
+    overflow: hidden;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tray :global(.line) {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .tray :global(.go) {
+    font-size: var(--step--1);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .tray :global(.close) {
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-muted);
+    font-size: 1.2rem;
+    cursor: pointer;
+  }
+
+  .tray :global(.close:hover) {
+    background: var(--surface-2);
+  }
+
+  @keyframes turn {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+
+  @keyframes arrive {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tray :global(.item.arriving) {
+      animation: none;
+    }
+
+    .tray :global(.item[data-status='queued'] .icon),
+    .tray :global(.item[data-status='running'] .icon) {
+      animation-duration: 3s;
+    }
+  }
+</style>

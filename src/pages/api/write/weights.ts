@@ -12,7 +12,7 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
 
   if (form.intent === 'activate') {
     const ok = typeof form.id === 'string' && (await activateVersion(user.id, form.id));
-    return redirect(ok ? '/edit/weights?saved=activated' : '/edit/weights?error=version', 303);
+    return redirect(ok ? '/manage/weights?saved=activated' : '/manage/weights?error=version', 303);
   }
 
   const parsed = weightsForm.safeParse(form);
@@ -20,8 +20,8 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
     const params = new URLSearchParams(Object.entries(form).filter((e): e is [string, string] => typeof e[1] === 'string'));
     params.delete('intent');
     params.set('error', parsed.error.issues[0]?.message ?? 'Those weights could not be saved.');
-    return redirect(`/edit/weights?${params}`, 303);
+    return redirect(`/manage/weights?${params}`, 303);
   }
   const version = await saveWeights(user.id, parsed.data);
-  return redirect(`/edit/weights?saved=${version}`, 303);
+  return redirect(`/manage/weights?saved=${version}`, 303);
 };

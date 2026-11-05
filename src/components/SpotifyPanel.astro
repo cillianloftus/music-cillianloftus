@@ -42,11 +42,11 @@ const canPush = entity === 'recording' && configured && status && status.days_le
       <p class="muted">Only track playlists can be pushed to Spotify.</p>
     ) : !configured || !status ? (
       <p class="muted">
-        <a href="/edit/spotify">Connect Spotify</a> to push this playlist.
+        <a href="/manage/spotify">Connect Spotify</a> to push this playlist.
       </p>
     ) : status.days_left <= 0 ? (
       <p class="muted">
-        The Spotify authorisation has expired. <a href="/edit/spotify">Reconnect</a> to push again.
+        The Spotify authorisation has expired. <a href="/manage/spotify">Reconnect</a> to push again.
       </p>
     ) : null
   }
@@ -68,7 +68,7 @@ const canPush = entity === 'recording' && configured && status && status.days_le
       job?.status === 'failed' && (
         <p class="error">
           The last push failed: {job.error}{' '}
-          {job.error?.includes('/edit/spotify') && <a href="/edit/spotify">Reconnect</a>}
+          {job.error?.includes('/manage/spotify') && <a href="/manage/spotify">Reconnect</a>}
         </p>
       )
     }

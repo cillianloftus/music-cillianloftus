@@ -10,19 +10,85 @@ import Backdrop from '../components/Backdrop.astro';
 import CoverArt from '../components/CoverArt.astro';
 import CreditLine from '../components/CreditLine.astro';
 import Score from '../components/Score.astro';
+import Shelf from '../components/Shelf.astro';
 import { ownerId } from '../lib/auth/user';
 import { recentReleaseGroups, releaseGroupsByIds, type ReleaseGroupSummary } from '../lib/catalogue';
 import { yearOf } from '../lib/dates';
 import { formatRelative, typeLabel } from '../lib/format';
-import { libraryStats, recentRatings, topReleaseGroups } from '../lib/overview';
+import { libraryStats, recentRatings } from '../lib/overview';
+import { inProgress, lovedArtists, lovedGenres, playedNotRated, topByType, topTracks, type TrackCard } from '../lib/home';
+import { encodeDefinition } from '../lib/query/builder';
+import { spotifyLink } from '../lib/spotify/links';
+import { ordinal, todayPicks, whenText, type Pick } from '../lib/today';
+import { artistLines } from '../lib/catalogue';
+import { hueOf } from '../lib/art/playlist';
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const [recent, top, ratings, stats] = await Promise.all([
+const isOwner = Boolean(Astro.locals.user);
+const [recent, top, ratings, stats, picks, topSingles, favourites, started, artistsLoved, genresLoved, unplayed] = await Promise.all([
   recentReleaseGroups(viewerId, 12),
-  topReleaseGroups(viewerId, 10),
+  topByType(viewerId, ['album', 'mixtape'], 10),
   recentRatings(viewerId, 8),
   libraryStats(viewerId),
+  todayPicks(viewerId, { includeUnrated: isOwner }),
+  topByType(viewerId, ['single', 'ep'], 10),
+  topTracks(viewerId, 12),
+  isOwner && viewerId ? inProgress(viewerId, 10) : Promise.resolve([]),
+  lovedArtists(viewerId, 12),
+  lovedGenres(viewerId, 12),
+  isOwner && viewerId ? playedNotRated(viewerId, 10) : Promise.resolve([]),
 ]);
+
+// Artist lines for the picks, so each artist links to their page.
+const pickAlbums = picks.filter((p) => ['anniversary', 'unrated', 'month', 'revisit'].includes(p.kind)).map((p) => p.id);
+const pickTracks = picks.filter((p) => p.kind === 'favourite').map((p) => p.id);
+const [albumLines, trackLines] = await Promise.all([artistLines('release_group', pickAlbums), artistLines('recording', pickTracks)]);
+const pickCredits = (p: Pick) => (p.kind === 'favourite' ? trackLines.get(p.id) : albumLines.get(p.id)) ?? null;
+const todayLabel = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Dublin' }).format(new Date());
+
+/** What a pick is marking, in a few words. */
+function pickLine(p: Pick): string {
+  const when = whenText(p.daysAway);
+  switch (p.kind) {
+    case 'birthday':
+      return p.daysAway === 0 ? `Turns ${p.years} today` : `Turns ${p.years} ${when}`;
+    case 'formed':
+      return `Formed ${p.years} ${p.years === 1 ? 'year' : 'years'} ago ${when}`;
+    case 'anniversary': {
+      const what = p.type === 'single' ? 'Single' : p.type === 'ep' ? 'EP' : 'Album';
+      return p.daysAway === 0 ? `${what} out ${p.years} ${p.years === 1 ? 'year' : 'years'} ago today` : `${what}’s ${ordinal(p.years!)} anniversary ${when}`;
+    }
+    case 'unrated':
+      return 'Not rated yet';
+    default:
+      return p.reason ?? '';
+  }
+}
+
+/** One thing to do with a pick. */
+function pickAction(p: Pick): { label: string; href: string; external?: boolean } | null {
+  if (p.kind === 'birthday' || p.kind === 'formed') {
+    return isOwner
+      ? {
+          label: `Playlist of their best`,
+          href: `/query?d=${encodeDefinition({
+            entity: 'recording',
+            where: { field: 'artist', op: 'eq', value: p.title },
+            sort: [{ field: 'personal_score', dir: 'desc' }],
+            collapse_by_work: true,
+            limit: 25,
+          })}`,
+        }
+      : p.spotifyId
+        ? { label: 'Listen on Spotify', href: `https://open.spotify.com/artist/${p.spotifyId}`, external: true }
+        : null;
+  }
+  if (p.kind === 'unrated') return { label: 'Rate it', href: `/edit/rate/release_group/${p.id}?return_to=/` };
+  if (p.kind === 'genre') return { label: 'Make a playlist', href: `/genre/${p.id}` };
+  if (p.kind === 'artist') return p.spotifyId ? { label: 'Listen on Spotify', href: `https://open.spotify.com/artist/${p.spotifyId}`, external: true } : null;
+  if (p.kind === 'favourite') return { label: p.spotifyId ? 'Listen on Spotify' : 'Find on Spotify', href: spotifyLink('track', p.spotifyId, `${p.by ?? ''} ${p.title}`), external: true };
+  return { label: p.spotifyId ? 'Listen on Spotify' : 'Find on Spotify', href: spotifyLink('album', p.spotifyId, `${p.by ?? ''} ${p.title}`), external: true };
+}
 
 // Up front: the album most recently rated 80 or more, else the best there is.
 const lovedRating = ratings.find((r) => r.entity_type === 'release_group' && (r.quality_score ?? 0) >= 80);
@@ -56,22 +122,22 @@ const statItems = [
               <CoverArt artKey={featured.art_key} title={featured.title} sizes="(min-width: 48rem) 22rem, 70vw" priority />
             </a>
             <div class="feature-text">
-              <p class="eyebrow">
-                {lovedRating ? 'Lately loved' : 'Highest rated'}
-                {featuredWhen && <span class="when"> · rated {formatRelative(featuredWhen)}</span>}
-              </p>
+              <p class="eyebrow">{lovedRating ? 'Lately loved' : 'Highest rated'}</p>
               <h2 id="feature-title">
                 <a href={`/album/${featured.id}`}>{featured.title}</a>
               </h2>
               <p class="feature-by">
                 <CreditLine credits={featured.credits} />
               </p>
-              <p class="feature-meta">
-                {[typeLabel(featured.type), yearOf(featured.first_release_date)].filter(Boolean).join(' · ')}
+              <div class="feature-meta">
                 <span class="feature-score">
                   <Score quality={featured.quality_score} personal={featured.personal_score} size="l" />
                 </span>
-              </p>
+                <span class="feature-facts">
+                  <span>{[typeLabel(featured.type), yearOf(featured.first_release_date)].filter(Boolean).join(' · ')}</span>
+                  {featuredWhen && <span class="muted">Rated {formatRelative(featuredWhen)}</span>}
+                </span>
+              </div>
               {featuredNote && (
                 <blockquote class="note">
                   <p>{featuredNote}</p>
@@ -88,27 +154,227 @@ const statItems = [
               </div>
             ))}
           </dl>
+          <p class="stats-link">
+            <a href="/insights">What the ratings say →</a>
+          </p>
         </>
       ) : null
+    }
+
+    {
+      picks.length > 0 && (
+        <section aria-labelledby="today-heading">
+          <div class="section-head">
+            <h2 id="today-heading">For today</h2>
+            <span class="muted date">{todayLabel}</span>
+          </div>
+          <Shelf label="today’s picks" item="min(19rem, 82vw)">
+            <ul role="list">
+              {picks.map((p) => {
+                const action = pickAction(p);
+                const href = p.href ?? (p.kind === 'birthday' || p.kind === 'formed' ? `/artist/${p.id}` : `/album/${p.id}`);
+                return (
+                  <li class:list={['pick', { milestone: p.milestone }]}>
+                    <span class:list={['pick-art', { genre: p.kind === 'genre' }]} style={p.kind === 'genre' ? `--h: ${hueOf(p.title)}` : undefined}>
+                      {p.kind === 'genre' ? (
+                        <span class="genre-mark" aria-hidden="true">{p.title.slice(0, 1).toUpperCase()}</span>
+                      ) : p.imageKey ? (
+                        <img src={`/${p.imageKey}`} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                      ) : (
+                        <CoverArt artKey={p.artKey} title={p.title} sizes="5rem" />
+                      )}
+                    </span>
+                    <span class="pick-text">
+                      <span class="pick-line">{pickLine(p)}</span>
+                      <a class="pick-title" href={href}>
+                        {p.title}
+                      </a>
+                      {pickCredits(p) ? (
+                        <span class="muted small">
+                          <CreditLine credits={pickCredits(p)!} />
+                        </span>
+                      ) : (
+                        p.by && <span class="muted small">{p.by}</span>
+                      )}
+                      {action && (
+                        <a class="pick-action" href={action.href} {...(action.external ? { target: '_blank', rel: 'noopener' } : {})}>
+                          {action.label}
+                          {action.external && <span class="visually-hidden"> (opens in a new tab)</span>}
+                        </a>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </Shelf>
+        </section>
+      )
+    }
+
+    {
+      started.length > 0 && (
+        <section aria-labelledby="started-heading">
+          <div class="section-head">
+            <h2 id="started-heading">Pick up where you left off</h2>
+            <a href="/queue">Queue</a>
+          </div>
+          <Shelf label="albums in progress" item="min(15rem, 70vw)">
+            <ul role="list">
+              {started.map((s) => (
+                <li class="progress-card">
+                  <a class="progress-art" href={`/album/${s.album.id}`} tabindex="-1" aria-hidden="true">
+                    <CoverArt artKey={s.album.art_key} title={s.album.title} sizes="15rem" />
+                  </a>
+                  <a class="progress-title" href={`/album/${s.album.id}`}>{s.album.title}</a>
+                  <span class="muted small"><CreditLine credits={s.album.credits} /></span>
+                  <span class="progress-bar" aria-hidden="true"><span style={`inline-size: ${Math.round((s.rated / s.total) * 100)}%`} /></span>
+                  <span class="progress-line small">
+                    <span class="tabular">{s.rated} of {s.total} rated</span>
+                    {s.nextId && (
+                      <a href={`/edit/rate/recording/${s.nextId}?return_to=/`}>Rate the next</a>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Shelf>
+        </section>
+      )
     }
 
     {
       top.length > 1 && (
         <section aria-labelledby="top-heading">
           <div class="section-head">
-            <h2 id="top-heading">Highest rated</h2>
+            <h2 id="top-heading">Best albums</h2>
+            <a href="/insights">Insights</a>
+          </div>
+          <Shelf label="best albums">
+            <ol role="list">
+              {top.map((album, i) => (
+                <li class="ranked">
+                  <span class="rank tabular" aria-hidden="true">
+                    {i + 1}
+                  </span>
+                  <AlbumCard album={album} />
+                </li>
+              ))}
+            </ol>
+          </Shelf>
+        </section>
+      )
+    }
+
+    {
+      favourites.length > 1 && (
+        <section aria-labelledby="fav-heading">
+          <div class="section-head">
+            <h2 id="fav-heading">Favourite tracks</h2>
             <a href="/playlists">Playlists</a>
           </div>
-          <ol class="shelf" role="list">
-            {top.map((album, i) => (
-              <li>
-                <span class="rank tabular" aria-hidden="true">
-                  {i + 1}
-                </span>
-                <AlbumCard album={album} />
-              </li>
-            ))}
-          </ol>
+          <Shelf label="favourite tracks" item="min(11rem, 42vw)">
+            <ol role="list">
+              {favourites.map((t, i) => (
+                <li class="track-card ranked">
+                  <span class="rank tabular" aria-hidden="true">
+                    {i + 1}
+                  </span>
+                  <a class="track-art" href={`/track/${t.id}`} tabindex="-1" aria-hidden="true">
+                    <CoverArt artKey={t.art_key} title={t.title} sizes="11rem" />
+                  </a>
+                  <a class="track-title" href={`/track/${t.id}`}>{t.title}</a>
+                  <span class="muted small"><CreditLine credits={t.credits} /></span>
+                  <span class="track-foot">
+                    {t.album_id ? <a class="muted small album-link" href={`/album/${t.album_id}`}>{t.album_title}</a> : <span />}
+                    <Score quality={t.quality_score} personal={t.personal_score} size="s" />
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </Shelf>
+        </section>
+      )
+    }
+
+    {
+      topSingles.length > 1 && (
+        <section aria-labelledby="singles-heading">
+          <div class="section-head">
+            <h2 id="singles-heading">Best singles and EPs</h2>
+          </div>
+          <Shelf label="best singles and EPs">
+            <ol role="list">
+              {topSingles.map((album, i) => (
+                <li class="ranked">
+                  <span class="rank tabular" aria-hidden="true">
+                    {i + 1}
+                  </span>
+                  <AlbumCard album={album} />
+                </li>
+              ))}
+            </ol>
+          </Shelf>
+        </section>
+      )
+    }
+
+    {
+      artistsLoved.length > 1 && (
+        <section aria-labelledby="artists-heading">
+          <div class="section-head">
+            <h2 id="artists-heading">Artists you love</h2>
+            <a href="/artists">All artists</a>
+          </div>
+          <Shelf label="artists you love" item="min(9rem, 36vw)">
+            <ul role="list">
+              {artistsLoved.map((a) => (
+                <li class="face-card">
+                  <a href={`/artist/${a.id}`}>
+                    <span class="face">
+                      {a.image_key ? (
+                        <img src={`/${a.image_key}`} alt="" loading="lazy" decoding="async" width="200" height="200" />
+                      ) : (
+                        <CoverArt artKey={a.art_key} title={a.name} sizes="9rem" />
+                      )}
+                    </span>
+                    <span class="face-name">{a.name}</span>
+                  </a>
+                  <span class="muted small tabular">
+                    {Math.round(a.average)} across {a.tracks}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Shelf>
+        </section>
+      )
+    }
+
+    {
+      unplayed.length > 0 && (
+        <section aria-labelledby="unplayed-heading">
+          <div class="section-head">
+            <h2 id="unplayed-heading">Played a lot, never rated</h2>
+            <a href="/manage/history">History</a>
+          </div>
+          <Shelf label="played but not rated" item="min(11rem, 42vw)">
+            <ul role="list">
+              {unplayed.map((t) => (
+                <li class="track-card">
+                  <a class="track-art" href={`/track/${t.id}`} tabindex="-1" aria-hidden="true">
+                    <CoverArt artKey={t.art_key} title={t.title} sizes="11rem" />
+                  </a>
+                  <a class="track-title" href={`/track/${t.id}`}>{t.title}</a>
+                  <span class="muted small"><CreditLine credits={t.credits} /></span>
+                  <span class="track-foot">
+                    <span class="muted small tabular">{t.plays} plays</span>
+                    <a class="small rate-link" href={`/edit/rate/recording/${t.id}?return_to=/`}>Rate it</a>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Shelf>
         </section>
       )
     }
@@ -128,13 +394,21 @@ const statItems = [
                 </span>
                 <div class="rating-text">
                   <p class="rating-title">
-                    {r.album_id ? <a href={`/album/${r.album_id}`}>{r.title}</a> : <span>{r.title}</span>}
+                    <a href={r.entity_type === 'recording' ? `/track/${r.entity_id}` : `/album/${r.entity_id}`}>{r.title}</a>
                   </p>
                   <p class="rating-by">
-                    <CreditLine credits={r.credits} link={false} />
+                    <CreditLine credits={r.credits} />
                     <span>
                       {' · '}
-                      {r.entity_type === 'release_group' ? 'Album' : r.album_title ? `Track on ${r.album_title}` : 'Track'}
+                      {r.entity_type === 'release_group' ? (
+                        'Album'
+                      ) : r.album_title && r.album_id ? (
+                        <>
+                          Track on <a class="credit-link" href={`/album/${r.album_id}`}>{r.album_title}</a>
+                        </>
+                      ) : (
+                        'Track'
+                      )}
                     </span>
                   </p>
                   {r.impact_note && <p class="rating-note">“{r.impact_note}”</p>}
@@ -143,6 +417,27 @@ const statItems = [
                   <Score quality={r.quality_score} personal={r.personal_score} size="m" />
                   <time datetime={r.rated_at}>{formatRelative(r.rated_at)}</time>
                 </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+
+    {
+      genresLoved.length > 2 && (
+        <section aria-labelledby="genres-heading">
+          <div class="section-head">
+            <h2 id="genres-heading">Genres you love</h2>
+            <a href="/genres">All genres</a>
+          </div>
+          <ul role="list" class="genre-chips">
+            {genresLoved.map((g) => (
+              <li>
+                <a href={`/genre/${g.id}`} style={`--h: ${hueOf(g.name)}`}>
+                  {g.name}
+                  <span class="tabular">{Math.round(g.average)}</span>
+                </a>
               </li>
             ))}
           </ul>
@@ -160,7 +455,7 @@ const statItems = [
           <div class="empty">
             <p>Nothing in the catalogue yet.</p>
             {Astro.locals.user && (
-              <a class="button button--primary" href="/edit/import">
+              <a class="button button--primary" href="/manage/import">
                 Import an album
               </a>
             )}
@@ -299,6 +594,20 @@ const statItems = [
     font-size: var(--step--1);
   }
 
+  .stats-link {
+    margin-top: calc(var(--space-7) * -1 + var(--space-3));
+    text-align: right;
+    font-size: var(--step--1);
+  }
+
+  .stats-link a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
   /* Sections */
   .section-head {
     display: flex;
@@ -322,24 +631,107 @@ const statItems = [
     font-weight: 600;
   }
 
-  /* Highest rated: a shelf that scrolls sideways on narrow screens. */
-  .shelf {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: min(11rem, 42vw);
-    gap: var(--space-5);
-    margin: 0 calc(var(--gutter) * -1);
-    padding: var(--space-2) var(--gutter) var(--space-4);
-    list-style: none;
-    overflow-x: auto;
-    scroll-snap-type: x mandatory;
-    scroll-padding-inline: var(--gutter);
-    scrollbar-width: thin;
+  .muted {
+    color: var(--text-muted);
   }
 
-  .shelf li {
+  /* For today: cards in a sideways shelf. */
+  .date {
+    font-size: var(--step--1);
+  }
+
+  /* The picture runs the card's full height down the left; the text sits
+     beside it with its action at the foot, so cards of different lengths
+     all read as full. */
+  .pick {
+    display: grid;
+    grid-template-columns: 6.5rem minmax(0, 1fr);
+    align-items: stretch;
+    height: 100%;
+    min-height: 7.5rem;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: color-mix(in srgb, var(--surface-1) 80%, transparent);
+  }
+
+  /* Round numbers: 1, 5, 10, 25 years. */
+  .pick.milestone {
+    border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface-1));
+  }
+
+  .pick-art {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--surface-2);
+  }
+
+  .pick-art img,
+  .pick-art :global(.cover) {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: 50% 25%;
+  }
+
+  .pick-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    padding: var(--space-3) var(--space-4);
+  }
+
+  /* Lines wrap rather than cut off; a long title gets two lines. */
+  .pick-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+
+  .pick-line {
+    color: var(--accent);
+    font-size: var(--step--1);
+    font-weight: 700;
+  }
+
+  .pick-title {
+    font-weight: 750;
+    text-decoration: none;
+  }
+
+  .pick-title:hover {
+    text-decoration: underline;
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  .pick-action {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.25rem;
+    margin-top: auto;
+    padding-top: var(--space-1);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+  }
+
+  .pick-action:hover {
+    color: var(--text);
+  }
+
+  /* Highest rated: a sideways shelf (Shelf.astro); the rank sits on the cover. */
+  .ranked {
     position: relative;
-    scroll-snap-align: start;
   }
 
   .rank {
@@ -452,6 +844,202 @@ const statItems = [
     padding: var(--space-6);
     border: 1px dashed var(--border);
     border-radius: var(--radius-l);
+    color: var(--text-muted);
+  }
+
+  /* A genre has no cover: its initial on its family's colour. */
+  .pick-art.genre {
+    display: grid;
+    place-items: center;
+    background: radial-gradient(circle at 30% 25%, oklch(0.78 0.09 var(--h)), oklch(0.5 0.1 var(--h)));
+  }
+
+  .genre-mark {
+    color: oklch(0.98 0.02 var(--h));
+    font-size: 2rem;
+    font-weight: 800;
+  }
+
+  /* Albums half-rated: cover, progress, and the next track to rate. */
+  .progress-card {
+    display: grid;
+    gap: 2px;
+  }
+
+  .progress-art {
+    display: block;
+    margin-bottom: var(--space-2);
+    overflow: hidden;
+    border-radius: var(--radius-m);
+  }
+
+  .progress-title,
+  .track-title {
+    overflow: hidden;
+    font-weight: 750;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .progress-title:hover,
+  .track-title:hover {
+    text-decoration: underline;
+  }
+
+  .progress-bar {
+    display: block;
+    height: 4px;
+    margin-top: var(--space-2);
+    border-radius: 999px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  .progress-bar > span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+  }
+
+  .progress-line {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+    color: var(--text-muted);
+  }
+
+  .progress-line a,
+  .rate-link {
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  /* A favourite track: its cover, title, artists, album and score. */
+  .track-card {
+    position: relative;
+    display: grid;
+    gap: 2px;
+  }
+
+  .track-art {
+    display: block;
+    margin-bottom: var(--space-2);
+    overflow: hidden;
+    border-radius: var(--radius-m);
+  }
+
+  .track-foot {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .album-link {
+    overflow: hidden;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .album-link:hover {
+    text-decoration: underline;
+  }
+
+  /* Artists you love: faces in a row. */
+  .face-card {
+    display: grid;
+    justify-items: center;
+    gap: 2px;
+    text-align: center;
+  }
+
+  .face-card a {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-2);
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .face {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    overflow: hidden;
+    border-radius: 50%;
+    background: var(--surface-2);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
+  }
+
+  .face img,
+  .face :global(.cover) {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .face-name {
+    font-weight: 750;
+  }
+
+  .face-card a:hover .face-name {
+    text-decoration: underline;
+  }
+
+  /* Genres you love, each in its family's colour with its average. */
+  .genre-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .genre-chips a {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+    padding: 0 var(--space-4);
+    border: 1px solid color-mix(in oklch, oklch(0.6 0.12 var(--h)) 45%, var(--border));
+    border-radius: 999px;
+    background: color-mix(in oklch, oklch(0.75 0.1 var(--h)) 16%, var(--surface-1));
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .genre-chips a:hover {
+    border-color: oklch(0.6 0.12 var(--h));
+  }
+
+  .genre-chips .tabular {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 700;
+  }
+
+  /* The score and what it is, side by side, divided by a hairline. */
+  .feature-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    margin-top: var(--space-4);
+  }
+
+  .feature-facts {
+    display: grid;
+    gap: 2px;
+    padding-left: var(--space-4);
+    border-left: 1px solid var(--border);
+    font-size: var(--step--1);
+  }
+
+  .feature-facts .muted {
     color: var(--text-muted);
   }
 </style>

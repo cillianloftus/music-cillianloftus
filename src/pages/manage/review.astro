@@ -1,0 +1,391 @@
+---
+/**
+ * The review queue (ARCHITECTURE.md §3): what the rules think is wrong,
+ * one card each, with the choices that fit. Rules raise; people resolve.
+ */
+import Base from '../../layouts/Base.astro';
+import { missingInfo } from '../../lib/gaps';
+import { openAnomalies, reviewEntities, type Anomaly, type AnomalyKind, type ReviewEntity } from '../../lib/review';
+
+const anomalies = await openAnomalies();
+const [entities, gaps] = await Promise.all([reviewEntities(anomalies), missingInfo()]);
+const params = Astro.url.searchParams;
+const error = params.get('error');
+const done = params.get('done');
+
+const KINDS: Record<AnomalyKind, { heading: string; explain: string }> = {
+  duplicate_artist_name: {
+    heading: 'Two artists with one name',
+    explain: 'Often one typed by hand and one imported. If they are one artist, their credits should be together.',
+  },
+  near_duplicate_recording: {
+    heading: 'The same song twice',
+    explain:
+      'Same artist, same title (capitals and punctuation aside), but not linked as one song, so they cannot collapse into one in a playlist. Linking keeps each title exactly as it is styled on its release.',
+  },
+  near_duplicate_release_group: {
+    heading: 'One album filed twice',
+    explain: 'Same artist, same title once words like “Deluxe” are set aside: usually an edition imported as an album of its own.',
+  },
+  track_count_mismatch: {
+    heading: 'Editions of very different lengths',
+    explain: 'One edition has at least twice the tracks of another. Sometimes a box set or a compilation filed in the wrong album.',
+  },
+  unlinked_rated_recording: {
+    heading: 'Rated, but not linked to a work',
+    explain: 'Other versions of this song (live, remixed, covered) cannot be recognised as the same song until it has a work.',
+  },
+  missing_cover_art: {
+    heading: 'No cover art',
+    explain: 'The album’s standard edition has no art stored.',
+  },
+  orphaned_track: {
+    heading: 'A recording on no release',
+    explain: 'It is in the catalogue but not on any album, so nothing links to it.',
+  },
+};
+
+const DONE: Record<string, string> = {
+  dismiss: 'Marked as fine. It will not come up again.',
+  link_work: 'Linked to one work.',
+  merge: 'Merged. The old page now leads to the one kept.',
+  refetch_art: 'Cover art found and stored.',
+};
+const detectMessage = () => {
+  const raised = Number(params.get('raised') ?? 0);
+  const cleared = Number(params.get('cleared') ?? 0);
+  if (raised === 0 && cleared === 0) return 'Checked. Nothing new.';
+  return [raised > 0 && `${raised} new`, cleared > 0 && `${cleared} cleared up`].filter(Boolean).join(', ') + '.';
+};
+
+const counts = new Map<AnomalyKind, number>();
+for (const a of anomalies) counts.set(a.kind, (counts.get(a.kind) ?? 0) + 1);
+
+const isPair = (a: Anomaly) => a.entity_b !== null;
+const canLinkWork = (a: Anomaly) => a.kind === 'near_duplicate_recording' || a.kind === 'unlinked_rated_recording';
+const dismissLabel = (a: Anomaly) => (isPair(a) ? 'They are different' : a.kind === 'missing_cover_art' ? 'Leave without art' : 'This is fine');
+const pairNoun: Partial<Record<AnomalyKind, string>> = {
+  duplicate_artist_name: 'artists',
+  near_duplicate_recording: 'recordings',
+  near_duplicate_release_group: 'albums',
+};
+const sourceLabel = (e: ReviewEntity) => (e.source === 'musicbrainz' ? 'MusicBrainz' : e.source === 'manual' ? 'added by hand' : e.source);
+---
+
+<Base title="Review">
+  <div class="wrap page">
+    <header class="intro">
+      <h1>Review</h1>
+      <p class="muted">
+        Things that look wrong in the catalogue. The checks run every night and never change anything by themselves; each
+        item waits for your call.
+      </p>
+      <form method="post" action="/api/write/review">
+        <button class="button" type="submit" name="intent" value="detect">Check now</button>
+      </form>
+    </header>
+
+    {error && <p class="notice notice--error" role="alert">{error}</p>}
+    {done && <p class="notice" role="status">{done === 'detect' ? detectMessage() : DONE[done]}</p>}
+
+    {
+      anomalies.length === 0 ? (
+        <p class="empty">Nothing to review.</p>
+      ) : (
+        <>
+          <p class="summary">
+            <span class="tabular">{anomalies.length}</span> {anomalies.length === 1 ? 'item' : 'items'}:{' '}
+            {[...counts].map(([kind, n], i) => (
+              <>
+                {i > 0 && ', '}
+                <a href={`#${kind}`}>
+                  {KINDS[kind].heading.toLowerCase()} ({n})
+                </a>
+              </>
+            ))}
+          </p>
+
+          {[...counts.keys()].map((kind) => (
+            <section aria-labelledby={kind} class="group">
+              <h2 id={kind}>{KINDS[kind].heading}</h2>
+              <p class="muted explain">{KINDS[kind].explain}</p>
+              <ul role="list" class="items">
+                {anomalies
+                  .filter((a) => a.kind === kind)
+                  .map((a) => {
+                    const shown = [a.entity_a, a.entity_b].filter((x): x is string => x !== null).map((id) => entities.get(id));
+                    return (
+                      <li class="item">
+                        <ul role="list" class="entities" aria-label={isPair(a) ? `The two ${pairNoun[a.kind] ?? 'items'}` : undefined}>
+                          {shown.map((e) =>
+                            e ? (
+                              <li>
+                                {e.href ? <a href={e.href} class="title">{e.title}</a> : <span class="title">{e.title}</span>}
+                                <span class="detail">{e.detail}</span>
+                                <span class="source">
+                                  {sourceLabel(e)}
+                                  {e.mbid && (
+                                    <>
+                                      {' · '}
+                                      <a href={`https://musicbrainz.org/${a.entity_type.replace('_', '-')}/${e.mbid}`} rel="noopener" target="_blank">
+                                        on MusicBrainz<span class="visually-hidden"> (opens in a new tab)</span>
+                                      </a>
+                                    </>
+                                  )}
+                                </span>
+                              </li>
+                            ) : (
+                              <li class="gone">No longer in the catalogue.</li>
+                            ),
+                          )}
+                        </ul>
+                        <form method="post" action="/api/write/review" class="actions">
+                          <input type="hidden" name="id" value={a.id} />
+                          {(a.kind === 'duplicate_artist_name' || a.kind === 'near_duplicate_release_group') &&
+                            shown.map(
+                              (e, i) =>
+                                e && (
+                                  <button class:list={['button', { 'button--primary': i === 0 }]} type="submit" name="keep" value={e.id}>
+                                    {a.kind === 'duplicate_artist_name' ? 'Same artist' : 'One album'}: keep {i === 0 ? 'the first' : 'the second'}
+                                  </button>
+                                ),
+                            )}
+                          {canLinkWork(a) && (
+                            <button class="button button--primary" type="submit" name="intent" value="link_work">
+                              {isPair(a) ? 'Same song: link them' : 'Give it a work'}
+                            </button>
+                          )}
+                          {a.kind === 'missing_cover_art' && shown[0]?.mbid && (
+                            <button class="button button--primary" type="submit" name="intent" value="refetch_art">
+                              Look again
+                            </button>
+                          )}
+                          <button class="button" type="submit" name="intent" value="dismiss">
+                            {dismissLabel(a)}
+                          </button>
+                        </form>
+                        {a.kind === 'duplicate_artist_name' && (
+                          <p class="later muted">Keeping one moves every credit, picture and other name onto it; the other’s ids fill any gaps.</p>
+                        )}
+                        {a.kind === 'near_duplicate_release_group' && (
+                          <p class="later muted">Keeping one files the other’s editions under it; the standard edition is chosen as usual.</p>
+                        )}
+                      </li>
+                    );
+                  })}
+              </ul>
+            </section>
+          ))}
+        </>
+      )
+    }
+
+    {
+      gaps.length > 0 && (
+        <section aria-labelledby="gaps-heading" class="gaps">
+          <h2 id="gaps-heading" class="gaps-title">Missing information</h2>
+          <p class="muted explain">Not wrong, just not known yet. Most of it can be filled from the album or artist’s edit page, or by looking the album up again.</p>
+          {gaps.map((g) => (
+            <section aria-labelledby={`gap-${g.key}`} class="gap">
+              <h3 id={`gap-${g.key}`}>
+                {g.heading} <span class="count tabular">{g.total}</span>
+              </h3>
+              <p class="muted explain">{g.explain}</p>
+              <ul role="list" class="gap-items">
+                {g.items.map((item) => (
+                  <li>
+                    <a href={item.href}>{item.title}</a>
+                    {item.detail && <span class="detail">{item.detail}</span>}
+                  </li>
+                ))}
+              </ul>
+              {g.total > g.items.length && <p class="muted more">And {g.total - g.items.length} more. Rated music comes first.</p>}
+            </section>
+          ))}
+        </section>
+      )
+    }
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+    --content-max: 48rem;
+  }
+
+  .intro {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+  }
+
+  h2 {
+    font-size: var(--step-1);
+    scroll-margin-top: var(--space-4);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .notice {
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--accent);
+    background: var(--surface-2);
+  }
+
+  .notice--error {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+
+  .gaps {
+    display: grid;
+    gap: var(--space-5);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--border);
+  }
+
+  .gaps-title {
+    font-size: var(--step-2);
+  }
+
+  .gaps > .explain {
+    margin-top: calc(var(--space-4) * -1);
+  }
+
+  .gap h3 {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    font-size: var(--step-0);
+  }
+
+  .count {
+    padding: 0 var(--space-2);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .gap-items {
+    display: grid;
+    margin: var(--space-2) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .gap-items li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .gap-items a {
+    font-weight: 650;
+  }
+
+  .gap-items .detail {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .more {
+    margin-top: var(--space-2);
+    font-size: var(--step--1);
+  }
+
+  .empty {
+    padding: var(--space-6) 0;
+    color: var(--text-muted);
+    font-size: var(--step-1);
+  }
+
+  .summary {
+    color: var(--text-muted);
+  }
+
+  .group {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .explain {
+    font-size: var(--step--1);
+  }
+
+  .items {
+    display: grid;
+    gap: var(--space-3);
+    margin: var(--space-2) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .item {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+  }
+
+  .entities {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .entities > li {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  /* A pair reads as two things side by side once there is room. */
+  @media (min-width: 40rem) {
+    .entities:has(> li + li) {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .title {
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+
+  .detail {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    overflow-wrap: anywhere;
+  }
+
+  .source {
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+  }
+
+  .gone {
+    color: var(--text-subtle);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .later {
+    font-size: var(--step--1);
+  }
+</style>

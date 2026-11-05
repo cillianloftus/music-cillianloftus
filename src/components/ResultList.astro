@@ -52,7 +52,7 @@ const kind = results[0]?.kind;
                 <CoverArt artKey={r.art_key} title={r.album_title ?? r.title} sizes="3rem" />
               </div>
               <div class="main">
-                <span class="title">{r.title}</span>
+                <a class="title track-link" href={`/track/${r.id}`}>{r.title}</a>
                 <span class="sub">
                   <CreditLine credits={r.credits} />
                   {r.album_id && (
@@ -71,7 +71,7 @@ const kind = results[0]?.kind;
                   </>
                 )}
               </span>
-              <Score quality={r.quality_score} personal={r.personal_score} size="s" />
+              <Score ranked quality={r.quality_score} personal={r.personal_score} size="s" />
             </li>
           ),
       )}
@@ -80,6 +80,14 @@ const kind = results[0]?.kind;
 }
 
 <style>
+  .track-link {
+    text-decoration: none;
+  }
+
+  .track-link:hover {
+    text-decoration: underline;
+  }
+
   .empty {
     padding: var(--space-6);
     border: 1px dashed var(--border);

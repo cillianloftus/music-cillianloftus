@@ -48,7 +48,8 @@ const GENRE_TREE = (placeholder: string) => `
   WITH RECURSIVE tree(id) AS (
     SELECT id FROM genre WHERE name = ${placeholder}
     UNION
-    SELECT child.id FROM genre child JOIN tree ON child.parent_id = tree.id
+    -- Every parent link, primary or not (0013): blues rock counts under blues too.
+    SELECT e.genre_id FROM v_genre_edge e JOIN tree ON e.parent_id = tree.id
   )
   SELECT id FROM tree`;
 

@@ -24,16 +24,36 @@ async function fetchFront(path: string, size: ArtSize): Promise<ArrayBuffer | nu
 }
 
 /**
+ * Which release the release group's chosen front belongs to: the archive
+ * answers with a redirect to that release's image.
+ */
+async function groupFrontOwner(releaseGroupMbid: string): Promise<string | null> {
+  const response = await fetch(`https://coverartarchive.org/release-group/${releaseGroupMbid}/front-250`, { redirect: 'manual' });
+  const location = response.headers.get('location') ?? '';
+  return /\/release\/([0-9a-f-]{36})\//.exec(location)?.[1] ?? null;
+}
+
+/**
  * Stores front art for a release, falling back to the release group's
- * chosen front when this edition has none. Returns the stored key prefix,
- * or null when no art exists for either.
+ * chosen front when this edition has none, unless that front is another
+ * edition's we hold (The Instrumentals' cover is not the album's). Returns
+ * the stored key prefix, or null when there is nothing suitable.
  */
 export async function storeCoverArt(opts: {
   releaseId: string;
   releaseMbid: string;
   releaseGroupMbid: string;
+  /** False: this release's own art or nothing. */
+  groupFallback?: boolean;
 }): Promise<string | null> {
-  const candidates = [`release/${opts.releaseMbid}`, `release-group/${opts.releaseGroupMbid}`];
+  const candidates = [`release/${opts.releaseMbid}`];
+  if (opts.groupFallback !== false) {
+    const owner = await groupFrontOwner(opts.releaseGroupMbid).catch(() => null);
+    const another = owner && owner !== opts.releaseMbid
+      ? await env.DB.prepare(`SELECT 1 AS yes FROM release WHERE mbid = ? AND id <> ?`).bind(owner, opts.releaseId).first()
+      : null;
+    if (!another) candidates.push(`release-group/${opts.releaseGroupMbid}`);
+  }
 
   for (const path of candidates) {
     const smallest = await fetchFront(path, ART_SIZES[0]);

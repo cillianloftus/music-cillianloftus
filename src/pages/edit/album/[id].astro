@@ -1,0 +1,782 @@
+---
+/**
+ * Correct an album by hand. Every change is recorded as an override, so
+ * no import or nightly lookup will ever put the old value back.
+ */
+import { env } from 'cloudflare:workers';
+import Base from '../../../layouts/Base.astro';
+import ChipInput from '../../../components/ChipInput.astro';
+import Edited from '../../../components/Edited.astro';
+import { editsOf } from '../../../lib/revert';
+import CreditEditor from '../../../components/CreditEditor.astro';
+import { creditRoles, creditsEditedByHand, groupCredits, recordingCredits } from '../../../lib/credits';
+import CoverArt from '../../../components/CoverArt.astro';
+import { editions, releaseGroup } from '../../../lib/catalogue';
+import { formatPartialDate } from '../../../lib/dates';
+import { geniusToken } from '../../../lib/genius';
+
+const id = Astro.params.id!;
+const album = await releaseGroup(id, Astro.locals.user!.id);
+if (!album) return Astro.rewrite('/404');
+
+const [allEditions, manualGenres, otherGenres, overrides, writers, artistNames, unwritten, sources, allGenres, siblings] = await Promise.all([
+  editions(id),
+  env.DB.prepare(
+    `SELECT g.name FROM genre_tag t JOIN genre g ON g.id = t.genre_id WHERE t.entity_type = 'release_group' AND t.entity_id = ? AND t.source = 'manual' ORDER BY g.name`,
+  )
+    .bind(id)
+    .all<{ name: string }>(),
+  env.DB.prepare(
+    `SELECT DISTINCT g.name FROM genre_tag t JOIN genre g ON g.id = t.genre_id WHERE t.entity_type = 'release_group' AND t.entity_id = ? AND t.source <> 'manual' ORDER BY t.weight DESC`,
+  )
+    .bind(id)
+    .all<{ name: string }>(),
+  env.DB.prepare(`SELECT field FROM field_override WHERE entity_type = 'release_group' AND entity_id = ?`).bind(id).all<{ field: string }>(),
+  env.DB.prepare(
+    `SELECT count(*) AS total, sum(EXISTS (SELECT 1 FROM artist_credit w WHERE w.entity_type = 'recording' AND w.entity_id = t.recording_id AND w.role IN (SELECT id FROM credit_role WHERE family = 'writing'))) AS credited
+     FROM v_release_group_canonical c JOIN track t ON t.release_id = c.release_id WHERE c.release_group_id = ?`,
+  )
+    .bind(id)
+    .first<{ total: number; credited: number }>(),
+  env.DB.prepare(`SELECT name FROM artist ORDER BY sort_name`).all<{ name: string }>(),
+  env.DB.prepare(
+    `SELECT t.recording_id AS id, r.title FROM v_release_group_canonical c
+     JOIN track t ON t.release_id = c.release_id JOIN recording r ON r.id = t.recording_id
+     WHERE c.release_group_id = ?
+       AND NOT EXISTS (SELECT 1 FROM artist_credit w WHERE w.entity_type = 'recording' AND w.entity_id = t.recording_id AND w.role IN (SELECT id FROM credit_role WHERE family = 'writing'))
+     ORDER BY t.disc, t.position`,
+  )
+    .bind(id)
+    .all<{ id: string; title: string }>(),
+  env.DB.prepare(
+    `SELECT (SELECT count(*) FROM release WHERE release_group_id = ?1 AND mbid IS NOT NULL) AS mb,
+            (SELECT spotify_id IS NOT NULL FROM release_group WHERE id = ?1) AS spotify`,
+  )
+    .bind(id)
+    .first<{ mb: number; spotify: number }>(),
+  env.DB.prepare(`SELECT name FROM genre ORDER BY name`).all<{ name: string }>(),
+  // Other albums by the same artist: candidates for "this is an edition of".
+  env.DB.prepare(
+    `SELECT DISTINCT g.id, g.title, substr(g.first_release_date, 1, 4) AS year
+     FROM artist_credit mine
+     JOIN artist_credit theirs ON theirs.artist_id = mine.artist_id AND theirs.entity_type = 'release_group' AND theirs.role = 'primary'
+     JOIN release_group g ON g.id = theirs.entity_id
+     WHERE mine.entity_type = 'release_group' AND mine.entity_id = ?1 AND mine.role = 'primary' AND g.id <> ?1
+     ORDER BY g.first_release_date DESC, g.title`,
+  )
+    .bind(id)
+    .all<{ id: string; title: string; year: string | null }>(),
+]);
+const [albumCreditRows, albumCreditsByHand] = await Promise.all([recordingCredits(id, 'release_group'), creditsEditedByHand(id, 'release_group')]);
+const albumCredits = albumCreditRows.filter((c) => c.family === 'artist');
+const roleList = await creditRoles();
+const roleFamilies = groupCredits(roleList.filter((r) => r.family !== 'artist'), (r) => r).map((g) => ({ name: g.name, roles: g.items }));
+const bulkTracks = await env.DB.prepare(
+  `SELECT t.recording_id AS id, coalesce(t.title_on_release, r.title) AS title, t.position,
+          EXISTS (SELECT 1 FROM artist_credit w WHERE w.entity_type = 'recording' AND w.entity_id = r.id
+                  AND w.role IN (SELECT id FROM credit_role WHERE family = 'writing')) AS has_writer,
+          (SELECT group_concat(label || ': ' || names, ' · ') FROM (
+             SELECT cr.label, cr.position, group_concat(a.name, ', ') AS names
+             FROM artist_credit c JOIN artist a ON a.id = c.artist_id JOIN credit_role cr ON cr.id = c.role
+             WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND cr.family <> 'artist'
+             GROUP BY cr.id ORDER BY cr.position)) AS credits
+   FROM v_release_group_canonical v JOIN track t ON t.release_id = v.release_id JOIN recording r ON r.id = t.recording_id
+   WHERE v.release_group_id = ?
+   ORDER BY t.disc, t.position`,
+)
+  .bind(id)
+  .all<{ id: string; title: string; position: number; has_writer: number; credits: string | null }>();
+const standardEditionRow = allEditions.find((e) => e.id === album.canonical_release_id) ?? null;
+const links = await env.DB.prepare(
+  `SELECT g.spotify_id, (SELECT 1 FROM field_override o WHERE o.entity_type = 'release' AND o.entity_id = ?2 AND o.field = 'label') AS label_edited
+   FROM release_group g WHERE g.id = ?1`,
+)
+  .bind(id, album.canonical_release_id ?? '')
+  .first<{ spotify_id: string | null; label_edited: number | null }>();
+const IGNORE = { autocomplete: 'off', 'data-1p-ignore': true, 'data-lpignore': 'true', 'data-bwignore': true, 'data-form-type': 'other' };
+const canRefresh = Boolean(sources && (sources.mb > 0 || sources.spotify));
+const hasGenius = Boolean(geniusToken());
+const edited = new Set(overrides.results.map((o) => o.field));
+const genresValue = (manualGenres.results.length ? manualGenres.results : otherGenres.results).map((g) => g.name).join(', ');
+const date = album.first_release_date ?? '';
+const params = Astro.url.searchParams;
+const TYPES = [
+  ['album', 'Album'],
+  ['ep', 'EP'],
+  ['single', 'Single'],
+  ['mixtape', 'Mixtape'],
+  ['compilation', 'Compilation'],
+  ['soundtrack', 'Soundtrack'],
+  ['live', 'Live album'],
+];
+const edits = await editsOf('release_group', id);
+// Each edition's own edits, for the marks in its form.
+const editionEdits = new Map<string, Map<string, boolean>>();
+for (const e of allEditions) editionEdits.set(e.id, await editsOf('release', e.id));
+const primaryArtist = album.credits[0]?.name ?? '';
+const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
+---
+
+<Base title={`Edit ${album.title}`}>
+  <div class="wrap page">
+    <p><a class="back" href={`/album/${id}`}>← {album.title}</a></p>
+    <header class="subject">
+      <span class="thumb"><CoverArt artKey={album.art_key} title={album.title} sizes="5rem" /></span>
+      <div>
+        <p class="eyebrow">Edit album</p>
+        <h1>{album.title}</h1>
+      </div>
+    </header>
+
+    {params.get('error') && <p class="notice notice--error" role="alert">{params.get('error')}</p>}
+    {params.get('done') && <p class="notice" role="status">{params.get('done')}</p>}
+
+    <form method="post" action="/api/write/album/edit" class="form">
+      <input type="hidden" name="id" value={id} />
+      <div class="field">
+        <div class="label-row"><label for="title">Title</label><Edited entity="release_group" id={id} field="title" edits={edits} /></div>
+        <input class="input" id="title" name="title" value={album.title} required maxlength="300" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="label-row"><label for="type">Type</label><Edited entity="release_group" id={id} field="type" edits={edits} /></div>
+          <select class="input" id="type" name="type">
+            {TYPES.map(([value, label]) => <option value={value} selected={album.type === value}>{label}</option>)}
+          </select>
+        </div>
+        <div class="field">
+          <div class="label-row"><label for="status">Status</label><Edited entity="release_group" id={id} field="status" edits={edits} /></div>
+          <select class="input" id="status" name="status">
+            <option value="released" selected={album.status === 'released'}>Released</option>
+            <option value="announced" selected={album.status === 'announced'}>Announced</option>
+            <option value="cancelled" selected={album.status === 'cancelled'}>Cancelled</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="label-row"><label for="date">Released</label><Edited entity="release_group" id={id} field="first_release_date" edits={edits} /></div>
+          <input class="input" id="date" name="date" value={date} placeholder="2019, 2019-08 or 2019-08-30" aria-describedby="date-hint" />
+          <span class="hint" id="date-hint">Only as precise as you know. Now: {formatPartialDate(album.first_release_date, album.date_precision) ?? 'unknown'}.</span>
+        </div>
+        <div class="field">
+          <div class="label-row"><label for="availability">Can it be bought?</label><Edited entity="release_group" id={id} field="availability" edits={edits} /></div>
+          <select class="input" id="availability" name="availability">
+            <option value="" selected={!album.availability}>Not known</option>
+            <option value="for_sale" selected={album.availability === 'for_sale'}>For sale</option>
+            <option value="unpurchasable" selected={album.availability === 'unpurchasable'}>Not for sale anywhere</option>
+            <option value="unreleased" selected={album.availability === 'unreleased'}>Never released</option>
+          </select>
+        </div>
+      </div>
+      {
+        allEditions.length > 1 && (
+          <div class="field">
+            <div class="label-row"><label for="preferred">Standard edition</label><Edited entity="release_group" id={id} field="preferred_release_id" edits={edits} /></div>
+            <select class="input" id="preferred" name="preferred_release_id" aria-describedby="preferred-hint">
+              <option value="">Chosen automatically (earliest, then shortest)</option>
+              {allEditions.map((e) => (
+                <option value={e.id} selected={album.canonical_release_id === e.id && edited.has('preferred_release_id')}>
+                  {e.title} · {e.track_count} tracks{e.format ? ` · ${e.format}` : ''}{e.date ? ` · ${e.date.slice(0, 4)}` : ''}
+                </option>
+              ))}
+            </select>
+            <span class="hint" id="preferred-hint">The edition whose tracks make up the album’s score.</span>
+          </div>
+        )
+      }
+      {!(allEditions.length > 1) && <input type="hidden" name="preferred_release_id" value="" />}
+      <div class="row">
+        <div class="field">
+          <div class="label-row"><label for="label">Label</label>{standardEditionRow && <Edited entity="release" id={standardEditionRow.id} field="label" edits={editionEdits.get(standardEditionRow.id) ?? new Map()} />}</div>
+          <input class="input" id="label" name="label" value={standardEditionRow?.label ?? ''} maxlength="200" placeholder="Self-released" aria-describedby="label-hint" {...IGNORE} />
+          <span class="hint" id="label-hint">The standard edition’s. Other editions keep their own, below.</span>
+        </div>
+        <div class="field">
+          <div class="label-row"><label for="spotify">Spotify album</label><Edited entity="release_group" id={id} field="spotify_id" edits={edits} /></div>
+          <input class="input" id="spotify" name="spotify" value={links?.spotify_id ? `https://open.spotify.com/album/${links.spotify_id}` : ''} inputmode="url" placeholder="Paste a Spotify album link" aria-describedby="spotify-hint" {...IGNORE} />
+          <span class="hint" id="spotify-hint">{links?.spotify_id ? 'Clear it to unlink.' : 'Not linked; found automatically when it can be.'}</span>
+        </div>
+      </div>
+      <ChipInput
+        id="genres"
+        name="genres"
+        label="Genres"
+        value={genresValue}
+        options={allGenres.results.map((g) => g.name)}
+        placeholder="Add a genre"
+        hint={`Saved as your own tags, which replace imported ones on this album.${manualGenres.results.length === 0 && otherGenres.results.length > 0 ? ' These are the imported ones now; saving makes them yours.' : ''}`}
+      />
+      <div class="buttons">
+        <button class="button button--primary" type="submit">Save</button>
+        <a class="button button--quiet" href={`/album/${id}`}>Cancel</a>
+      </div>
+    </form>
+
+    <CreditEditor entity="release_group" id={id} credits={albumCredits} byHand={albumCreditsByHand} defaultRole="primary" heading="Album artists" artistsOnly>
+      <p class="hint">Who the album is by. Its writers, producers and the rest come from its tracks: credit them below, or on each track.</p>
+    </CreditEditor>
+
+    <section aria-labelledby="editions-heading" class="card">
+      <h2 id="editions-heading">{allEditions.length === 1 ? 'The edition' : `Editions (${allEditions.length})`}</h2>
+      <p class="muted">Each edition keeps its own title, date, label and format. The album’s date above is when it first came out.</p>
+      <ul role="list" class="editions">
+        {allEditions.map((e) => (
+          <li>
+            <details>
+              <summary>
+                <span class="ed-title">{e.title}</span>
+                <span class="muted small">
+                  {[e.track_count ? `${e.track_count} tracks` : null, formatPartialDate(e.date, e.date_precision), e.label, e.format].filter(Boolean).join(' · ')}
+                </span>
+              </summary>
+              <form method="post" action="/api/write/album/edit" class="ed-form">
+                <input type="hidden" name="id" value={id} />
+                <input type="hidden" name="intent" value="edition" />
+                <input type="hidden" name="edition" value={e.id} />
+                <div class="field">
+                  <div class="label-row"><label for={`et-${e.id}`}>Title</label><Edited entity="release" id={e.id} field="title" edits={editionEdits.get(e.id) ?? new Map()} /></div>
+                  <input class="input" id={`et-${e.id}`} name="edition_title" value={e.title} required maxlength="300" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+                </div>
+                <div class="row">
+                  <div class="field">
+                    <div class="label-row"><label for={`ed-${e.id}`}>Released</label><Edited entity="release" id={e.id} field="date" edits={editionEdits.get(e.id) ?? new Map()} /></div>
+                    <input class="input" id={`ed-${e.id}`} name="edition_date" value={e.date ?? ''} placeholder="2020-04-10" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+                  </div>
+                  <div class="field">
+                    <div class="label-row"><label for={`el-${e.id}`}>Label</label><Edited entity="release" id={e.id} field="label" edits={editionEdits.get(e.id) ?? new Map()} /></div>
+                    <input class="input" id={`el-${e.id}`} name="label" value={e.label ?? ''} maxlength="200" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+                  </div>
+                </div>
+                <div class="field">
+                  <div class="label-row"><label for={`en-${e.id}`}>Note</label><Edited entity="release" id={e.id} field="note" edits={editionEdits.get(e.id) ?? new Map()} /></div>
+                  <input class="input" id={`en-${e.id}`} name="note" value={e.note ?? ''} maxlength="300" placeholder="Pulled from streaming in 2024" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+                </div>
+                <div class="field">
+                  <div class="label-row"><label for={`ef-${e.id}`}>Format</label><Edited entity="release" id={e.id} field="format" edits={editionEdits.get(e.id) ?? new Map()} /></div>
+                  <input class="input" id={`ef-${e.id}`} name="format" value={e.format ?? ''} maxlength="100" placeholder="Digital Media, CD, 12&quot; Vinyl" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+                </div>
+                <div class="buttons">
+                  <button class="button" type="submit">Save edition</button>
+                  <button class="button button--quiet" type="submit" name="intent" value="cover" formnovalidate>
+                    Look for its cover again
+                  </button>
+                </div>
+              </form>
+              <form method="post" action="/api/write/album/cover" enctype="multipart/form-data" class="cover-form" data-cover-form>
+                <input type="hidden" name="id" value={id} />
+                <input type="hidden" name="edition" value={e.id} />
+                <span class="cover-thumb"><CoverArt artKey={e.art_key} title={e.title} sizes="4rem" /></span>
+                <div class="field">
+                  <label for={`cover-${e.id}`}>Use your own cover</label>
+                  <input id={`cover-${e.id}`} name="cover" type="file" accept="image/*" required />
+                </div>
+                <button class="button" type="submit">Upload</button>
+              </form>
+            </details>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <section aria-labelledby="writer-heading" class="card" id="track-credits">
+      <h2 id="writer-heading">Track credits, in bulk</h2>
+      <p class="muted">
+        {
+          writers && writers.total > 0
+            ? missingWriters === 0
+              ? `Every track on the standard edition has a writer credited.`
+              : `${missingWriters} of ${writers.total} tracks have no writer credited. MusicBrainz often has none for newer or smaller records.`
+            : 'No tracks yet.'
+        }
+      </p>
+      {
+        missingWriters > 0 && hasGenius && (
+          <form method="post" action="/api/write/track/edit" class="inline">
+            <input type="hidden" name="album" value={id} />
+            <input type="hidden" name="from" value="album" />
+            <input type="hidden" name="intent" value="genius" />
+            <button class="button button--quiet" type="submit">Find the missing ones on Genius</button>
+          </form>
+        )
+      }
+      {
+        bulkTracks.results.length > 0 && (
+          <form method="post" action="/api/write/album/edit" class="bulk">
+            <input type="hidden" name="id" value={id} />
+            <input type="hidden" name="intent" value="batch_credit" />
+            <div class="bulk-who">
+              <div class="field">
+                <label for="bulk-role">Role</label>
+                <select class="input" id="bulk-role" name="role">
+                  {roleFamilies.map((f) => (
+                    <optgroup label={f.name}>
+                      {f.roles.map((r) => (
+                        <option value={r.id} selected={r.id === 'writer'}>
+                          {r.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+              <div class="field grow">
+                <label for="bulk-who">Who</label>
+                <input class="input" id="bulk-who" name="who" value={primaryArtist} list="artist-list" required maxlength="200" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+              </div>
+            </div>
+            <fieldset class="bulk-tracks">
+              <legend>On these tracks <span class="muted small">(the standard edition’s)</span></legend>
+              <p class="bulk-all" hidden data-bulk-all>
+                <button type="button" class="link" data-check="all">All</button> ·
+                <button type="button" class="link" data-check="none">None</button> ·
+                <button type="button" class="link" data-check="unwritten">Those with no writer</button>
+              </p>
+              <ul role="list">
+                {bulkTracks.results.map((t) => (
+                  <li>
+                    <input type="checkbox" name="track" value={t.id} id={`bulk-${t.id}`} checked data-unwritten={t.has_writer ? undefined : ''} />
+                    <label for={`bulk-${t.id}`}>
+                      <span><span class="tabular muted">{t.position}</span> {t.title}</span>
+                      {t.credits && <span class="muted small">{t.credits}</span>}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </fieldset>
+            <div class="buttons">
+              <button class="button button--primary" type="submit" name="mode" value="add">Add to ticked tracks</button>
+              <button class="button" type="submit" name="mode" value="remove">Remove from ticked tracks</button>
+            </div>
+          </form>
+        )
+      }
+      <p class="muted small">A track changed here counts as edited. Each track’s full credits are on its own page.</p>
+    </section>
+
+    <section aria-labelledby="new-edition-heading" class="card">
+      <h2 id="new-edition-heading">Add an edition</h2>
+      <p class="muted">A version no database has: a cut pulled from streaming and put back changed, a tour pressing. Songs already on the album are recognised by title, so their ratings carry over.</p>
+      <form method="post" action="/api/write/album/edit" class="ed-form">
+        <input type="hidden" name="id" value={id} />
+        <input type="hidden" name="intent" value="add_edition" />
+        <div class="field">
+          <label for="ne-title">Title</label>
+          <input class="input" id="ne-title" name="title" value={album.title} required maxlength="300" {...IGNORE} />
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="ne-date">Released</label>
+            <input class="input" id="ne-date" name="date" placeholder="2023-06-30" {...IGNORE} />
+          </div>
+          <div class="field">
+            <label for="ne-label">Label</label>
+            <input class="input" id="ne-label" name="label" maxlength="200" {...IGNORE} />
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="ne-format">Format</label>
+            <input class="input" id="ne-format" name="format" maxlength="100" placeholder="Digital Media" {...IGNORE} />
+          </div>
+          <div class="field">
+            <label for="ne-note">Note</label>
+            <input class="input" id="ne-note" name="note" maxlength="300" placeholder="Pulled from streaming in 2024" {...IGNORE} />
+          </div>
+        </div>
+        <div class="field">
+          <label for="ne-copy">Tracks</label>
+          <select class="input" id="ne-copy" name="copy_from">
+            {allEditions.map((e) => (
+              <option value={e.id} selected={e.id === album.canonical_release_id}>
+                Same as {e.title} ({e.track_count} tracks{e.date ? `, ${e.date.slice(0, 4)}` : ''})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="ne-tracklist">Or paste its tracklist</label>
+          <textarea class="input" id="ne-tracklist" name="tracklist" rows="8" spellcheck="false" aria-describedby="ne-tracklist-hint"></textarea>
+          <span class="hint" id="ne-tracklist-hint">One track per line, styled as this edition styles them. Pasting a list replaces the copy above.</span>
+        </div>
+        <div class="buttons">
+          <button class="button button--primary" type="submit">Add edition</button>
+        </div>
+      </form>
+    </section>
+
+    <script>
+      for (const form of document.querySelectorAll<HTMLFormElement>('form.bulk')) {
+        const bar = form.querySelector<HTMLElement>('[data-bulk-all]');
+        if (bar) bar.hidden = false;
+        form.addEventListener('click', (event) => {
+          const which = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-check]')?.dataset.check;
+          if (!which) return;
+          for (const box of form.querySelectorAll<HTMLInputElement>('input[name=track]')) {
+            box.checked = which === 'all' || (which === 'unwritten' && box.dataset.unwritten !== undefined);
+          }
+        });
+      }
+    </script>
+
+    {
+      siblings.results.length > 0 && (
+        <section aria-labelledby="fold-heading" class="card">
+          <h2 id="fold-heading">An edition of another album?</h2>
+          <p class="muted">
+            A deluxe, a “complete” version or a reissue imported as an album of its own. Folding it in makes its editions part of that album; this page then
+            leads there.
+          </p>
+          <form method="post" action="/api/write/album/edit" class="inline">
+            <input type="hidden" name="id" value={id} />
+            <input type="hidden" name="intent" value="fold" />
+            <label for="into">Fold {album.title} into</label>
+            <select class="input" id="into" name="into" required>
+              <option value="">Choose an album</option>
+              {siblings.results.map((s) => (
+                <option value={s.id}>
+                  {s.title}
+                  {s.year ? ` (${s.year})` : ''}
+                </option>
+              ))}
+            </select>
+            <button class="button" type="submit">Fold in</button>
+          </form>
+        </section>
+      )
+    }
+
+    {
+      canRefresh && (
+        <section aria-labelledby="refresh-heading" class="card">
+          <h2 id="refresh-heading">Refresh from its sources</h2>
+          <p class="muted">
+            Asks {[sources!.mb > 0 ? 'MusicBrainz' : null, sources!.spotify ? 'Spotify' : null, hasGenius ? 'Genius' : null].filter(Boolean).join(', ').replace(/, ([^,]*)$/, ' and $1')} for
+            anything still missing: dates, labels, tracks, credits. It only fills gaps. Nothing you edited changes.
+          </p>
+          <form method="post" action="/api/write/album/refresh">
+            <input type="hidden" name="id" value={id} />
+            <button class="button" type="submit">Refresh album</button>
+          </form>
+        </section>
+      )
+    }
+
+    <script>
+      // Resize in the browser to the stored widths, as JPEG, so any image
+      // works and phones never download a full-size scan.
+      const SIZES = [250, 500, 1200];
+      for (const form of document.querySelectorAll<HTMLFormElement>('[data-cover-form]')) {
+        form.addEventListener('submit', async (event) => {
+          const input = form.querySelector<HTMLInputElement>('input[type=file]');
+          const file = input?.files?.[0];
+          if (!file) return;
+          event.preventDefault();
+          const button = form.querySelector('button');
+          if (button) button.disabled = true;
+          try {
+            const bitmap = await createImageBitmap(file);
+            const side = Math.min(bitmap.width, bitmap.height);
+            const body = new FormData();
+            for (const [k, v] of new FormData(form)) if (k !== 'cover') body.append(k, v);
+            for (const size of SIZES) {
+              const target = Math.min(size, side);
+              const canvas = document.createElement('canvas');
+              canvas.width = canvas.height = target;
+              // Square, centred: covers are square, and a stray border is cropped.
+              canvas.getContext('2d')!.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, target, target);
+              const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.88));
+              if (blob) body.append(`s${size}`, blob, `${size}.jpg`);
+            }
+            const res = await fetch(form.action, { method: 'POST', body });
+            location.href = res.url;
+          } catch {
+            form.submit();
+          }
+        });
+      }
+    </script>
+
+    <datalist id="artist-list">{artistNames.results.map((a) => <option value={a.name} />)}</datalist>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+    --content-max: 44rem;
+  }
+
+  .back {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+  }
+
+  .subject {
+    display: grid;
+    grid-template-columns: 5rem minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .thumb {
+    width: 5rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  h1 {
+    font-size: var(--step-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .form {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .row {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  @media (min-width: 40rem) {
+    .row {
+      grid-template-columns: 1fr 1fr;
+      align-items: start;
+    }
+  }
+
+  /* A label with its "Edited" mark (and Undo) on the same line. */
+  .label-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-3);
+  }
+
+  .edited {
+    margin-left: var(--space-1);
+    color: var(--accent);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .buttons {
+    display: flex;
+    gap: var(--space-3);
+  }
+
+  .card {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .editions {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .editions li {
+    border-top: 1px solid var(--border);
+  }
+
+  .editions summary {
+    display: grid;
+    gap: 2px;
+    padding: var(--space-3) 0;
+    cursor: pointer;
+  }
+
+  .ed-title {
+    font-weight: 650;
+  }
+
+  .ed-form {
+    display: grid;
+    gap: var(--space-3);
+    padding-bottom: var(--space-4);
+  }
+
+  .cover-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--space-3);
+    padding: var(--space-3) 0 var(--space-4);
+    border-top: 1px dashed var(--border);
+  }
+
+  .cover-thumb {
+    width: 4rem;
+    overflow: hidden;
+    border-radius: var(--radius-s);
+  }
+
+  .cover-form .field {
+    display: grid;
+    flex: 1 1 12rem;
+    gap: var(--space-1);
+  }
+
+  .cover-form label {
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .bulk {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .bulk-who {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--space-3);
+  }
+
+  .bulk-who .field {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .bulk-who .grow {
+    flex: 1 1 12rem;
+  }
+
+  .bulk-tracks {
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .bulk-tracks legend {
+    margin-bottom: var(--space-2);
+    font-weight: 600;
+  }
+
+  .bulk-tracks ul {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .bulk-tracks li {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .bulk-tracks input {
+    flex: none;
+    width: 1.15rem;
+    height: 1.15rem;
+    translate: 0 0.2em;
+    accent-color: var(--accent);
+  }
+
+  .bulk-tracks label {
+    display: grid;
+    gap: 2px;
+    cursor: pointer;
+  }
+
+  .bulk-all {
+    margin-bottom: var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  .unwritten summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .unwritten ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: var(--space-2) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .unwritten a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2rem;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    text-decoration: none;
+  }
+
+  .unwritten a:hover {
+    border-color: var(--accent);
+  }
+
+  .inline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .inline label {
+    flex-basis: 100%;
+    font-weight: 600;
+  }
+
+  .inline .input {
+    flex: 1 1 14rem;
+    width: auto;
+  }
+
+  .notice {
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--accent);
+    background: var(--surface-2);
+  }
+
+  .notice--error {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+</style>

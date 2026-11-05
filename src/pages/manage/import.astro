@@ -1,0 +1,554 @@
+---
+import Base from '../../layouts/Base.astro';
+import AlbumCard from '../../components/AlbumCard.astro';
+import Shelf from '../../components/Shelf.astro';
+import { recentReleaseGroups } from '../../lib/catalogue';
+
+const error = Astro.url.searchParams.get('error');
+const discographyError = Astro.url.searchParams.get('derror');
+const presetArtist = Astro.url.searchParams.get('artist') ?? '';
+const recent = await recentReleaseGroups(Astro.locals.user?.id ?? null, 12);
+const previous = Astro.url.searchParams.get('source') ?? '';
+---
+
+<Base title="Import">
+  <div class="wrap page">
+    <header>
+      <h1>Import</h1>
+    </header>
+
+    <form method="post" action="/api/write/import" novalidate id="import-form" class="importer">
+      <label for="source" class="importer-label">Paste a MusicBrainz or Spotify link</label>
+      <div class="bar">
+        <svg class="bar-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+        </svg>
+        <input
+          class="bar-input"
+          id="source"
+          name="source"
+          type="text"
+          inputmode="url"
+          autocomplete="off"
+          spellcheck="false"
+          required
+          placeholder="open.spotify.com/album/… or musicbrainz.org/release/…"
+          value={previous}
+          aria-describedby={error ? 'source-hint source-error' : 'source-hint'}
+          aria-invalid={error ? 'true' : undefined}
+        />
+        <button class="bar-button paste" type="button" data-paste hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="6" y="4" width="12" height="17" rx="2" />
+            <path d="M9 4.5V3.8A.8.8 0 0 1 9.8 3h4.4a.8.8 0 0 1 .8.8v.7M9.5 10h5M9.5 14h5" />
+          </svg>
+          <span>Paste</span>
+        </button>
+        <button class="bar-button bar-go" type="submit">Import</button>
+      </div>
+      <p class="hint" id="source-hint">Albums, editions or tracks. Paste several links at once and each is queued.</p>
+      {
+        error && (
+          <p class="error" id="source-error" role="alert">
+            That is not a MusicBrainz release or release group link, or a Spotify album or track link.
+          </p>
+        )
+      }
+      <p class="queued" role="status" hidden></p>
+    </form>
+
+    <script>
+      // Stay on the page: queue each link, hand it to the tray, clear the box
+      // for the next. A paste (the button, or Ctrl/Cmd+V anywhere on the page)
+      // that holds links queues them straight away, as many as it holds.
+      const form = document.getElementById('import-form') as HTMLFormElement | null;
+      const field = document.getElementById('source') as HTMLInputElement | null;
+      const queued = form?.querySelector<HTMLElement>('.queued');
+      const pasteButton = form?.querySelector<HTMLButtonElement>('[data-paste]');
+
+      const LINK =
+        /https?:\/\/(?:www\.)?musicbrainz\.org\/(?:release|release-group)\/[0-9a-f-]{36}|https?:\/\/open\.spotify\.com\/(?:intl-[a-z-]+\/)?(?:album|track)\/[A-Za-z0-9]{22}|spotify:(?:album|track):[A-Za-z0-9]{22}/gi;
+      const linksIn = (text: string) => [...new Set(text.match(LINK) ?? [])];
+
+      let count = 0;
+      const say = (text: string) => {
+        if (!queued) return;
+        queued.textContent = text;
+        queued.hidden = false;
+      };
+
+      async function queue(link: string): Promise<boolean> {
+        if (!form) return false;
+        const body = new FormData();
+        body.set('source', link);
+        const res = await fetch(form.action, { method: 'POST', body, headers: { accept: 'application/json' } });
+        const data = (await res.json().catch(() => ({}))) as { jobId?: string; label?: string; error?: string };
+        if (!res.ok || !data.jobId) return false;
+        window.dispatchEvent(new CustomEvent('job:watch', { detail: { id: data.jobId, label: data.label ?? 'Album' } }));
+        return true;
+      }
+
+      async function queueAll(text: string): Promise<boolean> {
+        const links = linksIn(text);
+        if (links.length === 0) return false;
+        let ok = 0;
+        for (const link of links) if (await queue(link)) ok += 1;
+        count += ok;
+        if (field) field.value = '';
+        say(
+          ok === links.length
+            ? `✓ Queued ${ok === 1 ? '' : `${ok} `}${count > ok ? `· ${count} this visit` : ''}`.replace(/\s+$/, '')
+            : `Queued ${ok} of ${links.length}; the rest could not be read.`,
+        );
+        field?.focus();
+        return true;
+      }
+
+      form?.addEventListener('submit', async (event) => {
+        if (!field || !field.value.trim()) return;
+        event.preventDefault();
+        try {
+          if (!(await queueAll(field.value))) {
+            field.setCustomValidity('That is not a MusicBrainz release or a Spotify album or track link.');
+            field.reportValidity();
+          }
+        } catch {
+          form.submit();
+        }
+      });
+      field?.addEventListener('input', () => field.setCustomValidity(''));
+
+      // Pasting a link into the box (or anywhere else on the page) queues it at once.
+      document.addEventListener('paste', async (event) => {
+        const target = event.target as HTMLElement | null;
+        const elsewhere = target && target !== field && target.closest('input, textarea, [contenteditable]');
+        if (elsewhere) return;
+        const text = event.clipboardData?.getData('text') ?? '';
+        if (linksIn(text).length === 0) return;
+        event.preventDefault();
+        await queueAll(text);
+      });
+
+      // The button reads the clipboard directly, where the browser allows it
+      // (a secure page, and the person's go-ahead on first use).
+      if (pasteButton && navigator.clipboard && 'readText' in navigator.clipboard) {
+        pasteButton.hidden = false;
+        pasteButton.addEventListener('click', async () => {
+          try {
+            const text = await navigator.clipboard.readText();
+            if (!(await queueAll(text))) {
+              if (field) field.value = text.trim();
+              say('There is no MusicBrainz or Spotify link on the clipboard.');
+            }
+          } catch {
+            say('The browser would not share the clipboard. Paste into the box instead.');
+            field?.focus();
+          }
+        });
+      }
+    </script>
+
+    <script>
+      // A discography goes to the tray, one card per release, oldest first.
+      const disco = document.getElementById('disco-form') as HTMLFormElement | null;
+      const status = disco?.querySelector<HTMLElement>('[data-disco-status]');
+      disco?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const button = disco.querySelector<HTMLButtonElement>('button[type=submit]');
+        if (button) button.disabled = true;
+        if (status) {
+          status.hidden = false;
+          status.textContent = 'Looking up their releases…';
+        }
+        try {
+          const res = await fetch(disco.action, { method: 'POST', body: new FormData(disco), headers: { accept: 'application/json' } });
+          const data = (await res.json()) as { error?: string; artist?: { name: string }; queued?: { id: string; title: string }[]; skipped?: number };
+          if (!res.ok || data.error) throw new Error(data.error ?? 'That could not be done.');
+          window.dispatchEvent(new CustomEvent('job:watch', { detail: { jobs: (data.queued ?? []).map((job) => ({ id: job.id, label: job.title })) } }));
+          const n = data.queued?.length ?? 0;
+          if (status) {
+            status.textContent = n
+              ? `✓ Queued ${n} ${n === 1 ? 'release' : 'releases'}${data.artist?.name ? ` by ${data.artist.name}` : ''}${data.skipped ? `; ${data.skipped} already here` : ''}`
+              : `Nothing new: ${data.skipped ?? 0} already here`;
+          }
+        } catch (error) {
+          if (status) status.textContent = error instanceof Error ? error.message : 'That could not be done.';
+        }
+        if (button) button.disabled = false;
+      });
+    </script>
+
+    <section aria-labelledby="disco-heading" class="disco">
+      <h2 id="disco-heading" class="section-label">A whole discography</h2>
+      <form method="post" action="/api/write/import/discography" id="disco-form" class="disco-form">
+        <div class="bar">
+          <svg class="bar-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4 21a8 8 0 0 1 16 0" />
+          </svg>
+          <label for="disco-artist" class="visually-hidden">Artist</label>
+          <input
+            class="bar-input"
+            id="disco-artist"
+            name="artist"
+            value={presetArtist}
+            required
+            placeholder="An artist’s name, or their Spotify or MusicBrainz page"
+            autocomplete="off"
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore
+            data-form-type="other"
+          />
+          <button class="bar-button bar-go" type="submit">Import all</button>
+        </div>
+        <fieldset class="kinds">
+          <legend class="visually-hidden">Which releases</legend>
+          {[
+            ['album', 'Albums and mixtapes', true],
+            ['ep', 'EPs', true],
+            ['single', 'Singles', false],
+            ['live', 'Live', false],
+            ['compilation', 'Compilations and remixes', false],
+          ].map(([value, label, on]) => (
+            <label class="kind">
+              <input type="checkbox" name="kind" value={value as string} checked={on as boolean} />
+              <span>{label}</span>
+            </label>
+          ))}
+        </fieldset>
+        {discographyError && (
+          <p class="error" role="alert">
+            {discographyError}
+          </p>
+        )}
+        <p class="queued" role="status" hidden data-disco-status></p>
+      </form>
+    </section>
+
+    <section aria-labelledby="other-heading">
+      <h2 id="other-heading" class="section-label">Other ways in</h2>
+      <ul role="list" class="options">
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+          <div>
+            <a href="/manage/import/files">Import a folder</a>
+            <p>Have the files? Their tags are read on your device; only text is sent.</p>
+          </div>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" /></svg>
+          <div>
+            <a href="/manage/import/manual">Add by hand</a>
+            <p>In no database at all? Paste the tracklist.</p>
+          </div>
+        </li>
+      </ul>
+    </section>
+
+    {
+      recent.length > 0 && (
+        <section aria-labelledby="recent-heading">
+          <h2 id="recent-heading" class="section-label">Recently added</h2>
+          <Shelf label="recently added">
+            <ul role="list">
+              {recent.map((album) => (
+                <li>
+                  <AlbumCard album={album} />
+                </li>
+              ))}
+            </ul>
+          </Shelf>
+        </section>
+      )
+    }
+
+    <details class="how">
+      <summary>What happens when you import</summary>
+      <ul>
+        <li>It runs in the background; the corner of the screen shows its progress, on any page.</li>
+        <li>An album already here gains the new edition rather than a duplicate.</li>
+        <li>Details are only ever filled in, never overwritten, and nothing you edited changes.</li>
+        <li>Covers, labels, credits and the artist’s details are looked up straight after.</li>
+      </ul>
+    </details>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-7);
+    --content-max: 48rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .importer {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .importer-label {
+    font-weight: 700;
+  }
+
+  /* One bar: link icon, the box, Paste, Import. Focus rings the whole bar. */
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+    box-shadow: 0 6px 24px -12px rgb(0 0 0 / 0.35);
+  }
+
+  .bar:focus-within {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .bar-icon {
+    flex: none;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin-left: var(--space-3);
+    fill: none;
+    stroke: var(--text-subtle);
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+
+  .bar-input {
+    flex: 1;
+    min-width: 0;
+    min-height: var(--target);
+    padding: 0 var(--space-2);
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    outline: none;
+  }
+
+  .bar-input::placeholder {
+    color: var(--text-subtle);
+  }
+
+  .bar-button {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+    padding: 0 var(--space-4);
+    border: 0;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text);
+    font: inherit;
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .bar-button svg {
+    width: 1.05rem;
+    height: 1.05rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .bar-go {
+    background: var(--accent);
+    color: var(--on-accent, #fff);
+  }
+
+  /* On a phone, Paste keeps only its icon so the box keeps its width. */
+  @media (max-width: 30rem) {
+    .paste span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+
+    .paste {
+      padding: 0 var(--space-3);
+    }
+  }
+
+  .hint {
+    padding-left: var(--space-4);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .queued {
+    justify-self: start;
+    margin-top: var(--space-1);
+    padding: var(--space-1) var(--space-3);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--text);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .error {
+    padding-left: var(--space-4);
+    color: var(--danger);
+    font-weight: 600;
+  }
+
+  .section-label {
+    margin-bottom: var(--space-3);
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .options li {
+    position: relative;
+    display: grid;
+    grid-template-columns: 2.5rem minmax(0, 1fr);
+    align-items: start;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+    transition: border-color 0.15s;
+  }
+
+  .options li:hover {
+    border-color: var(--accent);
+  }
+
+  .options svg {
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0.55rem;
+    border-radius: var(--radius-m);
+    background: var(--surface-2);
+    fill: none;
+    stroke: var(--text);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .options a {
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  /* The whole card is the link. */
+  .options a::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-l);
+  }
+
+  .options a:focus-visible {
+    outline: none;
+  }
+
+  .options a:focus-visible::after {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .options p {
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .how summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .how ul {
+    display: grid;
+    gap: var(--space-1);
+    margin: var(--space-2) 0 0;
+    padding-left: 1.2rem;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .disco-form {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .kinds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  /* Each kind a toggle chip: ticked ones filled. */
+  .kind {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.25rem;
+    padding: 0 var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+    font-size: var(--step--1);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .kind input {
+    position: absolute;
+    opacity: 0;
+  }
+
+  .kind:has(input:checked) {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface-1));
+  }
+
+  .kind:has(input:focus-visible) {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+</style>

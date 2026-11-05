@@ -5,6 +5,7 @@
  * latest rating. Everything shown is read from the score views and the
  * rating itself; nothing is computed here.
  */
+import { scoreTone } from '../lib/format';
 import type { RatingRow } from '../lib/ratings';
 
 interface Props {
@@ -13,47 +14,87 @@ interface Props {
   ratedTracks?: number | null;
   trackCount?: number | null;
   rating?: RatingRow | null;
-  /** Where "Rate" goes, for the signed-in owner. */
+  /** The best-rated track, for an album. */
+  best?: { title: string; href: string; quality: number } | null;
+  /** A track's axes from its latest rating, out of 10, or 'n/a' where one does not apply. */
+  trackAxes?: readonly (readonly [string, number | 'n/a' | null])[];
+  /** For the owner: the whole panel opens the rating form. */
   rateHref?: string | null;
+  /** For an album: rating the next unrated track, from the "tracks rated" line. */
+  nextHref?: string | null;
 }
 
-const { quality, personal, ratedTracks, trackCount, rating, rateHref } = Astro.props;
-const score = quality == null ? null : Math.round(quality);
+const { quality, personal, ratedTracks, trackCount, rating, best, trackAxes = [], rateHref = null, nextHref = null } = Astro.props;
+const qualityRounded = quality == null ? null : Math.round(quality);
 const impact = quality != null && personal != null ? Math.round(personal - quality) : 0;
+// The number is quality; impact is shown beside it, not added (it mostly
+// lands on favourites, so a sum would crowd everything past 100).
+const score = qualityRounded;
+const tone = score == null ? null : scoreTone(score);
 const coverage = trackCount ? Math.min(1, (ratedTracks ?? 0) / trackCount) : null;
-const axes = rating
+const axes: readonly (readonly [string, number | 'n/a' | null])[] = trackAxes.length
+  ? trackAxes
+  : rating
   ? ([
       ['Sequencing', rating.sequencing],
       ['Cohesion', rating.cohesion],
       ['Ambition', rating.ambition],
     ] as const).filter(([, v]) => v != null)
   : [];
-const tier = score == null ? 'none' : score >= 90 ? 'top' : score >= 75 ? 'high' : 'mid';
 ---
 
-<section class="panel" data-tier={tier} aria-label="Score">
+<section class:list={['panel', { rateable: rateHref }]} aria-label="Score">
+  {
+    /* The whole panel is the way to (re)rate: a link stretched over it, with
+       any links inside lifted above it so they still work on their own. */
+    rateHref && (
+      <a class="rate-link" href={rateHref}>
+        <span class="visually-hidden">{score == null ? 'Rate it' : 'Change your rating'}</span>
+        <span class="rate-hint" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />
+          </svg>
+          {score == null ? 'Rate it' : 'Change'}
+        </span>
+      </a>
+    )
+  }
   {
     score == null ? (
       <div class="unrated">
         <p class="label">Not rated yet</p>
-        {rateHref && (
-          <a class="button button--primary" href={rateHref}>
-            Rate album
-          </a>
-        )}
+        {trackCount ? (
+          <p class="muted-small">
+            {ratedTracks ?? 0} of {trackCount} tracks rated
+            {nextHref && (
+              <>
+                {' · '}
+                <a class="lifted" href={nextHref}>
+                  rate the next
+                </a>
+              </>
+            )}
+          </p>
+        ) : null}
       </div>
     ) : (
       <>
         <div class="headline">
-          <p class="number tabular" aria-label={`Score ${score} out of 100`}>
-            <span class="value" aria-hidden="true">{score}</span>
-            <span class="out" aria-hidden="true">/100</span>
+          <p class="number tabular">
+            <span class={`value ${tone!.className}`} style={tone!.style} aria-hidden="true">
+              {score}
+            </span>
+            <span class="visually-hidden">Score {score} out of 100</span>
           </p>
-          {impact > 0 && (
-            <p class="impact" title="Impact: what this album means, on top of how well it is made">
-              <span class="visually-hidden">plus </span>+{impact} impact
-            </p>
-          )}
+          <p class="breakdown">
+            {impact > 0 ? (
+              <>
+                <span class="mark" aria-hidden="true">✦</span> Impact {impact} of 10
+              </>
+            ) : (
+              'out of 100'
+            )}
+          </p>
         </div>
 
         <div class="details">
@@ -62,6 +103,11 @@ const tier = score == null ? 'none' : score >= 90 ? 'top' : score >= 75 ? 'high'
               <p class="meter-label">
                 <span>Tracks rated</span>
                 <span class="tabular">
+                  {nextHref && (
+                    <a class="lifted next" href={nextHref}>
+                      Rate the next
+                    </a>
+                  )}
                   {ratedTracks ?? 0} of {trackCount}
                 </span>
               </p>
@@ -74,21 +120,23 @@ const tier = score == null ? 'none' : score >= 90 ? 'top' : score >= 75 ? 'high'
             <div class="meter">
               <p class="meter-label">
                 <span>{label}</span>
-                <span class="tabular">{value}</span>
+                <span class="tabular">{value === 'n/a' ? 'Doesn’t apply' : value}</span>
               </p>
-              <span class="bar" aria-hidden="true">
-                <span style={`--fill: ${(value as number) / 10}`} />
+              <span class:list={['bar', { na: value === 'n/a' }]} aria-hidden="true">
+                <span style={`--fill: ${typeof value === 'number' ? value / 10 : 0}`} />
               </span>
             </div>
           ))}
           {rating && axes.length === 0 && rating.gut_score != null && <p class="gut">Gut score {rating.gut_score} of 10</p>}
+          {best && (
+            <p class="best">
+              <span>Best track</span>
+              <a class="lifted" href={best.href}>{best.title}</a>
+              <span class="tabular best-score">{Math.round(best.quality)}</span>
+            </p>
+          )}
         </div>
 
-        {rateHref && (
-          <a class="rerate" href={rateHref}>
-            Rate again
-          </a>
-        )}
       </>
     )
   }
@@ -106,6 +154,35 @@ const tier = score == null ? 'none' : score >= 90 ? 'top' : score >= 75 ? 'high'
     background: color-mix(in srgb, var(--surface-1) 72%, transparent);
     backdrop-filter: blur(12px);
     max-width: 36rem;
+  }
+
+  .best {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-width: 0;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .best a {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .best-score {
+    margin-left: auto;
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .muted-small {
+    color: var(--text-muted);
+    font-size: var(--step--1);
   }
 
   .unrated {
@@ -140,26 +217,15 @@ const tier = score == null ? 'none' : score >= 90 ? 'top' : score >= 75 ? 'high'
     letter-spacing: -0.04em;
   }
 
-  [data-tier='top'] .value,
-  [data-tier='high'] .value {
-    color: var(--accent);
-  }
-
-  .out {
-    color: var(--text-subtle);
-    font-size: var(--step-0);
-    font-weight: 600;
-  }
-
-  .impact {
-    justify-self: start;
-    padding: 0.1rem 0.55rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
-    color: var(--accent);
+  .breakdown {
+    color: var(--text-muted);
     font-size: var(--step--1);
-    font-weight: 700;
+    font-weight: 600;
     white-space: nowrap;
+  }
+
+  .mark {
+    color: var(--accent);
   }
 
   .details {
@@ -201,20 +267,99 @@ const tier = score == null ? 'none' : score >= 90 ? 'top' : score >= 75 ? 'high'
     font-size: var(--step--1);
   }
 
-  .rerate {
-    grid-column: 1 / -1;
-    justify-self: start;
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
-    color: var(--text-muted);
-    font-size: var(--step--1);
-    font-weight: 600;
-  }
 
   @media (max-width: 26rem) {
     .panel {
       grid-template-columns: minmax(0, 1fr);
     }
+  }
+
+  /* An axis that does not apply (an instrumental's lyrics): a dashed, empty track. */
+  .bar.na {
+    background: none;
+    border: 1px dashed var(--border);
+  }
+
+  .panel {
+    position: relative;
+  }
+
+  .rate-link {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: inherit;
+  }
+
+  .rate-link:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  /* Links inside the panel sit above the stretched one. */
+  .lifted {
+    position: relative;
+    z-index: 2;
+  }
+
+  .rateable {
+    cursor: pointer;
+    transition:
+      border-color 0.15s,
+      box-shadow 0.15s;
+  }
+
+  .rateable:hover {
+    border-color: var(--accent);
+    box-shadow: 0 8px 28px -14px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+
+  /* "Change" as a small tab sitting on the panel's top edge, clear of
+     everything inside. Shown on hover and focus; always on touch screens,
+     which have no hover. */
+  .rate-hint {
+    position: absolute;
+    top: 0;
+    right: var(--space-5);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    padding: 0.15rem 0.6rem;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    background: var(--surface-1);
+    color: var(--accent);
+    font-size: 0.75rem;
+    font-weight: 700;
+    opacity: 0;
+    translate: 0 -50%;
+    transition: opacity 0.15s;
+  }
+
+  .rateable:hover .rate-hint,
+  .rate-link:focus-visible .rate-hint {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    .rate-hint {
+      opacity: 1;
+    }
+  }
+
+  .rate-hint svg {
+    width: 0.85rem;
+    height: 0.85rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .next {
+    margin-right: var(--space-2);
+    color: var(--accent);
+    font-weight: 650;
   }
 </style>

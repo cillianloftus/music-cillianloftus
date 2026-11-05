@@ -38,14 +38,23 @@ const ROLE_LABELS: Record<string, [singular: string, plural: string]> = {
   producer: ['Producer', 'Producers'],
   writer: ['Writer', 'Writers'],
   engineer: ['Engineer', 'Engineers'],
-  mixer: ['Mixing', 'Mixing'],
+  mixer: ['Mixing engineer', 'Mixing engineers'],
+  mastering_engineer: ['Mastering engineer', 'Mastering engineers'],
+  recording_engineer: ['Recording engineer', 'Recording engineers'],
+  composer: ['Composer', 'Composers'],
+  lyricist: ['Lyricist', 'Lyricists'],
+  co_producer: ['Co-producer', 'Co-producers'],
   remixer: ['Remixer', 'Remixers'],
   performer: ['Performer', 'Performers'],
 };
 
-export function roleLabel(role: string, count = 1): string {
+/**
+ * A role's heading over its credits: plural where that reads better
+ * ("Writers"), otherwise the role's own label as stored ("Lead vocals").
+ */
+export function roleLabel(role: string, count = 1, stored?: string): string {
   const labels = ROLE_LABELS[role];
-  return labels ? labels[count === 1 ? 0 : 1] : role;
+  return labels ? labels[count === 1 ? 0 : 1] : (stored ?? role);
 }
 
 /** "3 days ago", "last month": for dates where the exact day matters less than the feel. */
@@ -64,4 +73,28 @@ export function formatRelative(iso: string, now: Date = new Date()): string {
     if (Math.abs(seconds) >= size) return rtf.format(Math.round(seconds / size), unit);
   }
   return 'just now';
+}
+
+/**
+ * The hue a score is drawn in: 25 (red) at 0 to 145 (green) at 100. Bent
+ * so the top of the scale, where most ratings live, spreads out: 70 is
+ * yellow, 90 yellow-green, 100 green.
+ */
+export function scoreHue(score: number): number {
+  const t = Math.max(0, Math.min(1, score / 100));
+  return Math.round(25 + 120 * t ** 1.5);
+}
+
+/** The colour classes and hue for a displayed score. */
+export function scoreTone(score: number): { className: string; style: string } {
+  return score > 100
+    ? { className: 'tone--beyond', style: '' }
+    : { className: 'tone', style: `--h: ${scoreHue(score)}` };
+}
+
+/** "41 min", "1 hr 12 min": an album's running time. */
+export function describeLength(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} hr ${minutes % 60} min`;
 }

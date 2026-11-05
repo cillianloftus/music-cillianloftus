@@ -58,8 +58,9 @@ function inOrder<T extends { id: string }>(ids: string[], rows: T[]): T[] {
 export async function hydrateTracks(ids: string[], userId: string | null): Promise<TrackResult[]> {
   const { results } = await env.DB.prepare(
     `SELECT e.id, e.title, e.length_ms, e.spotify_id, s.quality_score, s.personal_score,
-            ag.id AS album_id, ag.title AS album_title, r.art_key
+            ag.id AS album_id, ag.title AS album_title, coalesce(fa.art_key, r.art_key) AS art_key
      FROM recording e
+     LEFT JOIN v_recording_first_art fa ON fa.recording_id = e.id
      LEFT JOIN v_recording_score s ON s.recording_id = e.id AND s.user_id = ?1
      LEFT JOIN v_recording_album ra ON ra.recording_id = e.id
      LEFT JOIN release_group ag ON ag.id = ra.release_group_id

@@ -1,0 +1,383 @@
+---
+/**
+ * What the ratings say about the person making them. Public, like the
+ * ratings. Charts are drawn on the server; each has a table beneath.
+ */
+import Base from '../layouts/Base.astro';
+import BarChart from '../components/BarChart.astro';
+import { hueOf } from '../lib/art/playlist';
+import { ownerId } from '../lib/auth/user';
+import { scoreHue } from '../lib/format';
+import { insights } from '../lib/insights';
+import { deeperInsights, favourite, type Band } from '../lib/insights-deeper';
+
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+const [data, deep] = viewerId ? await Promise.all([insights(viewerId), deeperInsights(viewerId)]) : [null, null];
+const h = data?.headline;
+
+const monthLabel = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' });
+const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString('en-GB')} ${n === 1 ? one : many}`;
+const gut = h ? Math.round(h.gutOffset * 10) / 10 : 0;
+// One sentence per finding: the favourite band, and by how much it leads.
+const lead = (bands: Band[]) => {
+  const best = favourite(bands);
+  if (!best) return null;
+  const rest = bands.filter((b) => b !== best);
+  const others = rest.reduce((sum, b) => sum + b.average * b.count, 0) / Math.max(1, rest.reduce((sum, b) => sum + b.count, 0));
+  return { best, margin: rest.length ? Math.round(best.average - others) : 0 };
+};
+const sweetSpot = deep ? lead(deep.length) : null;
+const placeLead = deep ? lead(deep.position) : null;
+const ageLead = deep ? lead(deep.ageByYear) : null;
+const solo = deep?.features.find((b) => b.key === '0');
+const guest = deep?.features.find((b) => b.key === '1');
+const axisLead = deep ? favourite(deep.axes) : null;
+// Scores cluster near the top, so averages are charted from a little below
+// the lowest one, not from zero, or every bar would look the same height.
+// The scale's first label says where it starts.
+const floorOf = (values: number[]) => Math.max(0, Math.floor((Math.min(...values) - 5) / 10) * 10);
+const bandBars = (bands: Band[], unit = 'track') =>
+  bands.map((b) => ({
+    label: b.label,
+    value: Math.round(b.average),
+    detail: `average ${Math.round(b.average)} across ${plural(b.count, unit)}`,
+    colour: `oklch(0.66 0.15 ${scoreHue(b.average)})`,
+  }));
+const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTracks) * 100) : 0;
+---
+
+<Base title="Insights" description="What the ratings say: how scores spread, which decades and genres score highest, and how gut and considered judgement differ.">
+  <div class="wrap page">
+    <header>
+      <h1>Insights</h1>
+    </header>
+
+    {
+      !data || h!.ratedTracks === 0 ? (
+        <p class="muted">Nothing rated yet.</p>
+      ) : (
+        <>
+          <dl class="headline">
+            <div>
+              <dt>Tracks rated</dt>
+              <dd class="tabular">{h!.ratedTracks.toLocaleString('en-GB')}</dd>
+              <dd class="sub">{plural(h!.ratedAlbums, 'album')} with a score</dd>
+            </div>
+            <div>
+              <dt>Average track</dt>
+              <dd class="tabular">{h!.averageTrack == null ? '–' : Math.round(h!.averageTrack)}</dd>
+              <dd class="sub">out of 100</dd>
+            </div>
+            <div>
+              <dt>Your gut</dt>
+              <dd class="tabular">{gut === 0 ? 'Level' : `${gut > 0 ? '−' : '+'}${Math.abs(gut)}`}</dd>
+              <dd class="sub">
+                {h!.gutSamples === 0
+                  ? 'No gut scores with a full breakdown yet'
+                  : gut === 0
+                    ? `matches your considered scores, over ${plural(h!.gutSamples, 'rating')}`
+                    : `points ${gut > 0 ? 'lower' : 'higher'} than considered, over ${plural(h!.gutSamples, 'rating')}`}
+              </dd>
+            </div>
+            <div>
+              <dt>Impact given</dt>
+              <dd class="tabular">{impactShare}%</dd>
+              <dd class="sub">of rated tracks ({h!.impactTracks}); meant to be rare</dd>
+            </div>
+          </dl>
+
+          <section aria-labelledby="spread-heading">
+            <h2 id="spread-heading">How scores spread</h2>
+            <p class="muted lead">Tracks by score, in ten-point bands.</p>
+            <BarChart
+              title="Rated tracks by score band"
+              valueLabel="Tracks"
+              bars={data.spread.map((b) => ({
+                label: b.from === 90 ? '90+' : `${b.from}s`,
+                value: b.count,
+                detail: `${plural(b.count, 'track')} scored ${b.from}–${b.to}`,
+                colour: `oklch(0.66 0.15 ${scoreHue(b.from + 5)})`,
+              }))}
+            />
+          </section>
+
+          {data.decades.length > 0 && (
+            <section aria-labelledby="decades-heading">
+              <h2 id="decades-heading">By decade</h2>
+              <p class="muted lead">Average album score by when it came out.</p>
+              <BarChart
+                title="Average album score by decade of release" min={floorOf(data.decades.map((d) => d.average))}
+                valueLabel="Average score"
+                max={100}
+                bars={data.decades.map((d) => ({
+                  label: d.key,
+                  value: Math.round(d.average),
+                  detail: `average ${Math.round(d.average)} across ${plural(d.count, 'album')}`,
+                }))}
+              />
+            </section>
+          )}
+
+          {data.families.length > 0 && (
+            <section aria-labelledby="families-heading">
+              <h2 id="families-heading">Genre families</h2>
+              <p class="muted lead">Average track score in each family, counting everything beneath it. Families with at least two rated tracks.</p>
+              <BarChart
+                title="Average track score by genre family" min={floorOf(data.families.map((f) => f.average))}
+                orientation="horizontal"
+                valueLabel="Average score"
+                max={100}
+                bars={data.families.map((f) => ({
+                  label: f.label,
+                  value: Math.round(f.average),
+                  detail: `average ${Math.round(f.average)} across ${plural(f.count, 'track')}`,
+                  colour: `oklch(0.64 0.12 ${hueOf(f.label)})`,
+                }))}
+              />
+            </section>
+          )}
+
+          {deep && deep.length.length > 1 && (
+            <section aria-labelledby="length-heading" class="finding">
+              <h2 id="length-heading">Song length</h2>
+              {sweetSpot && (
+                <p class="lead-line">
+                  Your sweet spot is <strong>{sweetSpot.best.label.toLowerCase()}</strong>: an average of {Math.round(sweetSpot.best.average)}
+                  {sweetSpot.margin > 0 && <>, {sweetSpot.margin} {sweetSpot.margin === 1 ? 'point' : 'points'} above everything else</>}.
+                </p>
+              )}
+              <BarChart title="Average track score by length" min={floorOf(deep.length.map((b) => b.average))} valueLabel="Average score" max={100} bars={bandBars(deep.length)} />
+            </section>
+          )}
+
+          {deep && deep.position.length > 1 && (
+            <section aria-labelledby="position-heading" class="finding">
+              <h2 id="position-heading">Where it sits on the album</h2>
+              {placeLead && (
+                <p class="lead-line">
+                  You rate <strong>{placeLead.best.key === '0' ? 'openers' : placeLead.best.key === '3' ? 'closers' : `the ${placeLead.best.label.toLowerCase()}`}</strong> highest, at {Math.round(placeLead.best.average)} on average.
+                </p>
+              )}
+              <BarChart title="Average track score by place on the album" min={floorOf(deep.position.map((b) => b.average))} valueLabel="Average score" max={100} bars={bandBars(deep.position)} />
+            </section>
+          )}
+
+          {deep && solo && guest && (
+            <section aria-labelledby="features-heading" class="finding">
+              <h2 id="features-heading">Solo or with a guest</h2>
+              <p class="lead-line">
+                {Math.round(guest.average) === Math.round(solo.average) ? (
+                  <>A guest makes no difference: both average {Math.round(solo.average)}.</>
+                ) : (
+                  <>
+                    Tracks <strong>{guest.average > solo.average ? 'with a guest' : 'on their own'}</strong> score{' '}
+                    {Math.abs(Math.round(guest.average - solo.average))} {Math.abs(Math.round(guest.average - solo.average)) === 1 ? 'point' : 'points'} higher.
+                  </>
+                )}
+              </p>
+              <BarChart title="Average track score, solo or featuring" min={floorOf(deep.features.map((b) => b.average))} orientation="horizontal" valueLabel="Average score" max={100} bars={bandBars(deep.features)} />
+            </section>
+          )}
+
+          {deep && deep.ageByYear.length > 1 && (
+            <section aria-labelledby="age-heading" class="finding">
+              <h2 id="age-heading">How old they were</h2>
+              {deep.ageLink && (
+                <p class="lead-line">
+                  {Math.abs(deep.ageLink.r) < 0.15 ? (
+                    <>
+                      <strong>No real link</strong> between an artist’s age and how you rate them
+                    </>
+                  ) : (
+                    <>
+                      Your scores <strong>{deep.ageLink.r > 0 ? 'rise' : 'fall'}</strong> {Math.abs(deep.ageLink.r) < 0.4 ? 'a little ' : ''}as artists get older
+                    </>
+                  )}
+                  , across {plural(deep.ageLink.tracks, 'track')} by {plural(deep.ageLink.artists, 'artist')}.
+                  {ageLead && <> Your favourite age to hear them at: <strong>{ageLead.best.label}</strong>.</>}
+                </p>
+              )}
+              <BarChart
+                title="Average track score by the artist's age at release"
+                valueLabel="Average score"
+                min={floorOf(deep.ageByYear.map((b) => b.average))}
+                bars={deep.ageByYear.map((b) => ({
+                  label: b.label,
+                  value: Math.round(b.average),
+                  detail: `aged ${b.label}: average ${Math.round(b.average)} across ${plural(b.count, 'track')}`,
+                  colour: `oklch(0.66 0.15 ${scoreHue(b.average)})`,
+                }))}
+              />
+              <p class="muted small-note">
+                Correlation {deep.ageLink ? (Math.round(deep.ageLink.r * 100) / 100).toFixed(2) : 'n/a'}. Solo artists with a known birthday, at the year each track came out.
+              </p>
+            </section>
+          )}
+
+          {deep && deep.axes.length > 0 && deep.axes.some((a) => a.count > 0) && (
+            <section aria-labelledby="axes-heading" class="finding">
+              <h2 id="axes-heading">What you rate highest</h2>
+              {axisLead && (
+                <p class="lead-line">
+                  <strong>{axisLead.label}</strong> earns your best marks, at {Math.round(axisLead.average) / 10} out of 10 on average.
+                </p>
+              )}
+              <BarChart
+                title="Average axis score" min={floorOf(deep.axes.map((b) => b.average))}
+                orientation="horizontal"
+                valueLabel="Average (out of 100)"
+                max={100}
+                bars={bandBars(deep.axes, 'rating')}
+              />
+            </section>
+          )}
+
+          {data.months.length > 1 && (
+            <section aria-labelledby="months-heading">
+              <h2 id="months-heading">When the rating happened</h2>
+              <p class="muted lead">Ratings made each month, including re-ratings.</p>
+              <BarChart
+                title="Ratings made per month"
+                valueLabel="Ratings"
+                labelEvery={Math.max(1, Math.ceil(data.months.length / 8))}
+                bars={data.months.map((m) => ({ label: monthLabel(m.month), value: m.count, detail: plural(m.count, 'rating') }))}
+              />
+            </section>
+          )}
+
+          {data.artists.length > 0 && (
+            <section aria-labelledby="artists-heading">
+              <h2 id="artists-heading">Most rated</h2>
+              <ol role="list" class="artists">
+                {data.artists.map((a, i) => (
+                  <li>
+                    <span class="rank tabular">{i + 1}</span>
+                    <a href={`/artist/${a.id}`}>{a.name}</a>
+                    <span class="muted tabular">{plural(a.tracks, 'track')}</span>
+                    <span class="avg tabular" style={`color: oklch(var(--score-l) var(--score-c) ${scoreHue(a.average)})`}>
+                      {Math.round(a.average)}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+        </>
+      )
+    }
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-7);
+    --content-max: 52rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  h2 {
+    font-size: var(--step-2);
+    letter-spacing: -0.02em;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .lead {
+    margin: var(--space-1) 0 var(--space-4);
+  }
+
+  .headline {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  .headline div {
+    display: grid;
+    align-content: start;
+    gap: 2px;
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+  }
+
+  .headline dt {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .headline dd {
+    margin: 0;
+    font-size: var(--step-3);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.05;
+  }
+
+  .headline dd.sub {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 400;
+    letter-spacing: 0;
+    line-height: 1.35;
+  }
+
+  .artists {
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .artists li {
+    display: grid;
+    grid-template-columns: 1.5rem minmax(0, 1fr) auto 3ch;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .rank {
+    color: var(--text-subtle);
+    font-weight: 700;
+  }
+
+  .artists a {
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  .artists a:hover {
+    text-decoration: underline;
+  }
+
+  .avg {
+    font-weight: 800;
+    text-align: right;
+  }
+
+  .lead-line {
+    margin: var(--space-1) 0 var(--space-4);
+    font-size: var(--step-1);
+    text-wrap: pretty;
+  }
+
+  .lead-line strong {
+    font-weight: 800;
+  }
+
+  .small-note {
+    margin-top: var(--space-2);
+    font-size: var(--step--1);
+  }
+</style>

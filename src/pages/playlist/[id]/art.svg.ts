@@ -4,9 +4,11 @@ import { playlistArtSvg } from '../../../lib/art/playlist';
 import { getDefinition } from '../../../lib/definitions';
 
 /** The playlist's generated art, drawn from what it currently holds. */
-export const GET: APIRoute = async ({ params }) => {
+export const GET: APIRoute = async ({ params, request }) => {
   const saved = await getDefinition(params.id!);
   if (!saved) return new Response('Not found', { status: 404 });
+  // A cover chosen by hand replaces the drawn one wherever the art is used.
+  if (saved.art_mode === 'uploaded' && saved.art_key) return Response.redirect(new URL(`/playlist/${saved.id}/cover.jpg`, request.url), 302);
   const svg = playlistArtSvg(await artItems(saved));
   return new Response(svg, {
     headers: {

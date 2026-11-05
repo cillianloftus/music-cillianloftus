@@ -92,29 +92,55 @@ export function mapReleaseGroupType(primary: string | null, secondary: string[])
   return 'album';
 }
 
-/** MusicBrainz relationship types, mapped onto the credit roles we keep. */
+/** MusicBrainz relationship types, mapped onto built-in credit roles. */
 const RELATION_ROLES: Record<string, CreditRole> = {
   producer: 'producer',
-  'co-producer': 'producer',
+  'co-producer': 'co_producer',
   'executive producer': 'producer',
+  'vocal producer': 'vocal_producer',
+  programming: 'programming',
   engineer: 'engineer',
   audio: 'engineer',
-  recording: 'engineer',
+  recording: 'recording_engineer',
   sound: 'engineer',
-  mastering: 'engineer',
+  mastering: 'mastering_engineer',
   mix: 'mixer',
   'mix-DJ': 'mixer',
   remixer: 'remixer',
-  vocal: 'performer',
+  vocal: 'lead_vocals',
   instrument: 'performer',
   performer: 'performer',
   'performing orchestra': 'performer',
   conductor: 'performer',
-  composer: 'writer',
-  lyricist: 'writer',
+  arranger: 'arranger',
+  composer: 'composer',
+  lyricist: 'lyricist',
   writer: 'writer',
-  librettist: 'writer',
+  librettist: 'lyricist',
 };
+
+/** Instruments and vocal kinds named in a relation's attributes, to the role for them. */
+const ATTRIBUTE_ROLES: [RegExp, CreditRole][] = [
+  [/background vocals|choir vocals/i, 'background_vocals'],
+  [/lead vocals/i, 'lead_vocals'],
+  [/bass/i, 'bass'],
+  [/guitar/i, 'guitar'],
+  [/drums|drum machine/i, 'drums'],
+  [/piano/i, 'piano'],
+  [/keyboard|synthesizer|organ/i, 'keyboards'],
+  [/percussion/i, 'percussion'],
+  [/violin|viola|cello|strings/i, 'strings'],
+];
+
+/** The role for one relation, from its type and, for vocals and instruments, its attributes. */
+export function roleForRelation(type: string, attributes: string[] = []): CreditRole | null {
+  const base = RELATION_ROLES[type];
+  if (!base) return null;
+  if (type === 'vocal' || type === 'instrument') {
+    for (const [pattern, role] of ATTRIBUTE_ROLES) if (attributes.some((a) => pattern.test(a))) return role;
+  }
+  return base;
+}
 
 const FEATURING = /\b(feat\.?|ft\.?|featuring)\s*$/i;
 
@@ -182,7 +208,7 @@ class PlanBuilder {
   relations(entity: CreditEntity, entityMbid: string, relations: MbRelation[] = []): void {
     for (const relation of relations) {
       if (relation['target-type'] !== 'artist' || !relation.artist) continue;
-      const role = RELATION_ROLES[relation.type];
+      const role = roleForRelation(relation.type, relation.attributes);
       if (role) this.credit(entity, entityMbid, relation.artist, role);
     }
   }
@@ -235,7 +261,6 @@ export function buildPlan(release: MbRelease, group: MbReleaseGroup): ImportPlan
 
   const releaseDate = parsePartialDate(release.date);
   builder.artistCredit('release', release.id, release['artist-credit']);
-  builder.relations('release', release.id, release.relations);
 
   const recordings = new Map<string, PlanRecording>();
   const tracks: PlanTrack[] = [];
@@ -279,6 +304,11 @@ export function buildPlan(release: MbRelease, group: MbReleaseGroup): ImportPlan
     }
   }
 
+  // An album's writers, producers and engineers are its tracks': credits
+  // MusicBrainz files on the release (a mastering engineer, say) go onto
+  // every track on it rather than the album.
+  for (const recordingId of recordings.keys()) builder.relations('recording', recordingId, release.relations);
+
   const label = release['label-info']?.find((info) => info.label)?.label?.name ?? null;
 
   return {
@@ -295,6 +325,7 @@ export function buildPlan(release: MbRelease, group: MbReleaseGroup): ImportPlan
       country: release.country && release.country.length === 2 ? release.country : null,
       label,
       format: formatSummary(release.media),
+      barcode: release.barcode && /^\d{8,14}$/.test(release.barcode) ? release.barcode : null,
     },
     tracks,
     releaseGroupGenres: genresFrom(group),

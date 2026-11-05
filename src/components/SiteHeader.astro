@@ -11,18 +11,29 @@ const path = Astro.url.pathname;
 
 // Icons are SVG path data on a 24px grid, drawn as strokes.
 const links = [
-  { href: '/', label: 'Home', icon: 'M4 11l8-7 8 7v9H4z M10 20v-5h4v5' },
+  // Home is the brand on wide screens; on phones the bottom bar needs it.
+  { href: '/', label: 'Home', icon: 'M4 11l8-7 8 7v9H4z M10 20v-5h4v5', phoneOnly: true },
   { href: '/diary', label: 'Diary', icon: 'M6 4h11a1 1 0 0 1 1 1v15H7a2 2 0 0 1-2-2V5a1 1 0 0 1 1-1z M5 17a2 2 0 0 1 2-2h11 M9 8h6' },
-  ...(user ? [{ href: '/edit/queue', label: 'Queue', icon: 'M4 13l2.5-8h11l2.5 8M4 13v6h16v-6M4 13h5l1.5 2h3l1.5-2h5' }] : []),
-  { href: '/playlists', label: 'Playlists', icon: 'M4 6h12M4 12h12M4 18h7M18 15v6M15 18h6' },
+  { href: '/artists', label: 'Artists', icon: 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21a8 8 0 0 1 16 0' },
   { href: '/genres', label: 'Genres', icon: 'M9 9.5a5 5 0 1 0 0 .01M16.5 16a3.5 3.5 0 1 0 0 .01M17 6.5a2 2 0 1 0 0 .01' },
-  ...(user ? [{ href: '/edit', label: 'Manage', icon: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4' }] : []),
+  { href: '/playlists', label: 'Playlists', icon: 'M4 6h12M4 12h12M4 18h7M18 15v6M15 18h6' },
 ];
 
-// The most specific matching link is current, so /edit/queue marks Queue,
+// Cillian's own tools, in one menu.
+const tools = user
+  ? [
+      { href: '/queue', label: 'Rating queue' },
+      { href: '/manage/import', label: 'Import' },
+      { href: '/insights', label: 'Insights' },
+      { href: '/manage', label: 'Manage' },
+    ]
+  : [];
+const inTools = tools.some((t) => (t.href === '/manage' ? path === '/manage' || path.startsWith('/manage/') || path.startsWith('/edit/') : path === t.href));
+
+// The most specific matching link is current, so /queue marks Queue,
 // not Manage (/edit).
 // Detail pages belong to their section: an album to Albums, a playlist to Playlists.
-const SECTION_OF: Record<string, string> = { '/album': '/', '/artist': '/', '/playlist': '/playlists' };
+const SECTION_OF: Record<string, string> = { '/album': '/', '/artist': '/artists', '/playlist': '/playlists' };
 const section = Object.entries(SECTION_OF).find(([prefix]) => path.startsWith(`${prefix}/`))?.[1];
 const matches = (href: string) =>
   href === section || (href === '/' ? path === '/' : path === href || path.startsWith(`${href}/`));
@@ -42,7 +53,7 @@ const next = theme === 'dark' ? 'light' : 'dark';
       <ul>
         {
           links.map((link) => (
-            <li>
+            <li class:list={[{ 'phone-only': link.phoneOnly }]}>
               <a href={link.href} aria-current={isCurrent(link.href) ? 'page' : undefined}>
                 <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d={link.icon}></path>
@@ -67,6 +78,30 @@ const next = theme === 'dark' ? 'light' : 'dark';
         <path d="M15 15l5 5"></path>
       </svg>
     </a>
+
+    {
+      tools.length > 0 && (
+        <details class="you" data-you data-menu>
+          <summary class="icon-button" aria-label="Your tools" title="Your tools" data-current={inTools ? 'true' : undefined}>
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="4" y="4" width="6.5" height="6.5" rx="1.5"></rect>
+              <rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"></rect>
+              <rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"></rect>
+              <rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"></rect>
+            </svg>
+          </summary>
+          <ul class="you-menu" role="list">
+            {tools.map((t) => (
+              <li>
+                <a href={t.href} aria-current={path === t.href ? 'page' : undefined}>
+                  {t.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )
+    }
 
     <form class="theme" method="post" action="/api/theme" data-theme-toggle>
       <input type="hidden" name="theme" value={next} />
@@ -106,16 +141,39 @@ const next = theme === 'dark' ? 'light' : 'dark';
 </script>
 
 <style>
+  /* Stays at the top while the page scrolls under it, frosted so the page
+     colour shows through. Blurring one short bar is cheap, unlike blurring
+     a whole backdrop; where the filter is missing, or transparency is
+     turned down, the bar is solid. */
   .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 40;
     border-bottom: 1px solid var(--border);
     background: var(--bg);
+  }
+
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .site-header {
+      background: color-mix(in srgb, var(--bg) 72%, transparent);
+      -webkit-backdrop-filter: blur(14px) saturate(1.4);
+      backdrop-filter: blur(14px) saturate(1.4);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .site-header {
+      background: var(--bg);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
   }
 
   .bar {
     display: flex;
     align-items: center;
     gap: var(--space-4);
-    min-height: 3.5rem;
+    min-height: 4.25rem;
   }
 
   .brand {
@@ -273,5 +331,66 @@ const next = theme === 'dark' ? 'light' : 'dark';
   :global([data-theme='dark']) .icon-moon,
   :global([data-theme='light']) .icon-sun {
     display: none;
+  }
+
+  /* Home lives in the bottom bar on phones only. */
+  .phone-only {
+    display: none;
+  }
+
+  @media (max-width: 39.99rem) {
+    .phone-only {
+      display: block;
+    }
+  }
+
+  .you {
+    position: relative;
+  }
+
+  .you summary {
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .you summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .you summary[data-current='true'],
+  .you[open] summary {
+    background: var(--surface-2);
+  }
+
+  .you-menu {
+    position: absolute;
+    top: calc(100% + var(--space-2));
+    right: 0;
+    z-index: 50;
+    display: grid;
+    min-width: 12rem;
+    margin: 0;
+    padding: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    box-shadow: 0 12px 32px -12px rgb(0 0 0 / 0.35);
+    list-style: none;
+  }
+
+  .you-menu a {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-s);
+    color: var(--text);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .you-menu a:hover,
+  .you-menu a[aria-current='page'] {
+    background: var(--surface-2);
   }
 </style>

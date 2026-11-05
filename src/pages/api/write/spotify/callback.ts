@@ -7,18 +7,18 @@ export const GET: APIRoute = async ({ url, cookies, redirect, locals }) => {
   cookies.delete(STATE_COOKIE, { path: OAUTH_PATH });
 
   const error = url.searchParams.get('error');
-  if (error) return redirect(`/edit/spotify?error=${encodeURIComponent(error)}`, 303);
+  if (error) return redirect(`/manage/spotify?error=${encodeURIComponent(error)}`, 303);
 
   // The state ties this callback to a connect request from this browser.
   const state = url.searchParams.get('state');
   const code = url.searchParams.get('code');
-  if (!expected || state !== expected || !code) return redirect('/edit/spotify?error=state', 303);
+  if (!expected || state !== expected || !code) return redirect('/manage/spotify?error=state', 303);
 
   try {
     await connect(locals.user!.id, code, redirectUriFor(url));
   } catch (cause) {
     console.error('Spotify connect failed', cause);
-    return redirect('/edit/spotify?error=exchange', 303);
+    return redirect('/manage/spotify?error=exchange', 303);
   }
-  return redirect('/edit/spotify?connected=1', 303);
+  return redirect('/manage/spotify?connected=1', 303);
 };

@@ -1,0 +1,249 @@
+---
+/**
+ * Credit roles: which ones matter most (listed first on every page, in
+ * this order), and the name and kind of each. Added roles can go while
+ * nobody holds them.
+ */
+import Base from '../../layouts/Base.astro';
+import { creditRoles, groupCredits, ROLE_FAMILIES } from '../../lib/credits';
+
+const roles = await creditRoles();
+const keyRoles = roles.filter((r) => r.key_order != null);
+const groups = groupCredits(
+  roles.filter((r) => r.key_order == null && r.family !== 'artist'),
+  (r) => r,
+);
+const params = Astro.url.searchParams;
+const IGNORE = { autocomplete: 'off', 'data-1p-ignore': true, 'data-lpignore': 'true', 'data-bwignore': true, 'data-form-type': 'other' };
+---
+
+<Base title="Credit roles">
+  <div class="wrap page">
+    <header>
+      <h1>Credit roles</h1>
+    </header>
+
+    {params.get('error') && <p class="notice notice--error" role="alert">{params.get('error')}</p>}
+    {params.get('done') && <p class="notice" role="status">{params.get('done')}</p>}
+
+    <section aria-labelledby="key-heading" class="card">
+      <h2 id="key-heading">Key credits</h2>
+      <p class="muted">Listed first wherever credits are shown, in this order.</p>
+      <ol role="list" class="key-list">
+        {keyRoles.map((r, i) => (
+          <li id={`role-${r.id}`}>
+            <span class="order tabular">{i + 1}</span>
+            <span class="label">{r.label}</span>
+            <span class="muted small">{r.uses} {r.uses === 1 ? 'credit' : 'credits'}</span>
+            <form method="post" action="/api/write/roles" class="controls">
+              <input type="hidden" name="id" value={r.id} />
+              <button class="icon" type="submit" name="intent" value="up" disabled={i === 0} aria-label={`Move ${r.label} up`}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
+              </button>
+              <button class="icon" type="submit" name="intent" value="down" disabled={i === keyRoles.length - 1} aria-label={`Move ${r.label} down`}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+              </button>
+              <button class="button small" type="submit" name="intent" value="unkey">
+                Not key
+              </button>
+            </form>
+          </li>
+        ))}
+      </ol>
+    </section>
+
+    {
+      groups.map((g) => (
+        <section aria-labelledby={`group-${g.key}`} class="group">
+          <h2 id={`group-${g.key}`}>{g.name}</h2>
+          <ul role="list" class="roles">
+            {g.items.map((r) => (
+              <li id={`role-${r.id}`}>
+                <form method="post" action="/api/write/roles" class="row">
+                  <input type="hidden" name="id" value={r.id} />
+                  <label class="visually-hidden" for={`label-${r.id}`}>
+                    Name
+                  </label>
+                  <input class="input" id={`label-${r.id}`} name="label" value={r.label} maxlength="60" required {...IGNORE} />
+                  <label class="visually-hidden" for={`family-${r.id}`}>
+                    Kind
+                  </label>
+                  <select class="input family" id={`family-${r.id}`} name="family">
+                    {Object.entries(ROLE_FAMILIES)
+                      .filter(([v]) => v !== 'artist')
+                      .map(([value, name]) => (
+                        <option value={value} selected={value === r.family}>
+                          {name}
+                        </option>
+                      ))}
+                  </select>
+                  <span class="muted small uses tabular">{r.uses}</span>
+                  <button class="button small" type="submit" name="intent" value="edit">
+                    Save
+                  </button>
+                  <button class="button small button--quiet" type="submit" name="intent" value="key" formnovalidate>
+                    Make key
+                  </button>
+                  {!r.builtin && r.uses === 0 && (
+                    <button class="icon danger" type="submit" name="intent" value="remove" formnovalidate aria-label={`Remove ${r.label}`}>
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                    </button>
+                  )}
+                </form>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))
+    }
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    --content-max: 48rem;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .card {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .key-list,
+  .roles {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .key-list li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .key-list li:last-child {
+    border-bottom: 0;
+  }
+
+  .order {
+    width: 1.5rem;
+    color: var(--accent);
+    font-weight: 800;
+  }
+
+  .label {
+    font-weight: 700;
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-left: auto;
+  }
+
+  .group h2 {
+    margin-bottom: var(--space-2);
+  }
+
+  .roles li {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) 0;
+  }
+
+  .row .input {
+    flex: 1 1 12rem;
+    width: auto;
+    min-height: 2.5rem;
+  }
+
+  .row .family {
+    flex: 0 1 10rem;
+  }
+
+  .uses {
+    min-width: 2.5rem;
+    text-align: right;
+  }
+
+  .button.small {
+    min-height: 2.25rem;
+    font-size: var(--step--1);
+  }
+
+  .icon {
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .icon:hover:not(:disabled) {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .icon:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+
+  .icon.danger:hover {
+    color: var(--danger);
+  }
+
+  .icon svg {
+    width: 1.1rem;
+    height: 1.1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .notice {
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--accent);
+    background: var(--surface-2);
+  }
+
+  .notice--error {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+</style>

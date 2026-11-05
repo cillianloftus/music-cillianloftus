@@ -6,6 +6,11 @@ import Backdrop from '../../components/Backdrop.astro';
 import Score from '../../components/Score.astro';
 import ScorePanel from '../../components/ScorePanel.astro';
 import { ratingHistory } from '../../lib/ratings';
+import { similarAlbums } from '../../lib/pages';
+import AlbumCard from '../../components/AlbumCard.astro';
+import Shelf from '../../components/Shelf.astro';
+import LinkIcon from '../../components/LinkIcon.astro';
+import { groupCredits } from '../../lib/credits';
 import { spotifyLink } from '../../lib/spotify/links';
 import { env } from 'cloudflare:workers';
 import { ownerId } from '../../lib/auth/user';
@@ -20,7 +25,7 @@ import {
   type Edition,
 } from '../../lib/catalogue';
 import { formatPartialDate, yearOf } from '../../lib/dates';
-import { describeDuration, formatDuration, roleLabel, typeLabel } from '../../lib/format';
+import { describeDuration, describeLength, formatDuration, roleLabel, typeLabel } from '../../lib/format';
 import { FORMAT_LABELS, HOLDING_FORMATS, OWNED_PHRASE, holdingsFor } from '../../lib/holdings';
 import { playCounts } from '../../lib/history';
 
@@ -46,7 +51,16 @@ const releaseId = shown?.id ?? null;
 const isStandard = releaseId === standardId;
 
 // Straight to the album on Spotify when its id is known; a search otherwise.
-const albumSpotifyId = await env.DB.prepare('SELECT spotify_id FROM release_group WHERE id = ?').bind(album.id).first<string>('spotify_id');
+const albumLinks = await env.DB.prepare('SELECT spotify_id, genius_url FROM release_group WHERE id = ?')
+  .bind(album.id)
+  .first<{ spotify_id: string | null; genius_url: string | null }>();
+const albumSpotifyId = albumLinks?.spotify_id ?? null;
+// Pages elsewhere about this album, only those that exist.
+const links = [
+  albumSpotifyId ? { label: 'Spotify', href: `https://open.spotify.com/album/${albumSpotifyId}`, icon: 'spotify' } : null,
+  albumLinks?.genius_url ? { label: 'Genius', href: albumLinks.genius_url, icon: 'genius' } : null,
+  album.mbid ? { label: 'MusicBrainz', href: `https://musicbrainz.org/release-group/${album.mbid}`, icon: 'musicbrainz' } : null,
+].filter((l): l is { label: string; href: string; icon: string } => l !== null);
 const listenHref = spotifyLink('album', albumSpotifyId, `${album.credits[0]?.name ?? ''} ${album.title}`);
 
 // The latest album rating, for the axes on the score panel.
@@ -58,7 +72,7 @@ const holdingError = user ? Astro.url.searchParams.get('holding_error') : null;
 
 const [tracks, standardTracks, genres, people] = await Promise.all([
   releaseId ? tracklist(releaseId, viewerId) : Promise.resolve([]),
-  !isStandard && standardId ? tracklist(standardId, viewerId) : Promise.resolve([]),
+  standardId && !isStandard ? tracklist(standardId, viewerId) : Promise.resolve([]),
   genresFor('release_group', album.id),
   releaseId ? contributors(releaseId) : Promise.resolve([]),
 ]);
@@ -81,8 +95,16 @@ const editionNote = `${
   differences.length > 0 ? differences.join(', and ') : 'Same recordings as the standard edition'
 }. Album scores always use the standard edition.`.replace(/^./, (c) => c.toUpperCase());
 
-const editionLabel = (e: Edition) =>
-  [e.format, yearOf(e.date), e.country].filter(Boolean).join(' · ') || e.title;
+// Editions with titles of their own ("The Instrumentals") go by them, minus
+// the album's name; otherwise by format, year and country, then by whatever
+// still tells two apart.
+const ownTitles = new Set(allEditions.map((e) => e.title)).size > 1;
+const shortTitle = (e: Edition) => {
+  const rest = e.title.startsWith(album.title) ? e.title.slice(album.title.length).replace(/^[\s:–—-]+|[()[\]]/g, '').trim() : e.title;
+  return rest || 'Original';
+};
+const plainLabel = (e: Edition) => [e.format, yearOf(e.date), e.country].filter(Boolean).join(' · ') || e.title;
+const editionLabel = (e: Edition) => (ownTitles ? shortTitle(e) : plainLabel(e));
 const editionHref = (e: Edition) =>
   e.id === standardId ? `${Astro.url.pathname}#tracklist-heading` : `${Astro.url.pathname}?edition=${e.id}#tracklist-heading`;
 
@@ -91,6 +113,28 @@ const plays = user ? await playCounts(user.id, tracks.map((t) => t.recording_id)
 const totalPlays = [...plays.values()].reduce((a, b) => a + b, 0);
 
 const discs = [...new Set(tracks.map((t) => t.disc))];
+
+// What can be said about it at a glance, from what is held: full release
+// date, length of the standard edition, label.
+const standardEdition = allEditions.find((e) => e.id === standardId) ?? null;
+const standardLength = (standardTracks.length ? standardTracks : tracks).reduce((sum, t) => sum + (t.length_ms ?? 0), 0);
+const facts = [
+  formatPartialDate(album.first_release_date, album.date_precision),
+  album.track_count ? `${album.track_count} ${album.track_count === 1 ? 'track' : 'tracks'}` : null,
+  standardLength > 0 ? describeLength(standardLength) : null,
+  standardEdition?.label ?? null,
+].filter(Boolean);
+
+// The best-rated track on the standard edition.
+const bestTrack = (standardTracks.length ? standardTracks : tracks)
+  .filter((t) => t.quality_score != null)
+  .sort((a, b) => (b.personal_score ?? b.quality_score!) - (a.personal_score ?? a.quality_score!))[0];
+const best = bestTrack && (album.rated_track_count ?? 0) > 1 ? { title: bestTrack.title, href: `/track/${bestTrack.recording_id}`, quality: bestTrack.quality_score! } : null;
+
+// The first track on the standard edition not rated yet, for "Rate the next".
+const nextUnrated = (standardTracks.length ? standardTracks : tracks).find((t) => t.quality_score == null) ?? null;
+
+const similar = await similarAlbums(album.id, viewerId, 10);
 const albumArtistKey = album.credits.map((c) => c.artist_id).join();
 const totalMs = tracks.reduce((sum, t) => sum + (t.length_ms ?? 0), 0);
 const released = formatPartialDate(album.first_release_date, album.date_precision);
@@ -99,6 +143,17 @@ const byRole = new Map<string, Contributor[]>();
 for (const person of people) {
   byRole.set(person.role, [...(byRole.get(person.role) ?? []), person]);
 }
+// Credits, two ways. Key credits beside the tracklist: who wrote, produced
+// and engineered it, the few on most tracks per role, and the players
+// summarised by role. Then every credit, by kind, in a section of its own
+// that opens on request. Nobody is left out; nothing crowds the page.
+const KEY_PER_ROLE = 3;
+// The key roles in full (well, their top few); everything else as one line of role counts.
+const keyRoles = [...byRole].filter(([, list]) => list[0]!.key_order != null).sort(([, a], [, b]) => a[0]!.key_order! - b[0]!.key_order!);
+const playerRoles = [...byRole].filter(([, list]) => list[0]!.key_order == null);
+const people_count = new Set(people.map((p) => p.artist_id)).size;
+const allCreditsShown = people.length > 12;
+const creditFamilies = groupCredits([...byRole], ([, list]) => list[0]!).map((g) => ({ family: g.key, name: g.name, roles: g.items }));
 
 const here = Astro.url.pathname + Astro.url.search;
 const rateHref = (type: string, entityId: string) =>
@@ -131,13 +186,15 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
       </div>
 
       <div class="intro">
-        <p class="eyebrow">
-          {typeLabel(album.type)}
-          {yearOf(album.first_release_date) && <> · <time datetime={album.first_release_date!}>{yearOf(album.first_release_date)}</time></>}
-          {album.status !== 'released' && <> · {album.status === 'announced' ? 'Announced' : 'Cancelled'}</>}
-        </p>
-        <h1>{album.title}</h1>
-        <p class="by"><CreditLine credits={album.credits} /></p>
+        <div class="titles">
+          <p class="eyebrow">
+            {typeLabel(album.type)}
+            {album.status !== 'released' && <> · {album.status === 'announced' ? 'Announced' : 'Cancelled'}</>}
+          </p>
+          <h1 class:list={[{ long: album.title.length > 18, longer: album.title.length > 34 }]}>{album.title}</h1>
+          <p class="by"><CreditLine credits={album.credits} /></p>
+          {facts.length > 0 && <p class="facts">{facts.join(' · ')}</p>}
+        </div>
 
         <ScorePanel
           quality={album.quality_score}
@@ -145,8 +202,41 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
           ratedTracks={album.rated_track_count}
           trackCount={album.track_count}
           rating={albumRating}
+          best={best}
           rateHref={user ? rateHref('release_group', album.id) : null}
+          nextHref={user && nextUnrated ? rateHref('recording', nextUnrated.recording_id) : null}
         />
+      </div>
+
+      <div class="more">
+        <p class="actions">
+          <a class="button" href={listenHref} target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M7.5 10c3-1 6.3-.7 9 .8M8.2 13.2c2.4-.7 5-.5 7.2.6M8.8 16.2c1.8-.4 3.6-.3 5.3.4" />
+            </svg>
+            {albumSpotifyId ? 'Listen' : 'Search'}
+            <span class="visually-hidden">{albumSpotifyId ? ' on Spotify' : ' for it on Spotify'}</span>
+            <span class="visually-hidden"> (opens in a new tab)</span>
+          </a>
+          {user && (
+            <a class="button button--quiet" href={`/edit/album/${album.id}`}>
+              Edit
+            </a>
+          )}
+        </p>
+
+        {
+          genres.length > 0 && (
+            <ul class="genres" aria-label="Genres">
+              {genres.map((genre) => (
+                <li>
+                  <a href={`/genre/${genre.id}`}>{genre.name}</a>
+                </li>
+              ))}
+            </ul>
+          )
+        }
 
         {
           album.impact_note && (
@@ -154,29 +244,9 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
               <blockquote>
                 <p>{album.impact_note}</p>
               </blockquote>
-              <figcaption>Why it matters</figcaption>
             </figure>
           )
         }
-
-        {
-          genres.length > 0 && (
-            <ul class="genres" aria-label="Genres">
-              {genres.map((genre) => <li>{genre.name}</li>)}
-            </ul>
-          )
-        }
-
-        <p class="listen">
-          <a class="button" href={listenHref} target="_blank" rel="noopener">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="9" />
-              <path d="M7.5 10c3-1 6.3-.7 9 .8M8.2 13.2c2.4-.7 5-.5 7.2.6M8.8 16.2c1.8-.4 3.6-.3 5.3.4" />
-            </svg>
-            {albumSpotifyId ? 'Listen on Spotify' : 'Find on Spotify'}
-            <span class="visually-hidden"> (opens in a new tab)</span>
-          </a>
-        </p>
       </div>
     </header>
 
@@ -192,6 +262,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                   <a href={editionHref(edition)} aria-current={edition.id === releaseId ? 'true' : undefined}>
                     <span class="switch-label">{editionLabel(edition)}</span>
                     <span class="switch-detail">
+                      {ownTitles && `${[edition.format, yearOf(edition.date)].filter(Boolean).join(' · ')} · `}
                       {edition.track_count} tracks{edition.id === standardId && ' · standard'}
                     </span>
                   </a>
@@ -224,7 +295,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                       <div class="title">
                         <span class="name">
                           <span class="visually-hidden">Track {track.position}: </span>
-                          {track.title}
+                          <a class="track-link" href={`/track/${track.recording_id}`}>{track.title}</a>
                           {isBonus(track.recording_id) && <span class="tag">Bonus</span>}
                         </span>
                         {track.credits.map((c) => c.artist_id).join() !== albumArtistKey && (
@@ -279,22 +350,55 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     {
       byRole.size > 0 && (
         <section class="credits" aria-labelledby="credits-heading">
-          <h2 id="credits-heading">Credits</h2>
+          <h2 id="credits-heading">{allCreditsShown ? 'Key credits' : 'Credits'}</h2>
           <dl>
-            {[...byRole].map(([role, list]) => (
+            {(allCreditsShown ? keyRoles : [...byRole]).map(([role, list]) => (
               <div>
-                <dt>{roleLabel(role, list.length)}</dt>
+                <dt>{roleLabel(role, list.length, list[0]!.role_label)}</dt>
                 <dd>
-                  {list.map((person, i) => (
+                  {(allCreditsShown ? list.slice(0, KEY_PER_ROLE) : list).map((person, i, shown) => (
                     <Fragment>
                       <a href={`/artist/${person.artist_id}`}>{person.name}</a>
-                      {i < list.length - 1 && ', '}
+                      {person.tracks < person.of && (
+                        <span class="on-tracks tabular" title={`On ${person.tracks} of ${person.of} tracks`}>
+                          {' '}
+                          ({person.tracks})
+                        </span>
+                      )}
+                      {i < shown.length - 1 && ', '}
+                    </Fragment>
+                  ))}
+                  {allCreditsShown && list.length > KEY_PER_ROLE && (
+                    <a class="more-credits" href="#all-credits">
+                      {' '}
+                      +{list.length - KEY_PER_ROLE} more
+                    </a>
+                  )}
+                </dd>
+              </div>
+            ))}
+            {allCreditsShown && playerRoles.length > 0 && (
+              <div>
+                <dt>Also credited</dt>
+                <dd class="players">
+                  {playerRoles.map(([, list], i) => (
+                    <Fragment>
+                      {list[0]!.role_label}
+                      <span class="tabular on-tracks"> {list.length}</span>
+                      {i < playerRoles.length - 1 && ' · '}
                     </Fragment>
                   ))}
                 </dd>
               </div>
-            ))}
+            )}
           </dl>
+          {allCreditsShown && (
+            <p>
+              <a class="all-link" href="#all-credits">
+                All {people.length} credits, {people_count} people
+              </a>
+            </p>
+          )}
         </section>
       )
     }
@@ -328,6 +432,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                     .filter(Boolean)
                     .join(' · ')}
                 </span>
+                {edition.note && <span class="edition-note">{edition.note}</span>}
                 {holdings
                   .filter((h) => h.release_id === edition.id)
                   .map((h) => (
@@ -373,28 +478,90 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
           </ul>
         )
       }
-      {
-        user && album.mbid && (
-          <p class="muted">
-            More editions are on MusicBrainz. Paste a release link into{' '}
-            <a href="/edit/import">Import</a> to add one here.
-          </p>
-        )
-      }
-      {released && <p class="muted">First released {released}.</p>}
-      {
-        album.mbid && (
-          <p>
-            <a href={`https://musicbrainz.org/release-group/${album.mbid}`} rel="external">
-              View on MusicBrainz
-            </a>
-          </p>
-        )
-      }
     </section>
+
+    {
+      links.length > 0 && (
+        <section class="links" aria-labelledby="links-heading">
+          <h2 id="links-heading">Links</h2>
+          <ul role="list">
+            {links.map((l) => (
+              <li>
+                <a href={l.href} rel="external noopener" target="_blank">
+                  <LinkIcon name={l.icon} />
+                  {l.label}
+                  <span class="visually-hidden"> (opens in a new tab)</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
     </div>
+    {
+      allCreditsShown && (
+        <details class="all-credits" id="all-credits">
+          <summary>
+            <h2>All credits</h2>
+            <span class="muted">
+              {people.length} credits · {people_count} people
+            </span>
+          </summary>
+          <div class="families">
+            {creditFamilies.map((f) => (
+              <section aria-label={f.name} class="family">
+                <h3>{f.name}</h3>
+                {f.roles.map(([role, list]) => (
+                  <div class="role">
+                    <h4>{roleLabel(role, list.length, list[0]!.role_label)}</h4>
+                    <ul role="list">
+                      {list.map((person) => (
+                        <li>
+                          <a href={`/artist/${person.artist_id}`}>{person.name}</a>
+                          {person.tracks < person.of && <span class="on-tracks tabular">{person.tracks}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </section>
+            ))}
+          </div>
+        </details>
+      )
+    }
+    {
+      similar.length > 0 && (
+        <section class="similar" aria-labelledby="similar-heading">
+          <h2 id="similar-heading">More like this</h2>
+          <Shelf label="similar albums">
+            <ul role="list">
+              {similar.map((a) => (
+                <li>
+                  <AlbumCard album={a} />
+                </li>
+              ))}
+            </ul>
+          </Shelf>
+        </section>
+      )
+    }
   </article>
 </Base>
+
+<script>
+  // "+N more" and "All credits" open the full list before jumping to it.
+  const all = document.getElementById('all-credits') as HTMLDetailsElement | null;
+  const openAll = () => {
+    if (all && location.hash === '#all-credits') all.open = true;
+  };
+  addEventListener('hashchange', openAll);
+  document.addEventListener('click', (event) => {
+    if ((event.target as HTMLElement).closest('a[href="#all-credits"]') && all) all.open = true;
+  });
+  openAll();
+</script>
 
 <style>
   /* minmax(0, 1fr): wide children such as the scrolling edition switcher
@@ -407,9 +574,11 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     align-content: start;
   }
 
+  /* The same breathing room above as the artist and track pages. */
   .hero {
     display: grid;
     gap: var(--space-5);
+    padding-top: var(--space-6);
   }
 
   .art {
@@ -421,10 +590,44 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
       0 24px 60px -12px rgb(0 0 0 / 0.55);
   }
 
+  /* The title block at the top, the score panel at the bottom: beside the
+     cover, the panel's bottom edge meets the cover's. */
   .intro {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+
+  .titles {
     display: grid;
-    gap: var(--space-3);
-    align-content: end;
+    gap: var(--space-2);
+  }
+
+  .facts {
+    color: var(--text-muted);
+  }
+
+  .more {
+    display: grid;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .actions .button svg {
+    width: 1.2rem;
+    height: 1.2rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
   }
 
   h1 {
@@ -435,18 +638,15 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     text-wrap: balance;
   }
 
+  /* The tight display title needs air before the artist line. */
   .by {
+    margin-top: var(--space-3);
     font-size: var(--step-1);
     font-weight: 600;
   }
 
-  .listen .button svg {
-    width: 1.2rem;
-    height: 1.2rem;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.7;
-    stroke-linecap: round;
+  .similar {
+    grid-column: 1 / -1;
   }
 
   .muted {
@@ -474,6 +674,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
 
   .impact-note blockquote {
     margin: 0;
+    font-family: Georgia, 'Times New Roman', serif;
     font-size: var(--step-1);
     font-style: italic;
     line-height: 1.4;
@@ -495,12 +696,29 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     list-style: none;
   }
 
-  .genres li {
-    padding: 0.2rem 0.7rem;
+  .genres a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2rem;
+    padding: 0 0.75rem;
     border: 1px solid var(--border);
     border-radius: 999px;
     color: var(--text-muted);
     font-size: var(--step--1);
+    text-decoration: none;
+  }
+
+  .genres a:hover {
+    border-color: var(--text-subtle);
+    color: var(--text);
+  }
+
+  .track-link {
+    text-decoration: none;
+  }
+
+  .track-link:hover {
+    text-decoration: underline;
   }
 
   h2 {
@@ -802,7 +1020,13 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     .hero {
       grid-column: 1 / -1;
       grid-template-columns: 20rem minmax(0, 1fr);
-      gap: var(--space-7);
+      column-gap: var(--space-7);
+      row-gap: var(--space-5);
+    }
+
+    /* Actions, genres and the note sit under the panel, beside nothing. */
+    .more {
+      grid-column: 2;
     }
 
     .tracks {
@@ -814,5 +1038,168 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
       grid-column: 1;
       grid-row: 2;
     }
+  }
+
+  .edition-note {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-style: italic;
+  }
+
+  /* How many tracks someone is on, when not all of them. */
+  .on-tracks {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  /* Long titles step down a size and wrap with a full first line, rather
+     than being split evenly into two short ones. */
+  h1 {
+    text-wrap: pretty;
+  }
+
+  h1.long {
+    font-size: clamp(2rem, 1.3rem + 2.4vw, 3.25rem);
+  }
+
+  h1.longer {
+    font-size: clamp(1.75rem, 1.2rem + 1.8vw, 2.6rem);
+  }
+
+  .more-credits,
+  .all-link {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .players {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  /* Every credit, by kind, across the full width under everything else. */
+  .all-credits {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--border);
+    padding-top: var(--space-5);
+  }
+
+  .all-credits summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-4);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .all-credits summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .all-credits summary h2 {
+    display: inline;
+  }
+
+  .all-credits summary .muted {
+    font-size: var(--step--1);
+  }
+
+  .all-credits summary::after {
+    content: '';
+    width: 0.55rem;
+    height: 0.55rem;
+    margin-left: auto;
+    border-right: 2px solid var(--text-muted);
+    border-bottom: 2px solid var(--text-muted);
+    rotate: 45deg;
+    transition: rotate 0.2s;
+  }
+
+  .all-credits[open] summary::after {
+    rotate: 225deg;
+  }
+
+  .families {
+    columns: 22rem;
+    column-gap: var(--space-7);
+    margin-top: var(--space-5);
+  }
+
+  .family {
+    break-inside: avoid-column;
+    margin-bottom: var(--space-5);
+  }
+
+  .family h3 {
+    margin-bottom: var(--space-2);
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .role {
+    break-inside: avoid;
+    margin-bottom: var(--space-3);
+  }
+
+  .role h4 {
+    margin: 0;
+    font-size: var(--step--1);
+    font-weight: 700;
+  }
+
+  /* Names run on, most-credited first, each with its track count. */
+  .role ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px var(--space-3);
+    margin: 2px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--step--1);
+  }
+
+  .role li {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3em;
+    white-space: nowrap;
+  }
+
+  .role li .on-tracks {
+    color: var(--text-subtle);
+    font-size: 0.9em;
+  }
+
+  .links ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .links a {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+    padding: 0 var(--space-4) 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .links a:hover {
+    border-color: var(--accent);
   }
 </style>

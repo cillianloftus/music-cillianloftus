@@ -14,7 +14,7 @@ const { album, priority = false } = Astro.props;
 const year = yearOf(album.first_release_date);
 ---
 
-<article class="card">
+<article class="card album-card">
   <CoverArt
     artKey={album.art_key}
     title={album.title}
@@ -23,7 +23,7 @@ const year = yearOf(album.first_release_date);
   />
   <div class="meta">
     <h3><a href={`/album/${album.id}`}>{album.title}</a></h3>
-    <p class="artist"><CreditLine credits={album.credits} link={false} /></p>
+    <p class="artist"><CreditLine credits={album.credits} /></p>
     <p class="detail">
       {year && <span>{year}</span>}
       {album.status === 'announced' && <span>Announced</span>}
@@ -33,21 +33,48 @@ const year = yearOf(album.first_release_date);
 </article>
 
 <style>
+  /* Cards side by side share their rows (subgrid): a two-line title lowers
+     that line for the whole row, so artists, years and scores stay level.
+     Where the list isn't a grid it falls back to a plain stack. */
+  :global(li:has(> .album-card)) {
+    display: grid;
+    grid-row: span 4;
+    grid-template-rows: subgrid;
+    row-gap: 0;
+  }
+
   .card {
     position: relative;
     display: grid;
-    gap: var(--space-3);
+    grid-row: span 4;
+    grid-template-rows: subgrid;
+    row-gap: 0;
+    align-content: start;
   }
 
   .meta {
-    display: grid;
-    gap: 0.15rem;
-    min-width: 0;
+    display: contents;
   }
 
   h3 {
+    min-width: 0;
+    margin-top: var(--space-3);
     font-size: var(--step-0);
     font-weight: 650;
+    /* Two lines at most, so one long title can't stretch a whole row. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+
+  .artist {
+    margin-top: 0.15rem;
+  }
+
+  .detail {
+    margin-top: 0.15rem;
   }
 
   h3 a {

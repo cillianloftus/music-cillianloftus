@@ -1,0 +1,192 @@
+---
+/**
+ * Correct a track by hand: its title as the artist styled it, and who made
+ * it. Credits edited here are the track's from then on; no import or
+ * lookup adds to them or takes from them again.
+ */
+import { env } from 'cloudflare:workers';
+import Base from '../../../layouts/Base.astro';
+import CoverArt from '../../../components/CoverArt.astro';
+import CreditEditor from '../../../components/CreditEditor.astro';
+import ChipInput from '../../../components/ChipInput.astro';
+import Edited from '../../../components/Edited.astro';
+import { editsOf } from '../../../lib/revert';
+import { creditsEditedByHand, recordingCredits } from '../../../lib/credits';
+import { geniusToken } from '../../../lib/genius';
+import { trackAppearances, trackDetail } from '../../../lib/pages';
+
+const id = Astro.params.id!;
+const userId = Astro.locals.user!.id;
+const track = await trackDetail(id, userId);
+if (!track) return Astro.rewrite('/404');
+
+const [credits, byHand, appearances, overrides, manualGenres, allGenres] = await Promise.all([
+  recordingCredits(id),
+  creditsEditedByHand(id),
+  trackAppearances(id, userId),
+  env.DB.prepare(`SELECT field FROM field_override WHERE entity_type = 'recording' AND entity_id = ?`).bind(id).all<{ field: string }>(),
+  env.DB.prepare(
+    `SELECT g.name FROM genre_tag t JOIN genre g ON g.id = t.genre_id WHERE t.entity_type = 'recording' AND t.entity_id = ? AND t.source = 'manual' ORDER BY g.name`,
+  )
+    .bind(id)
+    .all<{ name: string }>(),
+  env.DB.prepare(`SELECT name FROM genre ORDER BY name`).all<{ name: string }>(),
+]);
+const edits = await editsOf('recording', id);
+void overrides;
+const home = appearances[0]?.album ?? null;
+const params = Astro.url.searchParams;
+const hasWriter = credits.some((c) => c.role === 'writer');
+const IGNORE = { autocomplete: 'off', 'data-1p-ignore': true, 'data-lpignore': 'true', 'data-bwignore': true, 'data-form-type': 'other' };
+---
+
+<Base title={`Edit ${track.title}`}>
+  <div class="wrap page">
+    <p><a class="back" href={`/track/${id}`}>← {track.title}</a></p>
+    <header class="subject">
+      <span class="thumb"><CoverArt artKey={home?.art_key ?? null} title={home?.title ?? track.title} sizes="5rem" /></span>
+      <div>
+        <p class="eyebrow">Edit track</p>
+        <h1>{track.title}</h1>
+        {home && <p class="muted">On <a href={`/album/${home.id}`}>{home.title}</a></p>}
+      </div>
+    </header>
+
+    {params.get('error') && <p class="notice notice--error" role="alert">{params.get('error')}</p>}
+    {params.get('done') && <p class="notice" role="status">{params.get('done')}</p>}
+
+    <form method="post" action="/api/write/track/edit" class="card title-form">
+      <input type="hidden" name="id" value={id} />
+      <input type="hidden" name="intent" value="details" />
+      <div class="field">
+        <div class="label-row"><label for="title">Title</label><Edited entity="recording" id={id} field="title" edits={edits} /></div>
+        <input class="input" id="title" name="title" value={track.title} required maxlength="300" autocapitalize="off" spellcheck="false" aria-describedby="title-hint" {...IGNORE} />
+        <span class="hint" id="title-hint">Kept exactly as typed, capitals and all. The same song can be styled differently on another release.</span>
+      </div>
+      <div class="field">
+        <div class="label-row"><label for="spotify">Spotify track</label><Edited entity="recording" id={id} field="spotify_id" edits={edits} /></div>
+        <input class="input" id="spotify" name="spotify" value={track.spotify_id ? `https://open.spotify.com/track/${track.spotify_id}` : ''} inputmode="url" placeholder="Paste a Spotify track link" aria-describedby="spotify-hint" {...IGNORE} />
+        <span class="hint" id="spotify-hint">{track.spotify_id ? 'Clear it to unlink.' : 'Not linked; playlists skip it until it is.'}</span>
+      </div>
+      <ChipInput
+        id="genres"
+        name="genres"
+        label="Genres of its own"
+        value={manualGenres.results.map((g) => g.name).join(', ')}
+        options={allGenres.results.map((g) => g.name)}
+        placeholder="Add a genre"
+        hint="Empty: it takes its album’s genres. Any here replace them for this track."
+      />
+      <div>
+        <button class="button button--primary" type="submit">Save</button>
+      </div>
+    </form>
+
+    <CreditEditor entity="recording" id={id} credits={credits} byHand={byHand} defaultRole={hasWriter ? 'producer' : 'writer'}>
+      {
+          !hasWriter && !byHand && home && geniusToken() && (
+            <form method="post" action="/api/write/track/edit" class="lookup">
+              <input type="hidden" name="id" value={id} />
+              <input type="hidden" name="album" value={home.id} />
+              <input type="hidden" name="intent" value="genius" />
+              <button class="button button--quiet" type="submit">Find writers on Genius</button>
+              <span class="hint">For every track on {home.title} with no writer.</span>
+            </form>
+          )
+        }
+        {!byHand && <p class="hint">Once you change anything here, imports and lookups leave these credits alone. Put them back as they were, or undo, and that ends.</p>}
+    </CreditEditor>
+
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+    --content-max: 44rem;
+  }
+
+  .back {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+  }
+
+  .subject {
+    display: grid;
+    grid-template-columns: 5rem minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .thumb {
+    width: 5rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  h1 {
+    font-size: var(--step-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .card {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .title-form {
+    gap: var(--space-4);
+  }
+
+  .title-form .field {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .title-form label {
+    font-weight: 600;
+  }
+
+  /* A label with its "Edited" mark (and Undo) on the same line. */
+  .label-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-3);
+  }
+
+  .edited {
+    color: var(--accent);
+    font-size: var(--step--1);
+  }
+
+  .hint {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .notice {
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--accent);
+    background: var(--surface-2);
+  }
+
+  .notice--error {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+</style>

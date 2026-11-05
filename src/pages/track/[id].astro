@@ -1,0 +1,729 @@
+---
+/**
+ * A track: where it appears, how it is rated and why, who made it, and
+ * every other version of the same song in the library.
+ */
+import Base from '../../layouts/Base.astro';
+import Backdrop from '../../components/Backdrop.astro';
+import CoverArt from '../../components/CoverArt.astro';
+import CreditLine from '../../components/CreditLine.astro';
+import Score from '../../components/Score.astro';
+import ScorePanel from '../../components/ScorePanel.astro';
+import { groupCredits } from '../../lib/credits';
+import LinkIcon from '../../components/LinkIcon.astro';
+import { ownerId } from '../../lib/auth/user';
+import { genresFor, redirectFor } from '../../lib/catalogue';
+import { yearOf } from '../../lib/dates';
+import { describeDuration, formatDuration, roleLabel } from '../../lib/format';
+import { playCounts } from '../../lib/history';
+import { otherVersions, trackAppearances, trackCredits, trackDetail } from '../../lib/pages';
+import { ratingHistory } from '../../lib/ratings';
+import { spotifyLink } from '../../lib/spotify/links';
+
+const id = Astro.params.id!;
+const user = Astro.locals.user;
+const viewerId = user?.id ?? (await ownerId());
+const track = await trackDetail(id, viewerId);
+if (!track) {
+  const merged = await redirectFor('recording', id);
+  if (merged) return Astro.redirect(`/track/${merged}`, 301);
+  return Astro.rewrite('/404');
+}
+
+const [appearances, credits, versions, genres, history, plays] = await Promise.all([
+  trackAppearances(id, viewerId),
+  trackCredits(id),
+  otherVersions(id, track.work_id, viewerId),
+  genresFor('recording', id),
+  viewerId ? ratingHistory(viewerId, 'recording', id) : Promise.resolve([]),
+  user ? playCounts(user.id, [id]) : Promise.resolve(new Map<string, number>()),
+]);
+
+// The album it belongs to (for "4 on …"), and the release it first came out
+// on (for its cover): a single's art when the single came first, the
+// album's when the album did.
+const firstOut = appearances[0] ?? null;
+const home = appearances.find((a) => a.album.type === 'album' || a.album.type === 'mixtape') ?? firstOut;
+const latest = history[0] ?? null;
+const artistNames = track.credits.map((c) => c.name).join(', ');
+const byRole = new Map<string, typeof credits>();
+for (const c of credits) byRole.set(c.role, [...(byRole.get(c.role) ?? []), c]);
+const creditFamilies = groupCredits([...byRole], ([, list]) => list[0]!).map((g) => ({ name: g.name, roles: g.items }));
+// Axes given, and those marked as not applying (an instrumental's lyrics).
+const axes = latest
+  ? ([
+      ['Production', 'production', latest.production],
+      ['Songwriting', 'songwriting', latest.songwriting],
+      ['Lyrics', 'lyrics', latest.lyrics],
+      ['Performance', 'performance', latest.performance],
+    ] as const)
+      .filter(([, key, v]) => v != null || latest.not_applicable.includes(key))
+      .map(([label, key, v]) => [label, v ?? (latest.not_applicable.includes(key) ? 'n/a' : null)] as const)
+  : [];
+// Pages elsewhere about this track, only those that exist.
+const links = [
+  track.spotify_id ? { label: 'Spotify', href: `https://open.spotify.com/track/${track.spotify_id}`, icon: 'spotify' } : null,
+  track.genius_url ? { label: 'Lyrics on Genius', href: track.genius_url, icon: 'genius' } : null,
+  track.mbid ? { label: 'MusicBrainz', href: `https://musicbrainz.org/recording/${track.mbid}`, icon: 'musicbrainz' } : null,
+].filter((l): l is { label: string; href: string; icon: string } => l !== null);
+const listenHref = spotifyLink('track', track.spotify_id, `${track.credits[0]?.name ?? ''} ${track.title}`);
+const rateHref = `/edit/rate/recording/${id}?return_to=${encodeURIComponent(`/track/${id}`)}`;
+const playCount = plays.get(id) ?? 0;
+---
+
+<Base
+  title={`${track.title} by ${artistNames}`}
+  description={[home ? `From ${home.album.title}.` : null, track.personal_score != null ? `Rated ${Math.round(track.personal_score)}.` : null, latest?.impact_note ? `“${latest.impact_note}”` : null]
+    .filter(Boolean)
+    .join(' ')}
+  image={firstOut?.album.art_key ? `/${firstOut.album.art_key}/1200.jpg` : null}
+>
+  <article class="wrap page">
+    <Backdrop artKey={firstOut?.album.art_key} height="34rem" />
+
+    <header class="hero">
+      {
+        home && (
+          <a class="art" href={`/album/${firstOut!.album.id}`} tabindex="-1" aria-hidden="true">
+            <CoverArt artKey={firstOut!.album.art_key} title={firstOut!.album.title} sizes="(min-width: 48rem) 16rem, 60vw" priority />
+          </a>
+        )
+      }
+      <div class="intro">
+        <div class="titles">
+        <p class="eyebrow">
+          Track
+          {home && home.position && <> · {home.disc && home.disc > 1 ? `${home.disc}.` : ''}{home.position} on <a href={`/album/${home.album.id}`}>{home.album.title}</a></>}
+          {home && yearOf(home.album.first_release_date) && <> · {yearOf(home.album.first_release_date)}</>}
+        </p>
+        <h1 class:list={[{ long: track.title.length > 18, longer: track.title.length > 34 }]}>{track.title}</h1>
+        <p class="by"><CreditLine credits={track.credits} /></p>
+        <p class="facts muted">
+          {[
+            track.length_ms ? formatDuration(track.length_ms) : null,
+            user && playCount > 0 ? `you have played it ${playCount} ${playCount === 1 ? 'time' : 'times'}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+          {track.length_ms && <span class="visually-hidden"> ({describeDuration(track.length_ms)})</span>}
+        </p>
+        {
+          latest?.impact_note && (
+            <blockquote class="epigraph" aria-label="Your note">
+              <p>{latest.impact_note}</p>
+            </blockquote>
+          )
+        }
+        </div>
+
+        <ScorePanel quality={track.quality_score} personal={track.personal_score} rating={null} trackAxes={axes} rateHref={user ? rateHref : null} />
+      </div>
+
+      <div class="more">
+
+        {
+          genres.length > 0 && (
+            <ul class="genres" aria-label="Genres">
+              {genres.map((g) => (
+                <li>
+                  <a href={`/genre/${g.id}`}>{g.name}</a>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+
+        <p class="actions">
+          <a class="button" href={listenHref} target="_blank" rel="noopener">
+<svg class="spotify-mark" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M7.5 10c3-1 6.3-.7 9 .8M8.2 13.2c2.4-.7 5-.5 7.2.6M8.8 16.2c1.8-.4 3.6-.3 5.3.4" />
+            </svg>
+            {track.spotify_id ? 'Listen' : 'Search'}
+            <span class="visually-hidden">{track.spotify_id ? ' on Spotify' : ' for it on Spotify'}</span>
+            <span class="visually-hidden"> (opens in a new tab)</span>
+          </a>
+          {user && (
+            <a class="button button--quiet" href={`/edit/track/${id}`}>
+              Edit
+            </a>
+          )}
+        </p>
+      </div>
+    </header>
+
+    <div class="below">
+      <div class="main-col">
+    {
+      appearances.length > 0 && (
+        <section aria-labelledby="on-heading">
+          <h2 id="on-heading">{appearances.length === 1 ? 'Appears on' : `Appears on ${appearances.length} albums`}</h2>
+          <ul role="list" class="rows">
+            {appearances.map((a) => (
+              <li>
+                <span class="thumb">
+                  <CoverArt artKey={a.album.art_key} title={a.album.title} sizes="3rem" />
+                </span>
+                <span class="row-text">
+                  <a href={`/album/${a.album.id}`}>{a.album.title}</a>
+                  <span class="muted small">
+                    <CreditLine credits={a.album.credits} />
+                    {yearOf(a.album.first_release_date) && ` · ${yearOf(a.album.first_release_date)}`}
+                    {a.position && ` · track ${a.position}`}
+                  </span>
+                </span>
+                <Score quality={a.album.quality_score} personal={a.album.personal_score} size="m" quietWhenEmpty />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+
+    {
+      versions.length > 0 && (
+        <section aria-labelledby="versions-heading">
+          <h2 id="versions-heading">Other versions</h2>
+          <p class="muted small lead">The same song{track.work_title && track.work_title !== track.title ? ` (“${track.work_title}”)` : ''}, recorded again: covers, live takes, remixes.</p>
+          <ul role="list" class="rows">
+            {versions.map((v) => (
+              <li>
+                <span class="thumb">
+                  <CoverArt artKey={v.art_key} title={v.album_title ?? v.title} sizes="3rem" />
+                </span>
+                <span class="row-text">
+                  <a href={`/track/${v.id}`}>{v.title}</a>
+                  <span class="muted small">
+                    <CreditLine credits={v.credits} />
+                    {v.album_title && ` · ${v.album_title}`}
+                  </span>
+                </span>
+                <Score quality={v.quality_score} personal={v.personal_score} size="m" quietWhenEmpty />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+
+        {
+          links.length > 0 && (
+            <section class="links" aria-labelledby="links-heading">
+              <h2 id="links-heading">Links</h2>
+              <ul role="list">
+                {links.map((l) => (
+                  <li>
+                    <a href={l.href} rel="external noopener" target="_blank">
+                      <LinkIcon name={l.icon} />
+                      {l.label}
+                      <span class="visually-hidden"> (opens in a new tab)</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )
+        }
+      </div>
+
+    {
+      byRole.size > 0 && (
+        <aside aria-labelledby="credits-heading" class="credits-panel">
+          <h2 id="credits-heading">Credits</h2>
+          <dl>
+            {creditFamilies.map((f) => (
+              <div class="family">
+                <dt>{f.name}</dt>
+                {f.roles.map(([role, list]) => (
+                  <dd>
+                    <span class="role">{roleLabel(role, list.length, list[0]!.role_label)}</span>
+                    <span class="names">
+                      {list.map((c, i) => (
+                        <>
+                          <a href={`/artist/${c.artist_id}`}>{c.name}</a>
+                          {i < list.length - 1 && ', '}
+                        </>
+                      ))}
+                    </span>
+                  </dd>
+                ))}
+              </div>
+            ))}
+          </dl>
+        </aside>
+      )
+    }
+    </div>
+
+    {
+      history.length > 1 && (
+        <details class="history-box">
+          <summary>
+            <h2 id="history-heading">Rated {history.length} times</h2>
+            <span class="muted small">See how it moved</span>
+          </summary>
+          <ol role="list" class="history">
+            {history.map((r) => (
+              <li>
+                <time datetime={r.rated_at}>{new Date(r.rated_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</time>
+                <span>
+                  {r.gut_score != null && `Gut ${r.gut_score}`}
+                  {r.production != null && ` · Production ${r.production}`}
+                  {r.songwriting != null && ` · Songwriting ${r.songwriting}`}
+                  {r.lyrics != null && ` · Lyrics ${r.lyrics}`}
+                  {r.performance != null && ` · Performance ${r.performance}`}
+                  {r.impact != null && ` · Impact ${r.impact}`}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </details>
+      )
+    }
+  </article>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-7);
+  }
+
+  /* As on the album page: titles at the top of the column, the score
+     panel along the cover's bottom edge, the rest in a row beneath. */
+  .hero {
+    display: grid;
+    gap: var(--space-5);
+    padding-top: var(--space-6);
+  }
+
+  @media (min-width: 48rem) {
+    .hero {
+      grid-template-columns: 16rem minmax(0, 1fr);
+      column-gap: var(--space-7);
+      row-gap: var(--space-5);
+    }
+
+    .art {
+      align-self: start;
+    }
+
+    .more {
+      grid-column: 2;
+    }
+  }
+
+  .art {
+    display: block;
+    width: min(16rem, 60vw);
+    border-radius: var(--radius-m);
+    box-shadow:
+      0 2px 4px rgb(0 0 0 / 0.3),
+      0 24px 60px -12px rgb(0 0 0 / 0.55);
+  }
+
+  .intro {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: var(--space-5);
+    min-width: 0;
+  }
+
+  .titles,
+  .more {
+    display: grid;
+    align-content: start;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .eyebrow a {
+    color: inherit;
+  }
+
+  h1 {
+    font-size: clamp(2.2rem, 1.4rem + 3.2vw, 4rem);
+    line-height: 0.98;
+  }
+
+  /* The tight display title needs air before the artist line. */
+  .by {
+    margin-top: var(--space-3);
+    font-size: var(--step-1);
+    font-weight: 600;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  .facts:empty {
+    display: none;
+  }
+
+  .axes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+  }
+
+  .axes div {
+    display: flex;
+    gap: var(--space-2);
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: var(--step--1);
+  }
+
+  .axes dt {
+    color: var(--text-muted);
+  }
+
+  .axes dd {
+    margin: 0;
+    font-weight: 700;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .note {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-4);
+    border-left: 2px solid var(--accent);
+    max-width: 34rem;
+  }
+
+  .note blockquote {
+    margin: 0;
+    font-size: var(--step-1);
+    font-style: italic;
+  }
+
+  .note figcaption {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .genres {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .genres a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2rem;
+    padding: 0 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    text-decoration: none;
+  }
+
+  .genres a:hover {
+    border-color: var(--text-subtle);
+    color: var(--text);
+  }
+
+  h2 {
+    margin-bottom: var(--space-3);
+    font-size: var(--step-2);
+    letter-spacing: -0.02em;
+  }
+
+  .lead {
+    margin: calc(var(--space-2) * -1) 0 var(--space-3);
+  }
+
+  .rows {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    --content-max: 44rem;
+    max-width: 44rem;
+  }
+
+  .rows li {
+    display: grid;
+    grid-template-columns: 3rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .thumb {
+    width: 3rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .row-text {
+    display: grid;
+    min-width: 0;
+  }
+
+  .row-text > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .row-text a {
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .row-text a:hover {
+    text-decoration: underline;
+  }
+
+  .credits {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  .credits dt {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .credits dd {
+    margin: 0;
+  }
+
+  .history {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--step--1);
+  }
+
+  .history li {
+    display: grid;
+    grid-template-columns: 7rem minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+
+  .history time {
+    color: var(--text-muted);
+  }
+
+  /* Long titles step down a size and wrap with a full first line, rather
+     than being split evenly into two short ones. */
+  h1 {
+    text-wrap: pretty;
+  }
+
+  h1.long {
+    font-size: clamp(2rem, 1.3rem + 2.4vw, 3.25rem);
+  }
+
+  h1.longer {
+    font-size: clamp(1.75rem, 1.2rem + 1.8vw, 2.6rem);
+  }
+
+  /* Your note, under the title like an epigraph: often a favourite line. */
+  .epigraph {
+    position: relative;
+    max-width: 34rem;
+    margin: var(--space-4) 0 0;
+    padding-left: var(--space-6);
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: var(--step-1);
+    font-style: italic;
+    line-height: 1.4;
+    text-wrap: pretty;
+  }
+
+  .epigraph::before {
+    content: '“';
+    position: absolute;
+    top: -0.3em;
+    left: 0;
+    color: var(--accent);
+    font-size: 2.6em;
+    line-height: 1;
+  }
+
+  .history-box summary {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .history-box summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .history-box summary h2 {
+    display: inline;
+  }
+
+  .history-box summary::after {
+    content: '';
+    width: 0.55rem;
+    height: 0.55rem;
+    margin-left: auto;
+    border-right: 2px solid var(--text-muted);
+    border-bottom: 2px solid var(--text-muted);
+    rotate: 45deg;
+    translate: 0 -0.2rem;
+    transition: rotate 0.2s;
+  }
+
+  .history-box[open] summary::after {
+    rotate: 225deg;
+  }
+
+  .history-box .history {
+    margin-top: var(--space-4);
+  }
+
+  /* Under the hero: where it appears (and other versions) beside its credits. */
+  .below {
+    display: grid;
+    gap: var(--space-7);
+  }
+
+  @media (min-width: 60rem) {
+    .below {
+      grid-template-columns: minmax(0, 1fr) 22rem;
+      align-items: start;
+    }
+  }
+
+  .main-col {
+    display: grid;
+    gap: var(--space-7);
+    min-width: 0;
+  }
+
+  .credits-panel {
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .credits-panel h2 {
+    margin-bottom: var(--space-3);
+    font-size: var(--step-1);
+  }
+
+  .credits-panel dl {
+    display: grid;
+    gap: var(--space-4);
+    margin: 0;
+  }
+
+  .credits-panel dt {
+    margin-bottom: var(--space-1);
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  /* Role on the left, people on the right, so long lists line up. */
+  .credits-panel dd {
+    display: grid;
+    grid-template-columns: 8.5rem minmax(0, 1fr);
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0.3rem 0;
+    border-bottom: 1px dashed var(--border);
+    font-size: var(--step--1);
+  }
+
+  .credits-panel .family dd:last-child {
+    border-bottom: 0;
+  }
+
+  .credits-panel .role {
+    color: var(--text-muted);
+  }
+
+  .credits-panel .names a {
+    font-weight: 600;
+  }
+
+  .links h2 {
+    margin-bottom: var(--space-3);
+  }
+
+  .links ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .links a {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+    padding: 0 var(--space-4) 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .links a:hover {
+    border-color: var(--accent);
+  }
+
+  .spotify-mark {
+    width: 1.15rem;
+    height: 1.15rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+  }
+
+  .actions .button {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .credits-panel .names a {
+    text-decoration: none;
+  }
+
+  .credits-panel .names a:hover,
+  .credits-panel .names a:focus-visible {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+</style>

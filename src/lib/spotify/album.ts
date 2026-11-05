@@ -61,7 +61,7 @@ export function parseSpotifyInput(input: string): SpotifyTarget | null {
   return path ? { kind: path[1] as 'album' | 'track', id: path[2]! } : null;
 }
 
-interface Getter {
+export interface Getter {
   get<T>(path: string): Promise<T>;
 }
 

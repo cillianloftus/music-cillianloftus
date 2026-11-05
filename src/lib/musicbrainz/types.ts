@@ -28,6 +28,8 @@ export interface MbRelation {
   direction?: 'forward' | 'backward';
   artist?: MbArtist;
   work?: MbWork;
+  /** "lead vocals", "guitar", "co": what kind of vocal or instrument, and so on. */
+  attributes?: string[];
 }
 
 export interface MbRecording {
@@ -89,6 +91,7 @@ export interface MbRelease {
   'artist-credit': MbArtistCredit[];
   'release-group': MbReleaseGroup;
   'label-info'?: { label: { name: string } | null }[];
+  barcode?: string | null;
   media: MbMedium[];
   relations?: MbRelation[];
 }

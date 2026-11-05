@@ -90,7 +90,7 @@ async function fillSpotifyIds(result: WriteResult, album: SpotifyAlbum): Promise
  * Spotify's cover, stored under the same keys as Cover Art Archive art:
  * its 300 px image as the small size, its 640 px image for the larger two.
  */
-async function storeSpotifyArt(releaseId: string, album: SpotifyAlbum): Promise<void> {
+export async function storeSpotifyArt(releaseId: string, album: SpotifyAlbum): Promise<void> {
   const existing = await env.DB.prepare(`SELECT art_key FROM release WHERE id = ?`).bind(releaseId).first<string>('art_key');
   if (existing || album.images.length === 0) return;
   const bySize = [...album.images].sort((a, b) => (b.width ?? 0) - (a.width ?? 0));

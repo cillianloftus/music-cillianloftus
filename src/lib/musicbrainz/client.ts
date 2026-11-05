@@ -9,6 +9,24 @@
 
 import type { MbRelease, MbReleaseGroup, MbReleaseSummary } from './types';
 
+/** An artist with what enrichment reads: type, life span, areas, aliases, links. */
+export interface MbArtistDetails {
+  id: string;
+  name: string;
+  type?: string | null;
+  'life-span'?: { begin?: string | null; end?: string | null; ended?: boolean };
+  area?: { name: string } | null;
+  'begin-area'?: { name: string } | null;
+  aliases?: { name: string; type?: string | null }[];
+  relations?: {
+    type: string;
+    'target-type': string;
+    direction?: 'forward' | 'backward';
+    artist?: { id: string; name: string };
+    url?: { resource: string };
+  }[];
+}
+
 const BASE = 'https://musicbrainz.org/ws/2';
 const USER_AGENT = 'music-cillianloftus/0.1 ( https://music.cillianloftus.com )';
 const MIN_INTERVAL_MS = 1100;
@@ -113,4 +131,54 @@ export async function releasesByBarcode(barcode: string): Promise<{ id: string; 
     [],
   );
   return (page.releases ?? []).map(({ id, score, title }) => ({ id, score, title }));
+}
+
+/** One artist, with aliases, links to other artists and to other sites. */
+export function getArtistDetails(mbid: string): Promise<MbArtistDetails> {
+  return get<MbArtistDetails>(`artist/${mbid}`, ['aliases', 'artist-rels', 'url-rels']);
+}
+
+export interface MbReleaseGroupSummary {
+  id: string;
+  title: string;
+  'primary-type': string | null;
+  'secondary-types'?: string[];
+  'first-release-date'?: string;
+}
+
+/** Every release group an artist is credited on as the artist, all pages. */
+export async function browseArtistReleaseGroups(artistMbid: string): Promise<MbReleaseGroupSummary[]> {
+  const groups: MbReleaseGroupSummary[] = [];
+  for (let offset = 0; offset < 2000; offset += BROWSE_PAGE) {
+    const page = await get<{ 'release-groups': MbReleaseGroupSummary[]; 'release-group-count': number }>(
+      `release-group?artist=${artistMbid}&limit=${BROWSE_PAGE}&offset=${offset}`,
+      [],
+    );
+    groups.push(...page['release-groups']);
+    if (groups.length >= page['release-group-count'] || page['release-groups'].length === 0) break;
+  }
+  return groups;
+}
+
+/** Artists by name, best match first. */
+export async function searchArtists(name: string): Promise<{ id: string; name: string; score: number; disambiguation?: string }[]> {
+  const page = await get<{ artists?: { id: string; name: string; score: number; disambiguation?: string }[] }>(
+    `artist?query=${encodeURIComponent(`artist:"${name.replace(/"/g, '')}"`)}&limit=5`,
+    [],
+  );
+  return page.artists ?? [];
+}
+
+/** The MusicBrainz artist linked to a Spotify artist page, if any. */
+export async function artistForSpotify(spotifyId: string): Promise<{ id: string; name: string } | null> {
+  try {
+    const page = await get<{ relations?: { artist?: { id: string; name: string } }[] }>(
+      `url?resource=${encodeURIComponent(`https://open.spotify.com/artist/${spotifyId}`)}`,
+      ['artist-rels'],
+    );
+    return page.relations?.find((r) => r.artist)?.artist ?? null;
+  } catch (error) {
+    if (error instanceof MusicBrainzError && error.status === 404) return null;
+    throw error;
+  }
 }

@@ -6,8 +6,10 @@ import { userForEmail } from './lib/auth/user';
 /** Paths behind the Access policy. Everything else is public. */
 function isProtected(pathname: string): boolean {
   return (
-    pathname === '/edit' ||
+    pathname === '/manage' ||
+    pathname.startsWith('/manage/') ||
     pathname.startsWith('/edit/') ||
+    pathname === '/queue' ||
     pathname.startsWith('/api/write/') ||
     pathname === '/api/query' ||
     pathname === '/query'
@@ -37,7 +39,23 @@ async function identify(request: Request, cookie: string | undefined): Promise<A
   }
 }
 
+/**
+ * Where the management pages used to live (/edit, /edit/jobs…): moved to
+ * /manage, the queue to /queue. Old addresses still arrive somewhere.
+ * Editing one thing (/edit/album/…, /edit/rate/…) stays under /edit.
+ */
+const MOVED = /^\/edit(?:\/(backups|files|genres|history|import|jobs|refresh|review|roles|spotify|weights)(\/.*)?)?\/?$/;
+function movedTo(pathname: string): string | null {
+  if (pathname === '/edit/queue') return '/queue';
+  const m = MOVED.exec(pathname);
+  if (!m) return null;
+  return m[1] ? `/manage/${m[1]}${m[2] ?? ''}` : '/manage';
+}
+
 export const onRequest = defineMiddleware(async (context, next) => {
+  const moved = movedTo(context.url.pathname);
+  if (moved) return context.redirect(`${moved}${context.url.search}`, 301);
+
   const identity = await identify(context.request, context.cookies.get('CF_Authorization')?.value);
   context.locals.user = identity ? await userForEmail(identity.email) : null;
 

@@ -1,0 +1,213 @@
+---
+/**
+ * A list of short values (genres) edited as chips: each one a removable
+ * tag, with a box beneath that suggests from what already exists and adds
+ * on Enter, comma or picking a suggestion. Backspace in an empty box takes
+ * the last chip off.
+ *
+ * Without JavaScript it is the comma-separated text field it enhances,
+ * which is also what is submitted either way.
+ */
+
+interface Props {
+  id: string;
+  name: string;
+  label: string;
+  /** Comma-separated, as submitted. */
+  value: string;
+  options: string[];
+  hint?: string;
+  placeholder?: string;
+}
+
+const { id, name, label, value, options, hint, placeholder = 'Add one' } = Astro.props;
+const hintId = hint ? `${id}-hint` : undefined;
+---
+
+<chip-input class="chips" data-placeholder={placeholder}>
+  <label for={id}>{label}</label>
+  <input class="input raw" id={id} name={name} value={value} list={`${id}-options`} aria-describedby={hintId} autocomplete="off" />
+  <datalist id={`${id}-options`}>{options.map((o) => <option value={o} />)}</datalist>
+  {hint && <span class="hint" id={hintId}>{hint}</span>}
+</chip-input>
+
+<script>
+  class ChipInput extends HTMLElement {
+    connectedCallback() {
+      const raw = this.querySelector<HTMLInputElement>('input.raw');
+      const label = this.querySelector('label');
+      if (!raw || !label || this.dataset.ready) return;
+      this.dataset.ready = '1';
+
+      const values = raw.value
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
+
+      // The raw field keeps the name and is what submits; the person types in a new box.
+      raw.type = 'hidden';
+      raw.removeAttribute('id');
+      const box = document.createElement('div');
+      box.className = 'box';
+      const list = document.createElement('ul');
+      list.setAttribute('role', 'list');
+      list.className = 'list';
+      const entry = document.createElement('input');
+      entry.className = 'entry';
+      entry.id = label.htmlFor;
+      entry.setAttribute('list', raw.getAttribute('list') ?? '');
+      // Password managers (NordPass and co.) otherwise offer to fill these.
+      for (const [k, v] of [['autocomplete', 'off'], ['data-1p-ignore', ''], ['data-lpignore', 'true'], ['data-bwignore', ''], ['data-form-type', 'other']]) entry.setAttribute(k, v);
+      entry.placeholder = this.dataset.placeholder ?? '';
+      const hint = raw.getAttribute('aria-describedby');
+      if (hint) entry.setAttribute('aria-describedby', hint);
+      raw.removeAttribute('list');
+      box.appendChild(list);
+      box.appendChild(entry);
+      this.insertBefore(box, raw);
+
+      const status = document.createElement('span');
+      status.className = 'visually-hidden';
+      status.setAttribute('role', 'status');
+      this.appendChild(status);
+
+      const sync = () => {
+        raw.value = values.join(', ');
+        list.replaceChildren(
+          ...values.map((v, i) => {
+            const li = document.createElement('li');
+            li.className = 'chip';
+            const text = document.createElement('span');
+            text.textContent = v;
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'chip-remove';
+            remove.setAttribute('aria-label', `Remove ${v}`);
+            remove.textContent = '×';
+            remove.addEventListener('click', () => {
+              values.splice(i, 1);
+              sync();
+              status.textContent = `${v} removed.`;
+              entry.focus();
+            });
+            li.appendChild(text);
+            li.appendChild(remove);
+            return li;
+          }),
+        );
+      };
+
+      const add = (input: string) => {
+        for (const part of input.split(',')) {
+          const v = part.trim().toLowerCase();
+          if (!v || values.some((x) => x.toLowerCase() === v)) continue;
+          values.push(v);
+          status.textContent = `${v} added.`;
+        }
+        entry.value = '';
+        sync();
+      };
+
+      entry.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ',') {
+          if (entry.value.trim()) {
+            event.preventDefault();
+            add(entry.value);
+          } else if (event.key === ',') event.preventDefault();
+        } else if (event.key === 'Backspace' && entry.value === '' && values.length) {
+          const v = values.pop()!;
+          sync();
+          status.textContent = `${v} removed.`;
+        }
+      });
+      // Picking from the suggestions fires input with the whole value.
+      entry.addEventListener('input', (event) => {
+        const kind = (event as InputEvent).inputType;
+        if (kind === undefined || kind === 'insertReplacementText') add(entry.value);
+      });
+      // Whatever is half-typed counts when the form is saved.
+      raw.form?.addEventListener('submit', () => entry.value.trim() && add(entry.value));
+      box.addEventListener('click', (event) => event.target === box && entry.focus());
+      sync();
+    }
+  }
+  customElements.define('chip-input', ChipInput);
+</script>
+
+<style>
+  .chips {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  label {
+    font-weight: 600;
+  }
+
+  .hint {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .chips :global(.box) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+    padding: var(--space-2);
+    border: 1px solid var(--border-strong, var(--border));
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    cursor: text;
+  }
+
+  .chips :global(.box:focus-within) {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+
+  .chips :global(.list) {
+    display: contents;
+  }
+
+  .chips :global(.chip) {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding-left: var(--space-3);
+    border-radius: 999px;
+    background: var(--surface-2);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .chips :global(.chip-remove) {
+    display: grid;
+    place-items: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .chips :global(.chip-remove:hover) {
+    color: var(--danger);
+  }
+
+  .chips :global(.entry) {
+    flex: 1 1 8rem;
+    min-width: 6rem;
+    min-height: 2rem;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    outline: none;
+  }
+</style>

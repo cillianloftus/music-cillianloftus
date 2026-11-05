@@ -1,0 +1,527 @@
+---
+/**
+ * The work queue: imports, pushes and backups, newest first, grouped by
+ * what needs a person (failures), what is moving, and what is done. Each
+ * job is one row; an import shows its album once it has landed.
+ */
+import { env } from 'cloudflare:workers';
+import Base from '../../layouts/Base.astro';
+import CoverArt from '../../components/CoverArt.astro';
+import { formatRelative } from '../../lib/format';
+import { queuePaused, recentJobs, type JobRow } from '../../lib/jobs/queue';
+import { runJobs } from '../../lib/jobs/runner';
+
+const jobs = await recentJobs(80);
+const byStatus = (s: string) => jobs.filter((j) => j.status === s);
+const failedJobs = byStatus('failed');
+const moving = jobs.filter((j) => j.status === 'queued' || j.status === 'running');
+const doneJobs = byStatus('done');
+const queued = byStatus('queued').length;
+const running = byStatus('running').length;
+const paused = await queuePaused();
+// Paused with work waiting is not "active": nothing will change until resumed.
+const active = moving.length > 0 && !(paused && running === 0);
+
+// Jobs waiting and nothing working them: start now. (The cron does this
+// every minute in production; local dev has no cron.) This page refreshes
+// itself while work is in progress, so a long queue keeps moving.
+const working = await env.DB.prepare(
+  `SELECT 1 AS yes FROM job WHERE status = 'running' AND started_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 minutes')`,
+).first();
+if (queued > 0 && !working && !paused) Astro.locals.cfContext.waitUntil(runJobs({ budgetMs: 25_000 }));
+
+// The albums imports landed on, for their titles and covers.
+const albumIds = [
+  ...new Set(
+    jobs
+      .map((j) => {
+        try {
+          return (JSON.parse(j.payload_json) as { result?: { releaseGroupId?: string } }).result?.releaseGroupId ?? null;
+        } catch {
+          return null;
+        }
+      })
+      .filter((x): x is string => Boolean(x)),
+  ),
+];
+const albums = new Map(
+  (
+    await env.DB.prepare(
+      `SELECT g.id, g.title, r.art_key,
+              (SELECT a.name FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+               WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary' ORDER BY c.position LIMIT 1) AS artist
+       FROM release_group g
+       LEFT JOIN v_release_group_canonical v ON v.release_group_id = g.id
+       LEFT JOIN release r ON r.id = v.release_id
+       WHERE g.id IN (SELECT value FROM json_each(?))`,
+    )
+      .bind(JSON.stringify(albumIds))
+      .all<{ id: string; title: string; art_key: string | null; artist: string | null }>()
+  ).results.map((a) => [a.id, a]),
+);
+
+interface Shown {
+  title: string;
+  detail: string;
+  href: string | null;
+  artKey: string | null;
+  hasArt: boolean;
+}
+
+function describe(job: JobRow): Shown {
+  try {
+    const payload = JSON.parse(job.payload_json);
+    if (job.kind === 'spotify_push') {
+      const result = payload.result;
+      return {
+        title: 'Playlist pushed to Spotify',
+        detail: result ? `${result.pushed} of ${result.selected} tracks` : 'Spotify push',
+        href: `/playlist/${payload.definitionId}`,
+        artKey: null,
+        hasArt: false,
+      };
+    }
+    if (job.kind === 'backup') return { title: 'Backup', detail: 'Every table, copied', href: '/manage/backups', artKey: null, hasArt: false };
+    const album = payload.result?.releaseGroupId ? albums.get(payload.result.releaseGroupId) : null;
+    const t = payload.target;
+    const source = payload.source === 'spotify' ? `Spotify ${t?.kind ?? 'album'}` : `MusicBrainz ${t?.entity === 'release-group' ? 'album' : 'edition'}`;
+    const via = payload.result?.via === 'musicbrainz' ? ', matched on MusicBrainz' : '';
+    if (album) {
+      return {
+        title: album.title,
+        detail: [album.artist, `${source}${via}`].filter(Boolean).join(' · '),
+        href: `/album/${album.id}`,
+        artKey: album.art_key,
+        hasArt: true,
+      };
+    }
+    const id = String(t?.id ?? t?.mbid ?? '').slice(0, 8);
+    return { title: source, detail: id ? `${id}…` : '', href: null, artKey: null, hasArt: true };
+  } catch {
+    return { title: job.kind, detail: '', href: null, artKey: null, hasArt: false };
+  }
+}
+
+const total = jobs.length;
+const progress = moving.length + doneJobs.length > 0 ? doneJobs.length / (moving.length + doneJobs.length) : 0;
+const groups = [
+  { key: 'failed', heading: 'Needs attention', items: failedJobs },
+  { key: 'moving', heading: 'In progress', items: moving },
+  { key: 'done', heading: 'Done', items: doneJobs },
+].filter((g) => g.items.length > 0);
+---
+
+<Base title="Jobs">
+  <div class="wrap page" data-jobs data-active={active ? 'true' : undefined}>
+    <header class="head">
+      <h1>Jobs</h1>
+      <p class="visually-hidden" role="status">{active ? 'Working through the queue.' : ''}</p>
+    </header>
+
+    {
+      total > 0 && (
+        <section class="summary" aria-label="Summary" data-summary>
+          <dl>
+            <div>
+              <dt>Running</dt>
+              <dd class="tabular">{running}</dd>
+            </div>
+            <div>
+              <dt>{paused ? 'Paused' : 'Waiting'}</dt>
+              <dd class="tabular">{queued}</dd>
+            </div>
+            <div>
+              <dt>Done</dt>
+              <dd class="tabular">{doneJobs.length}</dd>
+            </div>
+            <div class:list={[{ alert: failedJobs.length > 0 }]}>
+              <dt>Failed</dt>
+              <dd class="tabular">{failedJobs.length}</dd>
+            </div>
+          </dl>
+          {moving.length > 0 && (
+            <span class:list={['bar', { paused }]} aria-hidden="true">
+              <span style={`inline-size: ${Math.round(progress * 100)}%`} />
+            </span>
+          )}
+          <div class="actions">
+            {paused ? (
+              <form method="post" action="/api/write/jobs/control">
+                <input type="hidden" name="intent" value="resume" />
+                <button class="button button--primary" type="submit">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+                  Resume
+                </button>
+              </form>
+            ) : (
+              moving.length > 0 && (
+                <form method="post" action="/api/write/jobs/control">
+                  <input type="hidden" name="intent" value="pause" />
+                  <button class="button" type="submit">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5h3v14H8zM13 5h3v14h-3z" /></svg>
+                    Pause
+                  </button>
+                </form>
+              )
+            )}
+            {queued > 0 && !paused && running === 0 && (
+              <form method="post" action="/api/write/jobs/run">
+                <button class="button" type="submit">
+                  Start the {queued} waiting
+                </button>
+              </form>
+            )}
+            {failedJobs.length > 0 && (
+              <form method="post" action="/api/write/jobs/retry">
+                <input type="hidden" name="all" value="1" />
+                <button class="button button--primary" type="submit">
+                  {failedJobs.length === 1 ? 'Retry the failed one' : `Retry all ${failedJobs.length} failed`}
+                </button>
+              </form>
+            )}
+            <a class="button button--quiet" href="/manage/import">
+              Import more
+            </a>
+          </div>
+        </section>
+      )
+    }
+
+    {
+      total === 0 ? (
+        <p class="muted">
+          No jobs yet. <a href="/manage/import">Import something.</a>
+        </p>
+      ) : (
+        <div class="groups" data-groups>
+          {groups.map((g) => (
+            <section aria-labelledby={`group-${g.key}`} class="group">
+              <h2 id={`group-${g.key}`}>
+                {g.heading} <span class="count tabular">{g.items.length}</span>
+              </h2>
+              <ol role="list" class="jobs">
+                {g.items.map((job) => {
+                  const shown = describe(job);
+                  return (
+                    <li class="job" id={`job-${job.id}`} data-status={job.status}>
+                      <span class="state" aria-hidden="true" />
+                      {shown.hasArt && (
+                        <span class="thumb">
+                          <CoverArt artKey={shown.artKey} title={shown.title} sizes="2.75rem" />
+                        </span>
+                      )}
+                      <div class="what">
+                        {shown.href && job.status === 'done' ? (
+                          <a class="title" href={shown.href}>
+                            {shown.title}
+                          </a>
+                        ) : (
+                          <span class="title">{shown.title}</span>
+                        )}
+                        <span class="detail">
+                          {shown.detail}
+                          {shown.detail && ' · '}
+                          <time datetime={job.created_at}>{formatRelative(job.created_at)}</time>
+                          <span class="visually-hidden">, {job.status}</span>
+                        </span>
+                        {job.status === 'failed' && <span class="error">{job.error}</span>}
+                      </div>
+                      {job.status === 'failed' && (
+                        <form method="post" action="/api/write/jobs/retry">
+                          <input type="hidden" name="id" value={job.id} />
+                          <button class="button small" type="submit">
+                            Retry
+                          </button>
+                        </form>
+                      )}
+                      {job.status === 'running' && <span class="label">Running</span>}
+                      {job.status === 'queued' && (
+                        <>
+                          <span class="label">{paused ? 'Paused' : 'Waiting'}</span>
+                          <form method="post" action="/api/write/jobs/control">
+                            <input type="hidden" name="intent" value="remove" />
+                            <input type="hidden" name="id" value={job.id} />
+                            <button class="remove" type="submit" aria-label={`Remove ${shown.title} from the queue`} title="Remove from the queue">
+                              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                            </button>
+                          </form>
+                        </>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          ))}
+        </div>
+      )
+    }
+  </div>
+</Base>
+
+<script>
+  // While anything is queued or running, re-fetch this page every few
+  // seconds and swap in the new summary and list. Focus and scroll are
+  // untouched; the status line says when everything has finished.
+  const root = document.querySelector<HTMLElement>('[data-jobs]');
+
+  async function poll() {
+    if (!root?.dataset.active) return;
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const response = await fetch(location.href, { headers: { Accept: 'text/html' } });
+    if (!response.ok) return;
+    const next = new DOMParser().parseFromString(await response.text(), 'text/html').querySelector<HTMLElement>('[data-jobs]');
+    if (!next) return;
+    for (const part of ['[data-summary]', '[data-groups]']) {
+      const fresh = next.querySelector(part);
+      const old = root.querySelector(part);
+      if (fresh && old) old.replaceWith(fresh);
+    }
+    if (next.dataset.active) {
+      poll();
+    } else {
+      delete root.dataset.active;
+      root.querySelector('[role="status"]')!.textContent = 'All jobs finished.';
+    }
+  }
+
+  poll();
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    --content-max: 52rem;
+  }
+
+  .head {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  /* The queue at a glance. */
+  .summary {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .summary dl {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  .summary dt {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .summary dd {
+    margin: 0;
+    font-size: var(--step-3);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+  }
+
+  .summary .alert dd {
+    color: var(--danger);
+  }
+
+  .bar {
+    display: block;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  .bar > span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--accent);
+    transition: inline-size 0.4s ease;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .groups {
+    display: grid;
+    gap: var(--space-6);
+  }
+
+  .group h2 {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+    font-size: var(--step-1);
+  }
+
+  .count {
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-weight: 700;
+  }
+
+  .jobs {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* One row: state, cover, what it is, then its action. */
+  .job {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .state {
+    flex: none;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background: var(--text-subtle);
+  }
+
+  .job[data-status='done'] .state {
+    background: var(--accent);
+  }
+
+  .job[data-status='failed'] .state {
+    background: var(--danger);
+  }
+
+  .job[data-status='running'] .state {
+    width: 0.9rem;
+    height: 0.9rem;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    background: none;
+    animation: turn 0.9s linear infinite;
+  }
+
+  .thumb {
+    flex: none;
+    width: 2.75rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .what {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .title {
+    overflow: hidden;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  a.title {
+    text-decoration: none;
+  }
+
+  a.title:hover {
+    text-decoration: underline;
+  }
+
+  .detail {
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .error {
+    color: var(--danger);
+    font-size: var(--step--1);
+    overflow-wrap: anywhere;
+  }
+
+  .label {
+    flex: none;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .small {
+    min-height: 2.25rem;
+    font-size: var(--step--1);
+  }
+
+  @keyframes turn {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .job[data-status='running'] .state {
+      animation-duration: 3s;
+    }
+  }
+
+  .actions .button svg {
+    width: 1rem;
+    height: 1rem;
+    margin-right: var(--space-1);
+    fill: currentColor;
+  }
+
+  .bar.paused > span {
+    background: var(--text-subtle);
+  }
+
+  .remove {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-subtle);
+    cursor: pointer;
+  }
+
+  .remove:hover {
+    background: var(--surface-2);
+    color: var(--danger);
+  }
+
+  .remove svg {
+    width: 0.9rem;
+    height: 0.9rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+</style>

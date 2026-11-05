@@ -1,6 +1,7 @@
 ---
 import { env } from 'cloudflare:workers';
 import Base from '../../../../layouts/Base.astro';
+import AxisSlider from '../../../../components/AxisSlider.astro';
 import Backdrop from '../../../../components/Backdrop.astro';
 import CoverArt from '../../../../components/CoverArt.astro';
 import CreditLine from '../../../../components/CreditLine.astro';
@@ -119,33 +120,22 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
         <input type="hidden" name="return_to" value={returnTo} />
 
         <p class="muted">
-          Each axis is out of 10, halves allowed. Leave any blank that does not apply. A gut score
-          given here too is what calibrates gut scores against considered ones.
+          Each out of 10, halves allowed. Leave any that do not apply; a blank axis is left out, not counted
+          as zero. A gut score given here too is what calibrates gut scores against considered ones.
         </p>
 
         <div class="axes">
-          <div class="field">
-            <label for="gut_score">Gut score</label>
-            <input class="input" id="gut_score" name="gut_score" type="number" inputmode="decimal" min="0" max="10" step="0.5" value={current?.gut_score ?? ''} />
-          </div>
+          <AxisSlider name="gut_score" label="Gut score" hint="First instinct." value={current?.gut_score} />
           {
             axes.map((axis) => (
-              <div class="field">
-                <label for={axis}>{capitalise(axis)}</label>
-                <input
-                  class="input"
-                  id={axis}
-                  name={axis}
-                  type="number"
-                  inputmode="decimal"
-                  min="0"
-                  max="10"
-                  step="0.5"
-                  value={current?.[axis] ?? ''}
-                  aria-describedby={`${axis}-hint`}
-                />
-                <span class="hint" id={`${axis}-hint`}>{axisHints[axis]}</span>
-              </div>
+              <AxisSlider
+                name={axis}
+                label={capitalise(axis)}
+                hint={axisHints[axis]}
+                value={current?.[axis]}
+                canNotApply
+                notApplicable={current?.not_applicable.includes(axis) ?? false}
+              />
             ))
           }
         </div>
@@ -157,10 +147,7 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
               Rare on purpose. Not quality: whether there was life before this record and life after.
             </span>
           </legend>
-          <div class="field">
-            <label for="impact">Impact, out of 10</label>
-            <input class="input narrow" id="impact" name="impact" type="number" inputmode="decimal" min="0" max="10" step="0.5" value={current?.impact ?? ''} />
-          </div>
+          <AxisSlider name="impact" label="Impact" value={current?.impact} tone="accent" />
           <div class="field">
             <label for="impact_note">When and what</label>
             <textarea class="input" id="impact_note" name="impact_note" rows="2" maxlength="500" aria-describedby="impact-note-hint">{current?.impact_note ?? ''}</textarea>
@@ -232,10 +219,11 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
       const quality = Math.round(Math.max(0, Math.min(100, base * 10)));
       const impact = value('impact') ?? 0;
       const how = composite !== null ? 'from the axes' : 'from your gut, calibrated';
+      const mark = impact ? `, with impact ${impact}` : '';
       out.textContent =
         entityType === 'recording'
-          ? `Gives ${quality}${impact ? ` +${impact}` : ''}, ${how}.`
-          : `Album axes give ${quality}${impact ? ` +${impact}` : ''}, ${how}; the tracks make up the rest.`;
+          ? `Gives ${quality}${mark}, ${how}.`
+          : `Album axes give ${quality}${mark}, ${how}; the tracks make up the rest.`;
     };
     form.addEventListener('input', update);
     update();
@@ -262,7 +250,7 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
   .page {
     display: grid;
     gap: var(--space-6);
-    max-width: 40rem;
+    --content-max: 40rem;
   }
 
   .back {
@@ -342,13 +330,6 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
 
   .axes {
     display: grid;
-    gap: var(--space-4);
-  }
-
-  @media (min-width: 36rem) {
-    .axes {
-      grid-template-columns: 1fr 1fr;
-    }
   }
 
   .impact {

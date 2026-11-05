@@ -58,6 +58,8 @@ export async function artistLines(
 
   for (const part of results) {
     const line = lines.get(part.entity_id) ?? [];
+    // Sources sometimes credit one artist as both artist and featured guest.
+    if (part.role === 'featured' && line.some((p) => p.artist_id === part.artist_id)) continue;
     line.push(part);
     lines.set(part.entity_id, line);
   }
@@ -180,12 +182,14 @@ export interface Edition {
   mbid: string | null;
   art_key: string | null;
   track_count: number;
+  /** "Pulled from streaming in 2024": anything about it no field holds. */
+  note: string | null;
 }
 
 /** Ordered the same way v_release_group_canonical chooses, so the standard edition comes first. */
 export async function editions(releaseGroupId: string): Promise<Edition[]> {
   const { results } = await env.DB.prepare(
-    `SELECT r.id, r.title, r.date, r.date_precision, r.country, r.label, r.format, r.mbid, r.art_key,
+    `SELECT r.id, r.title, r.date, r.date_precision, r.country, r.label, r.format, r.mbid, r.art_key, r.note,
             (SELECT count(*) FROM track t WHERE t.release_id = r.id) AS track_count
      FROM release r
      WHERE r.release_group_id = ?
@@ -224,19 +228,31 @@ export interface Contributor {
   artist_id: string;
   name: string;
   role: CreditRole;
+  role_label: string;
+  family: string;
+  key_order: number | null;
+  /** How many of the edition's tracks credit them in this role. */
+  tracks: number;
+  /** How many tracks the edition has. */
+  of: number;
 }
 
-/** Producers, writers, engineers and so on across an edition and its recordings. */
+/**
+ * An album's writers, producers, engineers and players: entirely its
+ * tracks', gathered across the edition, most-credited first in each role.
+ */
 export async function contributors(releaseId: string): Promise<Contributor[]> {
   const { results } = await env.DB.prepare(
-    `SELECT DISTINCT a.id AS artist_id, a.name, c.role
+    `WITH tracks AS (SELECT DISTINCT recording_id FROM track WHERE release_id = ?1)
+     SELECT a.id AS artist_id, a.name, c.role, r.label AS role_label, r.family, r.key_order,
+            count(DISTINCT c.entity_id) AS tracks, (SELECT count(*) FROM tracks) AS "of"
      FROM artist_credit c
      JOIN artist a ON a.id = c.artist_id
-     WHERE c.role NOT IN ('primary', 'featured')
-       AND ((c.entity_type = 'release' AND c.entity_id = ?1)
-         OR (c.entity_type = 'recording'
-             AND c.entity_id IN (SELECT recording_id FROM track WHERE release_id = ?1)))
-     ORDER BY c.role, a.sort_name`,
+     JOIN credit_role r ON r.id = c.role
+     WHERE c.entity_type = 'recording' AND c.entity_id IN (SELECT recording_id FROM tracks)
+       AND r.family <> 'artist'
+     GROUP BY c.role, a.id
+     ORDER BY r.key_order IS NULL, r.key_order, r.position, r.label, tracks DESC, a.sort_name`,
   )
     .bind(releaseId)
     .all<Contributor>();
@@ -264,7 +280,7 @@ export async function artistReleaseGroups(artistId: string, viewerId: string | n
        SELECT entity_id FROM artist_credit
        WHERE entity_type = 'release_group' AND artist_id = ?2 AND role IN ('primary', 'featured')
      )
-     ORDER BY g.first_release_date IS NULL, g.first_release_date`,
+     ORDER BY g.first_release_date IS NULL, g.first_release_date DESC`,
   )
     .bind(viewerId, artistId)
     .all<Omit<ReleaseGroupSummary, 'credits'>>();
@@ -272,15 +288,23 @@ export async function artistReleaseGroups(artistId: string, viewerId: string | n
 }
 
 /** Credits on other people's records: production, writing, features. */
-export async function artistAppearances(artistId: string): Promise<{ role: CreditRole; count: number }[]> {
+/**
+ * What else an artist is credited as, beyond being the artist: most often
+ * first, and on a tie the weightier role first (writer before producer
+ * before engineer), as the role list orders them. Labels as stored.
+ */
+export async function artistAppearances(
+  artistId: string,
+): Promise<{ role: CreditRole; label: string; family: string; key_order: number | null; count: number }[]> {
   const { results } = await env.DB.prepare(
-    `SELECT role, count(DISTINCT entity_id) AS count
-     FROM artist_credit
-     WHERE artist_id = ? AND role <> 'primary'
-     GROUP BY role ORDER BY count DESC`,
+    `SELECT c.role, r.label, r.family, r.key_order, count(DISTINCT c.entity_id) AS count
+     FROM artist_credit c JOIN credit_role r ON r.id = c.role
+     WHERE c.artist_id = ? AND c.role <> 'primary'
+     GROUP BY c.role
+     ORDER BY count DESC, r.position, r.label`,
   )
     .bind(artistId)
-    .all<{ role: CreditRole; count: number }>();
+    .all<{ role: CreditRole; label: string; family: string; key_order: number | null; count: number }>();
   return results;
 }
 
@@ -298,7 +322,9 @@ export interface ArtistTrack {
 export async function artistTopTracks(artistId: string, viewerId: string | null, limit = 5): Promise<ArtistTrack[]> {
   const { results } = await env.DB.prepare(
     `SELECT r.id, r.title, s.quality_score, s.personal_score,
-            ra.release_group_id AS album_id, g.title AS album_title, x.art_key
+            ra.release_group_id AS album_id, g.title AS album_title,
+            -- The cover it first came out under: a single's, before the album's.
+            coalesce((SELECT fa.art_key FROM v_recording_first_art fa WHERE fa.recording_id = r.id), x.art_key) AS art_key
      FROM artist_credit c
      JOIN recording r ON r.id = c.entity_id
      JOIN v_recording_score s ON s.recording_id = r.id AND s.user_id = ?1

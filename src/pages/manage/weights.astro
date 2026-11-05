@@ -1,0 +1,741 @@
+---
+/**
+ * Weights (ARCHITECTURE.md §8): move a weight and watch the library
+ * re-rank. Scores are computed when read, never stored, so a new weighting
+ * applies to every rating at once; this page is where that shows.
+ *
+ * Without JavaScript the form previews by GET and the server ranks. With
+ * it, src/lib/scoring.ts re-ranks in the browser on every input, using the
+ * same code the server used to render the page.
+ */
+import Base from '../../layouts/Base.astro';
+import CoverArt from '../../components/CoverArt.astro';
+import CreditLine from '../../components/CreditLine.astro';
+import { releaseGroupsByIds, type CreditPart } from '../../lib/catalogue';
+import { hydrateTracks } from '../../lib/query/run';
+import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, computeScores, rank, type Weights } from '../../lib/scoring';
+import { AXIS_WEIGHT, sameWeights, scoreInputs, weightsForm, weightsVersions } from '../../lib/weights';
+
+const user = Astro.locals.user!;
+const params = Astro.url.searchParams;
+const [inputs, versions] = await Promise.all([scoreInputs(user.id), weightsVersions(user.id)]);
+const current = versions.find((v) => v.active);
+const active: Weights = current?.weights ?? DEFAULT_WEIGHTS;
+
+let preview = active;
+let error = params.get('error');
+const fromVersion = versions.find((v) => v.id === params.get('version'));
+if (fromVersion) {
+  preview = fromVersion.weights;
+} else if (params.has('production')) {
+  const parsed = weightsForm.safeParse(Object.fromEntries(params));
+  if (parsed.success) preview = parsed.data;
+  else error ??= parsed.error.issues[0]?.message ?? 'Those weights are not valid.';
+}
+
+const list: 'albums' | 'tracks' = params.get('list') === 'tracks' ? 'tracks' : 'albums';
+const by: 'quality' | 'personal' = params.get('by') === 'personal' ? 'personal' : 'quality';
+const saved = params.get('saved');
+
+/** Tab links keep the preview, but not one-off messages. */
+const linkParams = (change: Record<string, string>) => {
+  const next = new URLSearchParams(params);
+  next.delete('saved');
+  next.delete('error');
+  for (const [key, value] of Object.entries(change)) next.set(key, value);
+  return `?${next}`;
+};
+
+const baseline = computeScores(inputs, active);
+const scores = computeScores(inputs, preview);
+
+/** Shown at once; the rest are ranked but hidden, so the list stays short on a phone. */
+const VISIBLE = 50;
+
+interface Item {
+  id: string;
+  title: string;
+  credits: CreditPart[];
+  artKey: string | null;
+  context: string | null;
+}
+
+const [albums, tracks] = await Promise.all([
+  releaseGroupsByIds([...scores.albums.keys()], user.id),
+  hydrateTracks([...scores.recordings.keys()], user.id),
+]);
+const items: Record<'albums' | 'tracks', Map<string, Item>> = {
+  albums: new Map(albums.map((a) => [a.id, { id: a.id, title: a.title, credits: a.credits, artKey: a.art_key, context: null }])),
+  tracks: new Map(tracks.map((t) => [t.id, { id: t.id, title: t.title, credits: t.credits, artKey: t.art_key, context: t.album_title }])),
+};
+
+function rows(kind: 'albums' | 'tracks') {
+  const map = kind === 'albums' ? scores.albums : scores.recordings;
+  const before = new Map(rank(kind === 'albums' ? baseline.albums : baseline.recordings, by).map((id, i) => [id, i]));
+  return rank(map, by).map((id, i) => {
+    const score = map.get(id)!;
+    const was = before.get(id);
+    return { item: items[kind].get(id), position: i, move: was === undefined ? 0 : was - i, score };
+  });
+}
+
+const LABELS: Record<string, string> = {
+  production: 'Production',
+  songwriting: 'Songwriting',
+  lyrics: 'Lyrics',
+  performance: 'Performance',
+  sequencing: 'Sequencing',
+  cohesion: 'Cohesion',
+  ambition: 'Ambition',
+};
+
+const tracksShare = Math.round(preview.release.tracks * 100);
+const nextVersion = (versions[0]?.version ?? 0) + 1;
+const unchanged = sameWeights(preview, active);
+const baselineName = current ? `version ${current.version}` : 'the defaults';
+
+/** A one-line summary of what sets a version apart from the defaults. */
+function describe(w: Weights): string {
+  const axes = [...CRAFT_KEYS.map((k) => [k, w.craft[k]] as const), ...ALBUM_KEYS.map((k) => [k, w.album[k]] as const)]
+    .filter(([, value]) => value !== 1)
+    .map(([key, value]) => `${LABELS[key]!.toLowerCase()} ×${value}`);
+  const blend = `tracks ${Math.round(w.release.tracks * 100)}%`;
+  return [...axes, blend, w.release.trim_lowest ? 'lowest track dropped' : 'every track counted'].join(', ');
+}
+
+const date = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
+/** Spoken only when a row moved: "no change" fifty times over is noise. */
+const moveText = (move: number) => (move > 0 ? `up ${move}, ` : move < 0 ? `down ${-move}, ` : '');
+
+const clientData = {
+  inputs,
+  active,
+  visible: VISIBLE,
+};
+---
+
+<Base title="Weights">
+  <div class="wrap page">
+    <header class="intro">
+      <h1>Weights</h1>
+      <p class="muted">
+        Scores are worked out from your ratings every time they are read, never stored. Change a weight and the whole
+        library re-ranks; save it and it becomes a new version, with the old ones kept for replaying.
+      </p>
+    </header>
+
+    {
+      saved && (
+        <p class="notice" role="status">
+          {saved === 'activated' ? 'Switched version.' : saved === '0' ? 'Nothing to save: those are the defaults.' : `Saved as version ${saved}.`}
+        </p>
+      )
+    }
+    {
+      error && (
+        <p class="notice notice--error" role="alert">
+          {error === 'version' ? 'That version could not be found.' : error}
+        </p>
+      )
+    }
+
+    <div class="layout">
+      <form id="weights" class="controls" method="get" action="/manage/weights" aria-describedby="baseline">
+        <fieldset>
+          <legend>Track axes</legend>
+          {
+            CRAFT_KEYS.map((key) => (
+              <div class="slider">
+                <label for={key}>{LABELS[key]}</label>
+                <output for={key} id={`${key}-value`} class="tabular">×{preview.craft[key]}</output>
+                <input type="range" id={key} name={key} min={AXIS_WEIGHT.min} max={AXIS_WEIGHT.max} step={AXIS_WEIGHT.step} value={preview.craft[key]} />
+              </div>
+            ))
+          }
+        </fieldset>
+
+        <fieldset>
+          <legend>Album axes</legend>
+          {
+            ALBUM_KEYS.map((key) => (
+              <div class="slider">
+                <label for={key}>{LABELS[key]}</label>
+                <output for={key} id={`${key}-value`} class="tabular">×{preview.album[key]}</output>
+                <input type="range" id={key} name={key} min={AXIS_WEIGHT.min} max={AXIS_WEIGHT.max} step={AXIS_WEIGHT.step} value={preview.album[key]} />
+              </div>
+            ))
+          }
+        </fieldset>
+
+        <fieldset>
+          <legend>Album score</legend>
+          <div class="slider slider--stacked">
+            <label for="tracks_share">Tracks against album axes</label>
+            <output for="tracks_share" id="tracks_share-value" class="tabular">{tracksShare}% / {100 - tracksShare}%</output>
+            <input type="range" id="tracks_share" name="tracks_share" min="0" max="100" step="5" value={tracksShare} aria-describedby="share-hint" />
+            <span class="hint" id="share-hint">How much of an album’s score comes from its tracks.</span>
+          </div>
+          <label class="check">
+            <input type="checkbox" name="trim_lowest" checked={preview.release.trim_lowest} />
+            Drop each album’s lowest-rated track
+          </label>
+        </fieldset>
+
+        <p class="calibration" id="calibration">
+          Gut offset <strong class="tabular" data-offset>{scores.offset >= 0 ? '+' : '−'}{Math.abs(scores.offset).toFixed(2)}</strong>
+          {' '}<span class="muted">from <span data-samples>{scores.samples}</span> ratings with both a gut score and track axes</span>
+        </p>
+
+        <div class="buttons">
+          <button class="button" type="submit" data-preview>Preview</button>
+          <button class="button button--primary" type="submit" formmethod="post" formaction="/api/write/weights" name="intent" value="save" data-save>
+            Save as version {nextVersion}
+          </button>
+          <a class="button button--quiet" href="/manage/weights" data-reset>Reset</a>
+        </div>
+
+        <input type="hidden" name="list" value={list} data-list-field />
+        <input type="hidden" name="by" value={by} data-by-field />
+      </form>
+
+      <section class="ranking" aria-labelledby="ranking-heading">
+        <div class="ranking-head">
+          <h2 id="ranking-heading">Ranking</h2>
+          <nav class="tabs" aria-label="What to rank">
+            <a href={linkParams({ list: 'albums' })} aria-current={list === 'albums' ? 'page' : undefined} data-list="albums">Albums</a>
+            <a href={linkParams({ list: 'tracks' })} aria-current={list === 'tracks' ? 'page' : undefined} data-list="tracks">Tracks</a>
+          </nav>
+          <nav class="tabs" aria-label="Order by">
+            <a href={linkParams({ by: 'quality' })} aria-current={by === 'quality' ? 'page' : undefined} data-by="quality">Quality</a>
+            <a href={linkParams({ by: 'personal' })} aria-current={by === 'personal' ? 'page' : undefined} data-by="personal">With impact</a>
+          </nav>
+        </div>
+        <p class="muted baseline" id="baseline">
+          Arrows compare with {baselineName}.{' '}
+          <span data-summary role="status">{unchanged ? 'These are the current weights.' : ''}</span>
+        </p>
+
+        {
+          (['albums', 'tracks'] as const).map((kind) => {
+            const ranked = rows(kind);
+            return (
+              <ol class="list" data-kind={kind} hidden={kind !== list} aria-label={kind === 'albums' ? 'Albums, best first' : 'Tracks, best first'}>
+                {ranked.length === 0 && <li class="empty">Nothing rated yet.</li>}
+                {ranked.map(({ item, position, move, score }) => (
+                  <li data-id={item?.id} hidden={position >= VISIBLE}>
+                    <span class="position tabular" data-position aria-hidden="true">
+                      {position + 1}
+                    </span>
+                    <span class="move tabular" data-move data-dir={move > 0 ? 'up' : move < 0 ? 'down' : undefined}>
+                      <span aria-hidden="true">{move > 0 ? `▲${move}` : move < 0 ? `▼${-move}` : ''}</span>
+                      <span class="visually-hidden">{moveText(move)}</span>
+                    </span>
+                    <span class="thumb">
+                      <CoverArt artKey={item?.artKey ?? null} title={item?.title ?? ''} sizes="3rem" />
+                    </span>
+                    <span class="what">
+                      <a href={kind === 'albums' ? `/album/${item?.id}` : `/track/${item?.id}`} class="title">
+                        {item?.title}
+                      </a>
+                      <span class="by">
+                        <CreditLine credits={item?.credits ?? []} />
+                        {item?.context && <span class="muted"> · {item.context}</span>}
+                      </span>
+                    </span>
+                    <span class="score tabular">
+                      <span class="visually-hidden">score </span>
+                      <span data-score>{Math.round(score[by])}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            );
+          })
+        }
+      </section>
+    </div>
+
+    {
+      versions.length > 0 && (
+        <section class="history" aria-labelledby="history-heading">
+          <h2 id="history-heading">Versions</h2>
+          <ol role="list">
+            {versions.map((v) => (
+              <li>
+                <div>
+                  <p>
+                    <strong>Version {v.version}</strong>
+                    {v.active && <span class="badge">Current</span>}
+                    <span class="muted"> · {date(v.created_at)}</span>
+                  </p>
+                  <p class="muted summary">{describe(v.weights)}</p>
+                </div>
+                <div class="version-actions">
+                  <a class="button button--quiet" href={`/manage/weights?version=${v.id}`}>
+                    Preview<span class="visually-hidden"> version {v.version}</span>
+                  </a>
+                  {!v.active && (
+                    <form method="post" action="/api/write/weights">
+                      <input type="hidden" name="intent" value="activate" />
+                      <input type="hidden" name="id" value={v.id} />
+                      <button class="button" type="submit">
+                        Make current<span class="visually-hidden"> (version {v.version})</span>
+                      </button>
+                    </form>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )
+    }
+
+    <script is:inline type="application/json" id="weights-data" set:html={JSON.stringify(clientData).replaceAll('<', '\\u003c')} />
+  </div>
+</Base>
+
+<script>
+  import { ALBUM_KEYS, CRAFT_KEYS, computeScores, rank, type ScoreInputs, type Weights } from '../../lib/scoring';
+
+  const data = JSON.parse(document.getElementById('weights-data')!.textContent!) as {
+    inputs: ScoreInputs;
+    active: Weights;
+    visible: number;
+  };
+  const form = document.getElementById('weights') as HTMLFormElement;
+  const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement;
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+  // Everything updates as you go, so the GET round trip is not needed.
+  form.querySelector<HTMLButtonElement>('[data-preview]')!.hidden = true;
+
+  let list = field('list').value as 'albums' | 'tracks';
+  let by = field('by').value as 'quality' | 'personal';
+
+  function read(): Weights | null {
+    const number = (name: string) => Number(field(name).value);
+    const craft = Object.fromEntries(CRAFT_KEYS.map((k) => [k, number(k)])) as Weights['craft'];
+    const album = Object.fromEntries(ALBUM_KEYS.map((k) => [k, number(k)])) as Weights['album'];
+    const share = number('tracks_share');
+    // Mirrors weightsForm: a group with every weight at zero cannot score.
+    if (CRAFT_KEYS.every((k) => craft[k] === 0) || ALBUM_KEYS.every((k) => album[k] === 0)) return null;
+    return {
+      craft,
+      album,
+      release: { tracks: share / 100, album_axes: (100 - share) / 100, trim_lowest: field('trim_lowest').checked },
+    };
+  }
+
+  const baseline = computeScores(data.inputs, data.active);
+  const summary = document.querySelector<HTMLElement>('[data-summary]')!;
+  const save = form.querySelector<HTMLButtonElement>('[data-save]')!;
+  let announce: number | undefined;
+
+  function render(animate: boolean) {
+    for (const output of form.querySelectorAll('output')) {
+      const input = field(output.htmlFor.value);
+      output.value = input.name === 'tracks_share' ? `${input.value}% / ${100 - Number(input.value)}%` : `×${input.value}`;
+    }
+
+    const weights = read();
+    save.disabled = weights === null;
+    if (!weights) {
+      summary.textContent = 'Each group needs at least one weight above zero.';
+      return;
+    }
+    const scores = computeScores(data.inputs, weights);
+    const offset = form.querySelector<HTMLElement>('[data-offset]')!;
+    offset.textContent = `${scores.offset >= 0 ? '+' : '−'}${Math.abs(scores.offset).toFixed(2)}`;
+    form.querySelector<HTMLElement>('[data-samples]')!.textContent = String(scores.samples);
+
+    let moved = 0;
+    for (const ol of document.querySelectorAll<HTMLOListElement>('ol[data-kind]')) {
+      const kind = ol.dataset.kind as 'albums' | 'tracks';
+      ol.hidden = kind !== list;
+      const map = kind === 'albums' ? scores.albums : scores.recordings;
+      const before = new Map(rank(kind === 'albums' ? baseline.albums : baseline.recordings, by).map((id, i) => [id, i]));
+      const order = rank(map, by);
+      const items = new Map([...ol.querySelectorAll<HTMLLIElement>('li[data-id]')].map((li) => [li.dataset.id!, li]));
+
+      // FLIP: note where each visible row is, reorder, then animate from there.
+      const visible = animate && kind === list && !reduceMotion.matches;
+      const first = new Map<string, number>();
+      if (visible) for (const [id, li] of items) if (!li.hidden) first.set(id, li.getBoundingClientRect().top);
+
+      order.forEach((id, i) => {
+        const li = items.get(id);
+        if (!li) return;
+        const was = before.get(id);
+        const move = was === undefined ? 0 : was - i;
+        if (move !== 0 && kind === list) moved += 1;
+        li.hidden = i >= data.visible;
+        li.querySelector('[data-position]')!.textContent = String(i + 1);
+        li.querySelector('[data-score]')!.textContent = String(Math.round(map.get(id)![by]));
+        const badge = li.querySelector<HTMLElement>('[data-move]')!;
+        badge.dataset.dir = move > 0 ? 'up' : move < 0 ? 'down' : '';
+        badge.firstElementChild!.textContent = move > 0 ? `▲${move}` : move < 0 ? `▼${-move}` : '';
+        badge.lastElementChild!.textContent = move > 0 ? `up ${move}, ` : move < 0 ? `down ${-move}, ` : '';
+        ol.appendChild(li);
+      });
+
+      if (visible) {
+        for (const [id, top] of first) {
+          const li = items.get(id)!;
+          if (li.hidden) continue;
+          const delta = top - li.getBoundingClientRect().top;
+          if (delta === 0) continue;
+          li.animate([{ transform: `translateY(${delta}px)` }, { transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2,.7,.2,1)' });
+        }
+      }
+    }
+
+    // Spoken once things settle, not on every step of a slider.
+    clearTimeout(announce);
+    const noun = list === 'albums' ? 'album' : 'track';
+    announce = window.setTimeout(() => {
+      summary.textContent = moved === 0 ? 'Nothing moves.' : `${moved} ${noun}${moved === 1 ? '' : 's'} move.`;
+    }, 400);
+
+    // Keep the URL in step, so a reload or a shared link shows the same preview.
+    const params = new URLSearchParams(new FormData(form) as unknown as Record<string, string>);
+    history.replaceState(null, '', `?${params}`);
+  }
+
+  form.addEventListener('input', () => render(true));
+  form.addEventListener('change', () => render(true));
+
+  for (const link of document.querySelectorAll<HTMLAnchorElement>('[data-list], [data-by]')) {
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (link.dataset.list) list = link.dataset.list as typeof list;
+      if (link.dataset.by) by = link.dataset.by as typeof by;
+      field('list').value = list;
+      field('by').value = by;
+      for (const other of link.parentElement!.querySelectorAll('a')) other.removeAttribute('aria-current');
+      link.setAttribute('aria-current', 'page');
+      render(false);
+    });
+  }
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .intro {
+    display: grid;
+    gap: var(--space-2);
+    max-width: 44rem;
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .notice {
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--accent);
+    background: var(--surface-2);
+  }
+
+  .notice--error {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+
+  .layout {
+    display: grid;
+    gap: var(--space-6);
+    align-items: start;
+  }
+
+  @media (min-width: 56rem) {
+    .layout {
+      grid-template-columns: 20rem minmax(0, 1fr);
+    }
+
+    .controls {
+      position: sticky;
+      top: var(--space-4);
+    }
+  }
+
+  .controls {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  fieldset {
+    display: grid;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  legend {
+    margin-bottom: var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  /* One row per axis, so every slider fits beside the ranking on a phone. */
+  .slider {
+    display: grid;
+    grid-template-columns: 7.5rem minmax(0, 1fr) 3.5ch;
+    grid-template-areas: 'label range value';
+    align-items: center;
+    gap: 0 var(--space-3);
+  }
+
+  .slider label {
+    grid-area: label;
+  }
+
+  .slider output {
+    grid-area: value;
+    text-align: right;
+  }
+
+  .slider input[type='range'] {
+    grid-area: range;
+  }
+
+  .slider--stacked {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: 'label value' 'range range' 'hint hint';
+  }
+
+  .slider--stacked .hint {
+    grid-area: hint;
+  }
+
+  .slider label {
+    font-weight: 600;
+  }
+
+  .slider output {
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  .slider input[type='range'] {
+    width: 100%;
+    min-height: var(--target);
+    margin: 0;
+    accent-color: var(--accent);
+  }
+
+  .hint {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: var(--target);
+    font-weight: 600;
+  }
+
+  .check input {
+    width: 1.25rem;
+    height: 1.25rem;
+    accent-color: var(--accent);
+  }
+
+  .calibration {
+    font-size: var(--step--1);
+  }
+
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .button[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .ranking {
+    display: grid;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .ranking-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3) var(--space-5);
+  }
+
+  .tabs {
+    display: flex;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+  }
+
+  .tabs a {
+    display: inline-flex;
+    align-items: center;
+    min-height: calc(var(--target) - 8px);
+    padding: 0 var(--space-4);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: var(--step--1);
+    text-decoration: none;
+  }
+
+  .tabs a[aria-current='page'] {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .baseline {
+    font-size: var(--step--1);
+  }
+
+  .list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .list li {
+    display: grid;
+    grid-template-columns: 2ch 3.5ch 3rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .list .empty {
+    display: block;
+    color: var(--text-muted);
+  }
+
+  .position {
+    color: var(--text-muted);
+    font-weight: 700;
+    text-align: right;
+  }
+
+  .move {
+    font-size: var(--step--1);
+    font-weight: 700;
+  }
+
+  .move[data-dir='up'] {
+    color: var(--accent);
+  }
+
+  .move[data-dir='down'] {
+    color: var(--text-subtle);
+  }
+
+  .thumb {
+    width: 3rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .what {
+    display: grid;
+    min-width: 0;
+  }
+
+  .what > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .title {
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  .title:hover {
+    text-decoration: underline;
+  }
+
+  .by {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .score {
+    font-size: var(--step-1);
+    font-weight: 750;
+  }
+
+  .history {
+    display: grid;
+    gap: var(--space-3);
+    max-width: 44rem;
+  }
+
+  .history ol {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .history li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+  }
+
+  .summary {
+    font-size: var(--step--1);
+  }
+
+  .badge {
+    margin-left: var(--space-2);
+    padding: 0.1em 0.6em;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-size: var(--step--1);
+    font-weight: 700;
+  }
+
+  .version-actions {
+    display: flex;
+    gap: var(--space-2);
+  }
+</style>

@@ -22,7 +22,8 @@ export const GET: APIRoute = async ({ params, request }) => {
     const headers = new Headers();
     object.writeHttpMetadata(headers);
     headers.set('ETag', object.httpEtag);
-    headers.set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    // Revalidated every time (a cheap 304 by ETag), so a replaced cover shows at once.
+  headers.set('Cache-Control', 'public, no-cache');
 
     // onlyIf matched the client's ETag: the body is omitted.
     if (!('body' in object)) return new Response(null, { status: 304, headers });

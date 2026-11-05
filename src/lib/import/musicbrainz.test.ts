@@ -140,13 +140,15 @@ describe('buildPlan', () => {
       expect.arrayContaining([
         expect.objectContaining({ artist_key: 'main', role: 'primary', join_phrase: ' feat. ' }),
         expect.objectContaining({ artist_key: 'guest', role: 'featured', credited_as: 'Guest Name' }),
-        expect.objectContaining({ artist_key: 'writer', role: 'writer' }),
+        expect.objectContaining({ artist_key: 'writer', role: 'composer' }),
       ]),
     );
   });
 
-  it('credits release-level producers to the release', () => {
-    expect(plan.credits).toContainEqual(expect.objectContaining({ entity: 'release', artist_key: 'prod', role: 'producer' }));
+  it('credits release-level producers to every track, not the album', () => {
+    const producers = plan.credits.filter((c) => c.artist_key === 'prod' && c.role === 'producer');
+    expect(producers.length).toBe(plan.recordings.length);
+    expect(producers.every((c) => c.entity === 'recording')).toBe(true);
   });
 
   it('weights genres relative to the most voted', () => {

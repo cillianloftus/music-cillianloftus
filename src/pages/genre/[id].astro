@@ -1,0 +1,261 @@
+---
+/**
+ * A genre: where it sits (every parent, since a genre can belong to more
+ * than one), what sits beneath it, and the best of it in the library.
+ * Only what is tagged with the genre itself by default (an art pop song is
+ * not thereby a pop song); ?beneath=1 counts its subgenres too.
+ */
+import Base from '../../layouts/Base.astro';
+import AlbumCard from '../../components/AlbumCard.astro';
+import ResultList from '../../components/ResultList.astro';
+import { hueOf } from '../../lib/art/playlist';
+import { ownerId } from '../../lib/auth/user';
+import { genreAlbums, genreDetail, genreTopTracks } from '../../lib/pages';
+import { encodeDefinition } from '../../lib/query/builder';
+import { hydrateTracks } from '../../lib/query/run';
+
+const id = Astro.params.id!;
+const deep = Astro.url.searchParams.get('beneath') === '1';
+const genre = await genreDetail(id, deep);
+if (!genre) return Astro.rewrite('/404');
+
+const user = Astro.locals.user;
+const viewerId = user?.id ?? (await ownerId());
+const [albums, trackIds] = await Promise.all([genreAlbums(id, viewerId, 18, deep), genreTopTracks(id, viewerId, 10, deep)]);
+const tracks = await hydrateTracks(trackIds, viewerId);
+
+const family = genre.ancestors[0]?.name ?? genre.name;
+const hue = hueOf(family);
+const others = genre.parents;
+const playlistHref = `/query?d=${encodeDefinition({
+  entity: 'recording',
+  where: { field: 'genre', op: deep ? 'in_tree' : 'eq', value: genre.name },
+  sort: [{ field: 'personal_score', dir: 'desc' }],
+  collapse_by_work: true,
+  limit: 50,
+})}`;
+const list = (items: string[]) =>
+  items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+---
+
+<Base
+  title={genre.name}
+  description={`${genre.name}: ${genre.tracks} ${genre.tracks === 1 ? 'track' : 'tracks'} across ${genre.albums} ${genre.albums === 1 ? 'album' : 'albums'}, best first.`}
+>
+  <div class="wrap page" style={`--h: ${hue}`}>
+    <div class="band" aria-hidden="true"></div>
+    <header>
+      <nav aria-label="Where it sits" class="crumbs">
+        <a href="/genres">Genres</a>
+        {genre.ancestors.map((a) => (
+          <>
+            <span aria-hidden="true">›</span>
+            <a href={`/genre/${a.id}`}>{a.name}</a>
+          </>
+        ))}
+      </nav>
+      <h1>{genre.name}</h1>
+      <p class="facts">
+        {genre.tracks} {genre.tracks === 1 ? 'track' : 'tracks'} · {genre.albums} {genre.albums === 1 ? 'album' : 'albums'}
+        {genre.children.length > 0 && <span class="muted">{deep ? ' · counting everything beneath it' : ' · tagged with it directly'}</span>}
+      </p>
+      {
+        genre.children.length > 0 && genre.tracksBeneath !== genre.tracks && (
+          <p class="scope">
+            {deep ? (
+              <a href={`/genre/${id}`}>Only what is tagged {genre.name}</a>
+            ) : (
+              <a href={`/genre/${id}?beneath=1`}>
+                Include its subgenres ({genre.tracksBeneath} {genre.tracksBeneath === 1 ? 'track' : 'tracks'})
+              </a>
+            )}
+          </p>
+        )
+      }
+      {
+        others.length > 1 && (
+          <p class="muted">
+            Part of{' '}
+            {others.map((p, i) => (
+              <>
+                {i > 0 && (i === others.length - 1 ? ' and ' : ', ')}
+                <a href={`/genre/${p.id}`}>{p.name}</a>
+              </>
+            ))}
+            .
+          </p>
+        )
+      }
+      {
+        genre.children.length > 0 && (
+          <ul role="list" class="children" aria-label="Beneath it">
+            {genre.children.map((c) => (
+              <li>
+                <a href={`/genre/${c.id}`}>
+                  {c.name}
+                  {c.tracks > 0 && <span class="count tabular">{c.tracks}</span>}
+                </a>
+              </li>
+            ))}
+          </ul>
+        )
+      }
+      {user && (
+        <p>
+          <a class="button" href={playlistHref}>
+            Make a playlist of it
+          </a>
+        </p>
+      )}
+    </header>
+
+    {
+      tracks.length > 0 && (
+        <section aria-labelledby="tracks-heading">
+          <h2 id="tracks-heading">Best tracks</h2>
+          <ResultList results={tracks} />
+        </section>
+      )
+    }
+
+    {
+      albums.length > 0 && (
+        <section aria-labelledby="albums-heading">
+          <h2 id="albums-heading">Albums</h2>
+          <ul role="list" class="grid">
+            {albums.map((album) => (
+              <li>
+                <AlbumCard album={album} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+
+    {genre.tracks === 0 && <p class="muted">Nothing in the library is tagged {genre.name} yet{genre.children.length ? `, or ${list(genre.children.map((c) => c.name))}` : ''}.</p>}
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-7);
+  }
+
+  /* A wash in the genre's family colour, the same hue as its circle. */
+  .band {
+    position: absolute;
+    inset: 0 0 auto;
+    z-index: -1;
+    max-width: none;
+    height: 22rem;
+    background: radial-gradient(ellipse 80% 100% at 20% 0%, oklch(0.32 0.09 var(--h) / 0.55), transparent 70%);
+    pointer-events: none;
+  }
+
+  :global([data-theme='light']) .band {
+    background: radial-gradient(ellipse 80% 100% at 20% 0%, oklch(0.9 0.06 var(--h) / 0.8), transparent 70%);
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-4);
+    padding-top: var(--space-6);
+  }
+
+  .crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .crumbs a {
+    color: inherit;
+  }
+
+  /* Lowercase names hang descenders (the p of pop) below a tight line:
+     room beneath so the facts never sit against them. */
+  h1 {
+    margin-block: var(--space-2) var(--space-2);
+    font-size: clamp(2.6rem, 1.4rem + 5vw, 5.5rem);
+    letter-spacing: -0.045em;
+    line-height: 0.92;
+  }
+
+  .facts {
+    font-size: var(--step-1);
+    font-weight: 600;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .facts .muted {
+    font-size: var(--step-0);
+    font-weight: 400;
+  }
+
+  .children {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .children a {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+    padding: 0 var(--space-4);
+    border: 1px solid oklch(0.5 0.08 var(--h) / 0.6);
+    border-radius: 999px;
+    background: oklch(0.3 0.05 var(--h) / 0.35);
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  :global([data-theme='light']) .children a {
+    border-color: oklch(0.75 0.08 var(--h));
+    background: oklch(0.94 0.04 var(--h));
+  }
+
+  .children a:hover {
+    border-color: var(--text-subtle);
+  }
+
+  .count {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 500;
+  }
+
+  h2 {
+    margin-bottom: var(--space-4);
+    font-size: var(--step-2);
+    letter-spacing: -0.02em;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));
+    gap: var(--space-6) var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  @media (min-width: 40rem) {
+    .grid {
+      grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+    }
+  }
+</style>

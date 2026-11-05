@@ -3,7 +3,7 @@ import { OAUTH_PATH, STATE_COOKIE, authorizeUrl, isConfigured, redirectUriFor } 
 
 /** Starts Spotify authorisation. */
 export const GET: APIRoute = async ({ url, cookies, redirect }) => {
-  if (!isConfigured()) return redirect('/edit/spotify?error=not-configured', 303);
+  if (!isConfigured()) return redirect('/manage/spotify?error=not-configured', 303);
 
   // Spotify rejects "localhost" redirect URIs; loopback must be an IP
   // literal. Move to 127.0.0.1 first so the state cookie lands on that host.

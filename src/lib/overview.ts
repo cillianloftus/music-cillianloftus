@@ -70,7 +70,7 @@ export async function recentRatings(userId: string | null, limit = 8): Promise<R
             coalesce(g.title, rec.title) AS title,
             coalesce(g.id, ra.release_group_id) AS album_id,
             coalesce(g.title, ag.title) AS album_title,
-            coalesce(gr.art_key, ar.art_key) AS art_key,
+            coalesce(gr.art_key, fa.art_key, ar.art_key) AS art_key,
             coalesce(gs.quality_score, rs.quality_score) AS quality_score,
             coalesce(gs.personal_score, rs.personal_score) AS personal_score,
             (SELECT r.impact_note FROM rating r WHERE r.user_id = ?1 AND r.entity_type = l.entity_type
@@ -86,6 +86,7 @@ export async function recentRatings(userId: string | null, limit = 8): Promise<R
      LEFT JOIN v_release_group_canonical ac ON ac.release_group_id = ag.id
      LEFT JOIN release ar ON ar.id = ac.release_id
      LEFT JOIN v_recording_score rs ON rs.recording_id = rec.id AND rs.user_id = ?1
+     LEFT JOIN v_recording_first_art fa ON fa.recording_id = rec.id
      ORDER BY l.rated_at DESC`,
   )
     .bind(userId, limit)

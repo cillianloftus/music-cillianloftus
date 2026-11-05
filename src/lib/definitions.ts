@@ -16,6 +16,8 @@ export interface DefinitionRow {
   spotify_playlist_id: string | null;
   /** The cover as last rasterised for Spotify, in R2. */
   art_key: string | null;
+  /** 'uploaded' when Cillian chose the cover; otherwise it is drawn from the contents. */
+  art_mode: 'generated' | 'uploaded';
   created_at: string;
   updated_at: string;
 }
@@ -28,7 +30,7 @@ export interface SavedDefinition extends DefinitionRow {
 
 const SELECT = `
   SELECT d.id, d.user_id, u.display_name AS owner_name, d.name, d.description, d.query_json,
-         d.spotify_playlist_id, d.art_key, d.created_at, d.updated_at
+         d.spotify_playlist_id, d.art_key, d.art_mode, d.created_at, d.updated_at
   FROM definition d JOIN app_user u ON u.id = d.user_id`;
 
 export async function listDefinitions(): Promise<DefinitionRow[]> {

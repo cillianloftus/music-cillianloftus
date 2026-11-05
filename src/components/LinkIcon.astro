@@ -1,0 +1,60 @@
+---
+/**
+ * A simple mark for a link to another site: a round disc with a letter or
+ * shape, in the site's familiar colour. Not the brands' own logos.
+ */
+interface Props {
+  name: string;
+}
+const { name } = Astro.props;
+const marks: Record<string, { bg: string; fg: string; text: string }> = {
+  spotify: { bg: '#1db954', fg: '#06120a', text: '' },
+  genius: { bg: '#ffff64', fg: '#111', text: 'G' },
+  musicbrainz: { bg: '#ba478f', fg: '#fff', text: 'MB' },
+  wikipedia: { bg: '#e8e8e8', fg: '#111', text: 'W' },
+  website: { bg: 'var(--surface-2)', fg: 'var(--text)', text: '' },
+};
+const m = marks[name] ?? { bg: 'var(--surface-2)', fg: 'var(--text)', text: name.slice(0, 1).toUpperCase() };
+---
+
+<span class="mark" style={`--bg: ${m.bg}; --fg: ${m.fg}`} aria-hidden="true">
+  {
+    name === 'spotify' ? (
+      <svg viewBox="0 0 24 24">
+        <path d="M6.5 9.5c3.6-1.2 7.6-.8 11 1M7.3 12.7c2.9-.8 6-.5 8.6.9M8 15.8c2.2-.5 4.3-.3 6.3.6" />
+      </svg>
+    ) : name === 'website' ? (
+      <svg viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="8" />
+        <path d="M4 12h16M12 4c2.5 2.5 2.5 13.5 0 16M12 4c-2.5 2.5-2.5 13.5 0 16" />
+      </svg>
+    ) : (
+      m.text
+    )
+  }
+</span>
+
+<style>
+  .mark {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+
+  svg {
+    width: 1rem;
+    height: 1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+</style>

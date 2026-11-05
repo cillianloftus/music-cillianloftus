@@ -116,6 +116,7 @@ export async function resolveSpotifyIds(spotify: SpotifyClient, recordingIds: st
       await env.DB.prepare(
         `UPDATE release_group SET spotify_id = ?1
          WHERE id = ?2 AND spotify_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM field_override fo WHERE fo.entity_type = 'release_group' AND fo.entity_id = ?2 AND fo.field = 'spotify_id')
            AND NOT EXISTS (SELECT 1 FROM release_group WHERE spotify_id = ?1)`,
       )
         .bind(track.album!.id, recording.album_id)
@@ -128,6 +129,7 @@ export async function resolveSpotifyIds(spotify: SpotifyClient, recordingIds: st
     await env.DB.prepare(
       `UPDATE recording SET spotify_id = ?1
        WHERE id = ?2 AND spotify_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM field_override fo WHERE fo.entity_type = 'recording' AND fo.entity_id = ?2 AND fo.field = 'spotify_id')
          AND NOT EXISTS (SELECT 1 FROM recording WHERE spotify_id = ?1)`,
     )
       .bind(spotifyId, recording.id)

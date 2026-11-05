@@ -1,0 +1,345 @@
+---
+/**
+ * Every artist at once: a wall of faces, filed A to Z (or by how much is
+ * rated, or how well), with a filter that narrows as you type.
+ */
+import Base from '../layouts/Base.astro';
+import CoverArt from '../components/CoverArt.astro';
+import { hueOf } from '../lib/art/playlist';
+import { KIND_LABELS } from '../lib/artists';
+import { ownerId } from '../lib/auth/user';
+import { scoreTone } from '../lib/format';
+import { initial, roster, type RosterArtist, type RosterSort } from '../lib/roster';
+
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+const requested = Astro.url.searchParams.get('sort');
+const SORT_KEYS: RosterSort[] = ['score', 'rated', 'releases', 'recent', 'name'];
+const sort: RosterSort = SORT_KEYS.includes(requested as RosterSort) ? (requested as RosterSort) : 'score';
+const artists = await roster(viewerId, sort);
+
+// Letters earn their place once the wall is long; a short list is one grid.
+const LETTERS_FROM = 40;
+const groups = new Map<string, RosterArtist[]>();
+if (sort === 'name' && artists.length >= LETTERS_FROM) {
+  for (const a of artists) {
+    const key = initial(a.sort_name || a.name);
+    groups.set(key, [...(groups.get(key) ?? []), a]);
+  }
+} else {
+  groups.set('', artists);
+}
+const letters = [...groups.keys()];
+const SORTS: [RosterSort, string][] = [
+  ['score', 'Highest scored'],
+  ['rated', 'Most rated'],
+  ['releases', 'Most releases'],
+  ['recent', 'Newest added'],
+  ['name', 'A–Z'],
+];
+const meta = (a: RosterArtist) =>
+  [a.kind ? (KIND_LABELS as Record<string, string>)[a.kind] ?? null : null, a.releases ? `${a.releases} ${a.releases === 1 ? 'release' : 'releases'}` : null]
+    .filter(Boolean)
+    .join(' · ');
+---
+
+<Base title="Artists" description={`All ${artists.length} artists in the catalogue.`}>
+  <div class="wrap page">
+    <header class="head">
+      <p class="eyebrow">Library</p>
+      <h1>Artists</h1>
+      <p class="muted"><span class="tabular">{artists.length}</span> with music of their own here.</p>
+    </header>
+
+    <div class="tools">
+      <nav aria-label="Order" class="sorts">
+        {SORTS.map(([value, label]) => (
+          <a href={value === 'score' ? '/artists' : `/artists?sort=${value}`} aria-current={sort === value ? 'page' : undefined}>
+            {label}
+          </a>
+        ))}
+      </nav>
+      <div class="filter" hidden data-filter>
+        <label for="filter" class="visually-hidden">Filter artists</label>
+        <input class="input" id="filter" type="search" placeholder="Filter by name" autocomplete="off" spellcheck="false" />
+      </div>
+    </div>
+
+    {
+      letters.length > 4 && (
+        <nav aria-label="Jump to letter" class="letters">
+          {letters.map((l) => (
+            <a href={`#letter-${l === '#' ? 'other' : l}`}>{l}</a>
+          ))}
+        </nav>
+      )
+    }
+
+    <p class="muted none" hidden role="status" data-none>No artist matches that.</p>
+
+    {
+      [...groups].map(([letter, list]) => (
+        <section class="group" aria-labelledby={letter ? `letter-${letter === '#' ? 'other' : letter}` : undefined} data-group>
+          {letter && (
+            <h2 class="letter" id={`letter-${letter === '#' ? 'other' : letter}`}>
+              {letter}
+            </h2>
+          )}
+          <ul role="list" class="grid">
+            {list.map((a, i) => {
+              const tone = a.average == null ? null : scoreTone(Math.round(a.average));
+              return (
+                <li data-name={`${a.name} ${a.sort_name}`.toLowerCase()}>
+                  <a class="card" href={`/artist/${a.id}`}>
+                    <span class="face">
+                      {a.image_key ? (
+                        <img src={`/${a.image_key}`} alt="" loading={i < 12 ? 'eager' : 'lazy'} decoding="async" width="240" height="240" />
+                      ) : a.art_key ? (
+                        <CoverArt artKey={a.art_key} title={a.name} sizes="10rem" />
+                      ) : (
+                        <span class="initials" style={`--h: ${hueOf(a.name)}`} aria-hidden="true">
+                          {a.name
+                            .replace(/[^\p{L}\p{N}\s]/gu, '')
+                            .split(/\s+/)
+                            .filter(Boolean)
+                            .slice(0, 2)
+                            .map((w) => w[0]!.toUpperCase())
+                            .join('')}
+                        </span>
+                      )}
+                    </span>
+                    <span class="name">{a.name}</span>
+                    <span class="meta">
+                      {meta(a)}
+                      {tone && (
+                        <span class:list={['avg', 'tabular', tone.className]} style={tone.style}>
+                          <span class="visually-hidden">, average track </span>
+                          {Math.round(a.average!)}
+                        </span>
+                      )}
+                    </span>
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))
+    }
+  </div>
+</Base>
+
+<script>
+  // Narrows the wall as you type; a group with nobody left hides itself.
+  const box = document.querySelector<HTMLElement>('[data-filter]');
+  const input = box?.querySelector('input');
+  const none = document.querySelector<HTMLElement>('[data-none]');
+  if (box && input) {
+    box.hidden = false;
+    const strip = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+    input.addEventListener('input', () => {
+      const q = strip(input.value.trim());
+      let shown = 0;
+      for (const group of document.querySelectorAll<HTMLElement>('[data-group]')) {
+        let inGroup = 0;
+        for (const li of group.querySelectorAll<HTMLElement>('li[data-name]')) {
+          const match = !q || strip(li.dataset.name ?? '').includes(q);
+          li.hidden = !match;
+          if (match) inGroup += 1;
+        }
+        group.hidden = inGroup === 0;
+        shown += inGroup;
+      }
+      if (none) none.hidden = shown > 0;
+    });
+  }
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .head {
+    display: grid;
+    gap: var(--space-2);
+    padding-top: var(--space-6);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  /* Five orders: on a phone the row scrolls sideways rather than wrapping. */
+  .sorts {
+    display: flex;
+    gap: var(--space-1);
+    max-width: 100%;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .sorts::-webkit-scrollbar {
+    display: none;
+  }
+
+  .sorts a {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .sorts a {
+    display: inline-flex;
+    align-items: center;
+    min-height: calc(var(--target) - 6px);
+    padding: 0 var(--space-4);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .sorts a[aria-current='page'] {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .filter {
+    flex: 0 1 18rem;
+  }
+
+  .letters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+
+  .letters a {
+    display: grid;
+    place-items: center;
+    min-width: 2.25rem;
+    min-height: 2.25rem;
+    border-radius: var(--radius-s);
+    color: var(--text-muted);
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  .letters a:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .group {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .letter {
+    scroll-margin-top: var(--space-5);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border);
+    font-size: var(--step-2);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+    gap: var(--space-5) var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  @media (min-width: 48rem) {
+    .grid {
+      grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+    }
+  }
+
+  .card {
+    display: grid;
+    gap: var(--space-1);
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .face {
+    display: block;
+    aspect-ratio: 1;
+    margin-bottom: var(--space-2);
+    overflow: hidden;
+    border-radius: 50%;
+    background: var(--surface-2);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
+    transition: transform 0.2s ease;
+  }
+
+  .face img,
+  .face :global(.cover) {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  /* No picture and no cover: their initials on a colour of their own. */
+  .initials {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle at 30% 25%, oklch(0.78 0.09 var(--h)), oklch(0.5 0.1 var(--h)));
+    color: oklch(0.98 0.02 var(--h));
+    font-size: clamp(1.75rem, 5vw, 2.6rem);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+  }
+
+  .card:hover .face,
+  .card:focus-visible .face {
+    transform: scale(1.03);
+  }
+
+  .name {
+    overflow: hidden;
+    font-weight: 750;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .card:hover .name {
+    text-decoration: underline;
+  }
+
+  .meta {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .avg {
+    margin-left: auto;
+    font-weight: 750;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .face {
+      transition: none;
+    }
+  }
+</style>

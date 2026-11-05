@@ -1,0 +1,233 @@
+---
+/**
+ * The genre tree editor (ARCHITECTURE.md §3, "Genre"): where each genre
+ * sits is a judgement, and this one is Cillian's. Wikidata's subclass
+ * relations are offered as suggestions, never applied on their own.
+ */
+import Base from '../../layouts/Base.astro';
+import GenreEditTree, { type EditNode } from '../../components/GenreEditTree.astro';
+import { genreKey, genreRows, GenreError, wikidataParents } from '../../lib/genres';
+
+const params = Astro.url.searchParams;
+const rows = await genreRows();
+const byId = new Map(rows.map((r) => [r.id, r]));
+const nodes = new Map<string, EditNode>(
+  rows.map((r) => [
+    r.id,
+    {
+      id: r.id,
+      name: r.name,
+      parent: r.parent_id ? byId.get(r.parent_id)?.name ?? null : null,
+      also: r.also.flatMap((p) => (byId.has(p) ? [{ id: p, name: byId.get(p)!.name }] : [])),
+      tracks: r.tracks,
+      children: [],
+    },
+  ]),
+);
+const roots: EditNode[] = [];
+for (const r of rows) {
+  const node = nodes.get(r.id)!;
+  if (r.parent_id && nodes.has(r.parent_id)) nodes.get(r.parent_id)!.children.push(node);
+  else roots.push(node);
+}
+
+// Suggestions for the top level only: anything already placed was placed on purpose.
+const suggestOpen = params.get('suggest') === '1';
+// Library names by spelling-insensitive key, so Wikidata's "hip-hop" finds "hip hop".
+const names = new Map(rows.map((r) => [genreKey(r.name), r.name]));
+let suggestions: { id: string; name: string; existing: string[]; missing: string[] }[] = [];
+let suggestError: string | null = null;
+if (suggestOpen) {
+  try {
+    const top = roots.filter((r) => r.children.length === 0 || r.tracks > 0);
+    const parents = await wikidataParents(top.map((r) => r.name));
+    suggestions = top
+      .map((r) => {
+        const all = parents.get(r.name) ?? [];
+        return {
+          id: r.id,
+          name: r.name,
+          existing: all.filter((p) => names.has(genreKey(p))).map((p) => names.get(genreKey(p))!),
+          missing: all.filter((p) => !names.has(genreKey(p))),
+        };
+      })
+      .filter((s) => s.existing.length + s.missing.length > 0);
+  } catch (error) {
+    suggestError = error instanceof GenreError ? error.message : 'Wikidata could not be reached.';
+  }
+}
+
+const done = params.get('done');
+const error = params.get('error');
+const keep = suggestOpen ? [{ name: 'suggest', value: '1' }] : [];
+---
+
+<Base title="Genre tree">
+  <div class="wrap page">
+    <header>
+      <h1>Genre tree</h1>
+      <p class="muted">
+        Where each genre sits decides what “pop and everything beneath it” means in a playlist. New genres arrive at the
+        top level from imports; place them here.
+      </p>
+      <p><a href="/genres">See the tree as circles</a></p>
+    </header>
+
+    {done && <p class="notice" role="status">{done === 'created' ? 'Genre added.' : 'Moved.'}</p>}
+    {error && <p class="notice notice--error" role="alert">{error}</p>}
+
+    <datalist id="genre-names">{rows.map((r) => <option value={r.name} />)}</datalist>
+
+    <section class="suggest" aria-labelledby="suggest-heading">
+      <h2 id="suggest-heading">Suggestions from Wikidata</h2>
+      {
+        !suggestOpen ? (
+          <p>
+            <a class="button" href="/manage/genres?suggest=1">
+              Ask Wikidata where top-level genres belong
+            </a>
+          </p>
+        ) : suggestError ? (
+          <p class="muted">{suggestError}</p>
+        ) : suggestions.length === 0 ? (
+          <p class="muted">Wikidata has nothing to suggest for the top-level genres.</p>
+        ) : (
+          <ul role="list" class="suggestions">
+            {suggestions.map((s) => (
+              <li>
+                <span class="name">{s.name}</span>
+                <span class="muted"> is a kind of </span>
+                <span class="choices">
+                  {s.existing.map((parent) => (
+                    <form method="post" action="/api/write/genre">
+                      <input type="hidden" name="id" value={s.id} />
+                      <input type="hidden" name="parent" value={parent} />
+                      {keep.map((k) => <input type="hidden" name={k.name} value={k.value} />)}
+                      <button class="button small" type="submit">
+                        {parent}
+                        <span class="visually-hidden">: put {s.name} beneath it</span>
+                      </button>
+                    </form>
+                  ))}
+                  {s.missing.map((parent) => (
+                    <form method="post" action="/api/write/genre">
+                      <input type="hidden" name="intent" value="create_and_move" />
+                      <input type="hidden" name="id" value={s.id} />
+                      <input type="hidden" name="name" value={parent} />
+                      {keep.map((k) => <input type="hidden" name={k.name} value={k.value} />)}
+                      <button class="button button--quiet small" type="submit">
+                        + {parent}
+                        <span class="visually-hidden">: add it as a genre and put {s.name} beneath it</span>
+                      </button>
+                    </form>
+                  ))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )
+      }
+      {suggestOpen && <p class="muted hint">A plus means the genre is not in the library yet; choosing it adds it at the top level.</p>}
+    </section>
+
+    <section aria-labelledby="tree-heading">
+      <h2 id="tree-heading">Tree</h2>
+      {rows.length === 0 ? <p class="muted">No genres yet. They arrive with imports.</p> : <GenreEditTree nodes={roots} suggestOpen={suggestOpen} />}
+    </section>
+
+    <section aria-labelledby="add-heading">
+      <h2 id="add-heading">Add a genre</h2>
+      <form method="post" action="/api/write/genre" class="add">
+        <input type="hidden" name="intent" value="create" />
+        <div class="field">
+          <label for="new-name">Name</label>
+          <input class="input" id="new-name" name="name" required maxlength="80" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+        </div>
+        <div class="field">
+          <label for="new-parent">Beneath <span class="muted">(optional)</span></label>
+          <input class="input" id="new-parent" name="parent" list="genre-names" autocomplete="off" placeholder="Top level" />
+        </div>
+        <button class="button button--primary" type="submit">Add</button>
+      </form>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    --content-max: 44rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+    margin-bottom: var(--space-3);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .notice {
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--accent);
+    background: var(--surface-2);
+  }
+
+  .notice--error {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+
+  .suggestions {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .suggestions li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .name {
+    font-weight: 650;
+  }
+
+  .choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .small {
+    padding: 0 var(--space-3);
+    font-size: var(--step--1);
+  }
+
+  .hint {
+    margin-top: var(--space-3);
+    font-size: var(--step--1);
+  }
+
+  .add {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    align-items: end;
+    gap: var(--space-3);
+  }
+
+  .add .button {
+    justify-self: start;
+  }
+</style>

@@ -25,6 +25,10 @@
   --focus: #8ab4ff;
   --danger: #ff8a7a;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 8px 24px rgb(0 0 0 / 0.35);
+  /* Score colours: one lightness for every hue, so red and green read
+     equally well (about 10:1 on this background). */
+  --score-l: 0.8;
+  --score-c: 0.16;
 }
 
 :root[data-theme='light'] {
@@ -41,9 +45,14 @@
   --focus: #1f5fd1;
   --danger: #b3261e;
   --shadow: 0 1px 2px rgb(60 45 20 / 0.12), 0 8px 24px rgb(60 45 20 / 0.1);
+  /* About 5:1 on paper for every hue. */
+  --score-l: 0.52;
+  --score-c: 0.17;
 }
 
 :root {
+  /* Anchored jumps land below the sticky header. */
+  scroll-padding-top: 4.5rem;
   --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
 
@@ -136,6 +145,15 @@ img {
   border-radius: var(--radius-s);
 }
 
+/* Shapes inside SVG (chart bars, genre bubbles) take focus when clicked,
+   and browsers draw their own black ring around the bounding box. A mouse
+   click gets none; the keyboard gets each chart's own focus style. Links
+   with tabindex -1 are mouse-only, their keyboard route being a list. */
+svg :focus:not(:focus-visible),
+svg [tabindex='-1']:focus {
+  outline: none;
+}
+
 button,
 input,
 select,
@@ -151,6 +169,34 @@ h1 {
   letter-spacing: -0.035em;
   line-height: 1.05;
   text-wrap: balance;
+}
+
+/* A display title sits tight; whatever follows it straight away (a lead,
+   a byline) gets room. Zero specificity, so a page can still set its own. */
+:where(h1) + :where(*) {
+  margin-top: var(--space-3);
+}
+
+/* A score's colour: red at 0, through amber, to green at 100 (--h is set
+   per score, see scoreHue in src/lib/format.ts). Past 100 the scale breaks:
+   impact pushes a score off the end into a violet-to-cyan shimmer, at the
+   same lightness so it is just as readable. */
+.tone {
+  color: oklch(var(--score-l) var(--score-c) var(--h, 145));
+}
+
+.tone--beyond {
+  background: linear-gradient(100deg, oklch(var(--score-l) 0.17 305), oklch(var(--score-l) 0.15 205));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@media (forced-colors: active) {
+  .tone--beyond {
+    color: CanvasText;
+    background: none;
+  }
 }
 
 .visually-hidden {
@@ -174,6 +220,13 @@ h1 {
      wide content (code blocks, tables, scrolling rows): grid items default
      to min-width: auto, which would widen the whole page on a phone. */
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* Pages that want a shorter measure cap their content, not their container:
+   every page then shares the header's left edge instead of some sitting
+   centred in the window. */
+.wrap > * {
+  max-width: var(--content-max, none);
 }
 
 .tabular {

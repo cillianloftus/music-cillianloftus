@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { storeCoverArt } from '../../../lib/import/coverart';
+import { mergeAlbums, mergeArtists } from '../../../lib/merge';
 import { detectAnomalies, dismiss, linkWork, ReviewError } from '../../../lib/review';
 
 /**
@@ -9,9 +10,10 @@ import { detectAnomalies, dismiss, linkWork, ReviewError } from '../../../lib/re
  */
 export const POST: APIRoute = async ({ request, redirect }) => {
   const form = await request.formData();
-  const intent = form.get('intent');
+  // A merge button names the artist to keep; the others name their intent.
+  const intent = form.get('keep') ? 'merge_artist' : form.get('intent');
   const id = form.get('id')?.toString() ?? '';
-  const back = (params: Record<string, string>) => redirect(`/edit/review?${new URLSearchParams(params)}`, 303);
+  const back = (params: Record<string, string>) => redirect(`/manage/review?${new URLSearchParams(params)}`, 303);
 
   try {
     switch (intent) {
@@ -22,6 +24,21 @@ export const POST: APIRoute = async ({ request, redirect }) => {
       case 'dismiss':
         await dismiss(id);
         return back({ done: 'dismiss' });
+      case 'merge_artist': {
+        const keep = form.get('keep')?.toString() ?? '';
+        const a = await env.DB.prepare(
+          `SELECT kind, entity_a, entity_b FROM anomaly
+           WHERE id = ? AND kind IN ('duplicate_artist_name', 'near_duplicate_release_group') AND status = 'open'`,
+        )
+          .bind(id)
+          .first<{ kind: string; entity_a: string; entity_b: string }>();
+        if (!a) throw new ReviewError('That item is no longer open.');
+        if (keep !== a.entity_a && keep !== a.entity_b) throw new ReviewError('Choose which of the two to keep.');
+        const gone = keep === a.entity_a ? a.entity_b : a.entity_a;
+        if (a.kind === 'duplicate_artist_name') await mergeArtists(keep, gone);
+        else await mergeAlbums(keep, gone);
+        return back({ done: 'merge' });
+      }
       case 'link_work':
         await linkWork(id);
         return back({ done: 'link_work' });

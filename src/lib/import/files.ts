@@ -216,7 +216,7 @@ export async function importFiles(input: z.infer<typeof filesPayload>): Promise<
 
     if (album.mbReleaseId) {
       await enqueue('import_release', { source: 'musicbrainz', target: { entity: 'release', mbid: album.mbReleaseId }, files });
-      outcomes.push({ ...base, status: 'queued', href: '/edit/jobs', note: 'Tagged by MusicBrainz, so imported from there.' });
+      outcomes.push({ ...base, status: 'queued', href: '/manage/jobs', note: 'Tagged by MusicBrainz, so imported from there.' });
       continue;
     }
 

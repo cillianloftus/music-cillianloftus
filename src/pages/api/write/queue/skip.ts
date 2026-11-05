@@ -9,5 +9,5 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
     return new Response('Bad request', { status: 400 });
   }
   await skip(locals.user!.id, type, id);
-  return redirect('/edit/queue', 303);
+  return redirect('/queue', 303);
 };

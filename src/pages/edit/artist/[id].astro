@@ -1,0 +1,439 @@
+---
+/**
+ * Correct an artist by hand: who they are, other names they go by, how
+ * they relate to other artists, and which pictures show. Details edited
+ * here are overrides; nothing looked up later replaces them.
+ */
+import Edited from '../../../components/Edited.astro';
+import { editsOf } from '../../../lib/revert';
+import { env } from 'cloudflare:workers';
+import Base from '../../../layouts/Base.astro';
+import { artistAbout, KIND_LABELS } from '../../../lib/artists';
+import { artist as getArtist } from '../../../lib/catalogue';
+
+const id = Astro.params.id!;
+const artist = await getArtist(id);
+if (!artist) return Astro.rewrite('/404');
+
+const [about, row, overrides, allImages, names] = await Promise.all([
+  artistAbout(id),
+  env.DB.prepare(`SELECT sort_name FROM artist WHERE id = ?`).bind(id).first<{ sort_name: string }>(),
+  env.DB.prepare(`SELECT field FROM field_override WHERE entity_type = 'artist' AND entity_id = ?`).bind(id).all<{ field: string }>(),
+  env.DB.prepare(`SELECT key, source, credit, hidden FROM artist_image WHERE artist_id = ? ORDER BY hidden, position`).bind(id).all<{
+    key: string;
+    source: string;
+    credit: string | null;
+    hidden: number;
+  }>(),
+  env.DB.prepare(`SELECT name FROM artist WHERE id <> ? ORDER BY sort_name`).bind(id).all<{ name: string }>(),
+]);
+const edited = new Set(overrides.results.map((o) => o.field));
+const edits = await editsOf('artist', id);
+const params = Astro.url.searchParams;
+const links = [
+  ...about.members.map((m) => ({ ...m, kind: 'member_of', label: 'Member' })),
+  ...about.memberOf.map((m) => ({ ...m, kind: 'member_of', label: 'Member of' })),
+  ...about.sameAs.map((m) => ({ ...m, kind: 'same_person', label: 'Same person' })),
+];
+---
+
+<Base title={`Edit ${artist.name}`}>
+  <div class="wrap page">
+    <p><a class="back" href={`/artist/${id}`}>← {artist.name}</a></p>
+    <header>
+      <p class="eyebrow">Edit artist</p>
+      <h1>{artist.name}</h1>
+    </header>
+
+    {params.get('error') && <p class="notice notice--error" role="alert">{params.get('error')}</p>}
+    {params.get('done') && <p class="notice" role="status">{params.get('done')}</p>}
+
+    <form method="post" action="/api/write/artist/edit" class="form">
+      <input type="hidden" name="id" value={id} />
+      <div class="row">
+        <div class="field">
+          <div class="label-row"><label for="name">Name</label><Edited entity="artist" id={id} field="name" edits={edits} /></div>
+          <input class="input" id="name" name="name" value={artist.name} required maxlength="200" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+        </div>
+        <div class="field">
+          <div class="label-row"><label for="sort_name">Sorted as</label><Edited entity="artist" id={id} field="sort_name" edits={edits} /></div>
+          <input class="input" id="sort_name" name="sort_name" value={row?.sort_name ?? artist.name} required maxlength="200" aria-describedby="sort-hint" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+          <span class="hint" id="sort-hint">“Beatles, The”; “Nicks, Stevie”.</span>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="label-row"><label for="kind">What they are</label><Edited entity="artist" id={id} field="kind" edits={edits} /></div>
+          <select class="input" id="kind" name="kind">
+            <option value="" selected={!about.kind}>Not known</option>
+            {Object.entries(KIND_LABELS).map(([value, label]) => <option value={value} selected={about.kind === value}>{label}</option>)}
+          </select>
+        </div>
+        <div class="field">
+          <div class="label-row"><label for="area">From</label><Edited entity="artist" id={id} field="area" edits={edits} /></div>
+          <input class="input" id="area" name="area" value={about.area ?? ''} maxlength="120" placeholder="Dublin" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <div class="label-row"><label for="begin">Born or formed</label><Edited entity="artist" id={id} field="begin_date" edits={edits} /></div>
+          <input class="input" id="begin" name="begin" value={about.begin_date ?? ''} placeholder="2000-10-02, 1967-07 or 1967" />
+        </div>
+        <div class="field">
+          <div class="label-row"><label for="end">Died or split</label><Edited entity="artist" id={id} field="end_date" edits={edits} /></div>
+          <input class="input" id="end" name="end" value={about.end_date ?? ''} placeholder="Leave empty if still going" />
+        </div>
+      </div>
+      <div class="field">
+        <div class="label-row"><label for="disambiguation">Short description</label><Edited entity="artist" id={id} field="disambiguation" edits={edits} /></div>
+        <input class="input" id="disambiguation" name="disambiguation" value={artist.disambiguation ?? ''} maxlength="200" placeholder="US pop musician/rapper" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+      </div>
+      <div class="buttons">
+        <button class="button button--primary" type="submit">Save</button>
+        <a class="button button--quiet" href={`/artist/${id}`}>Cancel</a>
+      </div>
+    </form>
+
+    <section aria-labelledby="names-heading" class="card">
+      <h2 id="names-heading">Other names</h2>
+      <p class="muted">A credit under any of these finds {artist.name}, and searching for one finds them too.</p>
+      {
+        about.aliases.length > 0 && (
+          <ul role="list" class="chips">
+            {about.aliases.map((a) => (
+              <li>
+                <form method="post" action="/api/write/artist/edit">
+                  <input type="hidden" name="id" value={id} />
+                  <input type="hidden" name="intent" value="remove_alias" />
+                  <input type="hidden" name="alias" value={a.name} />
+                  <span>
+                    {a.name}
+                    {a.kind === 'legal' && <span class="muted"> · legal name</span>}
+                  </span>
+                  <button type="submit" aria-label={`Remove ${a.name}`}>×</button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        )
+      }
+      <form method="post" action="/api/write/artist/edit" class="inline">
+        <input type="hidden" name="id" value={id} />
+        <input type="hidden" name="intent" value="add_alias" />
+        <label for="alias" class="visually-hidden">Another name</label>
+        <input class="input" id="alias" name="alias" placeholder="Ben Lasky" required maxlength="200" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+        <button class="button" type="submit">Add name</button>
+      </form>
+    </section>
+
+    <section aria-labelledby="links-heading" class="card">
+      <h2 id="links-heading">Linked artists</h2>
+      <p class="muted">
+        Members of a group, or another record for the same person kept apart on purpose (a real name credited separately).
+      </p>
+      {
+        links.length > 0 && (
+          <ul role="list" class="chips">
+            {links.map((l) => (
+              <li>
+                <form method="post" action="/api/write/artist/edit">
+                  <input type="hidden" name="id" value={id} />
+                  <input type="hidden" name="intent" value="remove_link" />
+                  <input type="hidden" name="other_id" value={l.id} />
+                  <input type="hidden" name="kind" value={l.kind} />
+                  <span>
+                    <span class="muted">{l.label}: </span>
+                    <a href={`/artist/${l.id}`}>{l.name}</a>
+                  </span>
+                  <button type="submit" aria-label={`Unlink ${l.name}`}>×</button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        )
+      }
+      <form method="post" action="/api/write/artist/edit" class="inline">
+        <input type="hidden" name="id" value={id} />
+        <input type="hidden" name="intent" value="add_link" />
+        <label for="link-kind" class="visually-hidden">How they are linked</label>
+        <select class="input narrow" id="link-kind" name="kind">
+          <option value="member_of">{artist.name} is a member of</option>
+          <option value="has_member">{artist.name} has as a member</option>
+          <option value="same_person">{artist.name} is the same person as</option>
+        </select>
+        <label for="other" class="visually-hidden">Other artist</label>
+        <input class="input" id="other" name="other" list="artist-names" placeholder="Artist" required autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+        <button class="button" type="submit">Link</button>
+      </form>
+    </section>
+
+    {
+      allImages.results.length > 0 && (
+        <section aria-labelledby="pictures-heading" class="card">
+          <h2 id="pictures-heading">Pictures</h2>
+          <p class="muted small drag-hint" hidden data-drag-hint>Drag to reorder; the first is the one shown first.</p>
+          <ul role="list" class="pictures" data-pictures data-artist={id}>
+            {allImages.results.map((img, i) => (
+              <li class:list={[{ hidden: img.hidden }]} data-key={img.key} tabindex="0" aria-label={`Picture ${i + 1}. Alt and arrow keys move it.`}>
+                <img src={`/${img.key}`} alt="" width="160" height="160" loading="lazy" draggable="false" />
+                <form method="post" action="/api/write/artist/edit">
+                  <input type="hidden" name="id" value={id} />
+                  <input type="hidden" name="key" value={img.key} />
+                  <button class="button button--quiet small" type="submit" name="intent" value={img.hidden ? 'show_image' : 'hide_image'}>
+                    {img.hidden ? 'Show' : 'Hide'}
+                  </button>
+                  {!img.hidden && i > 0 && (
+                    <button class="button button--quiet small" type="submit" name="intent" value="first_image">
+                      Put first
+                    </button>
+                  )}
+                </form>
+                <span class="muted small">{({ spotify: 'Spotify', deezer: 'Deezer', genius: 'Genius' } as Record<string, string>)[img.source] ?? img.credit ?? img.source}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+
+    <script>
+      // Pictures reorder by dragging (mouse or finger, via pointer events so
+      // touch works too) or with Alt+arrow keys; the new order saves when let go.
+      const grid = document.querySelector<HTMLElement>('[data-pictures]');
+      const hint = document.querySelector<HTMLElement>('[data-drag-hint]');
+      if (grid) {
+        if (hint) hint.hidden = false;
+        let dragging: HTMLElement | null = null;
+        let startOrder = '';
+        const order = () => [...grid.querySelectorAll<HTMLElement>('li[data-key]')].map((li) => li.dataset.key!);
+        const save = async () => {
+          const now = JSON.stringify(order());
+          if (now === startOrder) return;
+          const body = new FormData();
+          body.set('id', grid.dataset.artist!);
+          body.set('intent', 'image_order');
+          body.set('order', now);
+          await fetch('/api/write/artist/edit', { method: 'POST', body, headers: { accept: 'application/json' } }).catch(() => null);
+        };
+
+        grid.addEventListener('pointerdown', (event) => {
+          const li = (event.target as HTMLElement).closest<HTMLElement>('li[data-key]');
+          if (!li || (event.target as HTMLElement).closest('button, a, input')) return;
+          dragging = li;
+          startOrder = JSON.stringify(order());
+          li.classList.add('dragging');
+          li.setPointerCapture(event.pointerId);
+          event.preventDefault();
+        });
+        grid.addEventListener('pointermove', (event) => {
+          if (!dragging) return;
+          const under = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('li[data-key]');
+          if (!under || under === dragging || under.parentElement !== grid) return;
+          const items = [...grid.children];
+          const before = items.indexOf(under) < items.indexOf(dragging);
+          grid.insertBefore(dragging, before ? under : under.nextSibling);
+        });
+        const end = () => {
+          if (!dragging) return;
+          dragging.classList.remove('dragging');
+          dragging = null;
+          save();
+        };
+        grid.addEventListener('pointerup', end);
+        grid.addEventListener('pointercancel', end);
+
+        grid.addEventListener('keydown', (event) => {
+          const li = (event.target as HTMLElement).closest<HTMLElement>('li[data-key]');
+          if (!li || !event.altKey || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+          event.preventDefault();
+          startOrder = JSON.stringify(order());
+          const back = event.key === 'ArrowLeft' || event.key === 'ArrowUp';
+          const other = back ? li.previousElementSibling : li.nextElementSibling;
+          if (!other) return;
+          grid.insertBefore(li, back ? other : other.nextSibling);
+          li.focus();
+          save();
+        });
+      }
+    </script>
+
+    <datalist id="artist-names">{names.results.map((n) => <option value={n.name} />)}</datalist>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+    --content-max: 44rem;
+  }
+
+  .back {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+  }
+
+  h1 {
+    font-size: var(--step-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .form {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .row {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  @media (min-width: 40rem) {
+    .row {
+      grid-template-columns: 1fr 1fr;
+      align-items: start;
+    }
+  }
+
+  /* A label with its "Edited" mark (and Undo) on the same line. */
+  .label-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-3);
+  }
+
+  .edited {
+    margin-left: var(--space-1);
+    color: var(--accent);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .buttons {
+    display: flex;
+    gap: var(--space-3);
+  }
+
+  .card {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .chips form {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding-left: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+  }
+
+  .chips button {
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .chips button:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .inline .input {
+    flex: 1 1 12rem;
+    width: auto;
+  }
+
+  .pictures {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .pictures li {
+    display: grid;
+    gap: var(--space-1);
+    border-radius: var(--radius-s);
+    cursor: grab;
+    touch-action: none;
+    transition: opacity 0.15s;
+  }
+
+  .pictures li:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 3px;
+  }
+
+  .pictures li.dragging {
+    cursor: grabbing;
+    opacity: 0.6;
+  }
+
+  .pictures li:first-child img {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+
+  .pictures img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: var(--radius-s);
+  }
+
+  .pictures li.hidden img {
+    opacity: 0.3;
+  }
+
+  .notice {
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--accent);
+    background: var(--surface-2);
+  }
+
+  .notice--error {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+</style>

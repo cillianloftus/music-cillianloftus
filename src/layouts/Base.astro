@@ -1,4 +1,6 @@
 ---
+import JobTray from '../components/JobTray.astro';
+import SearchOverlay from '../components/SearchOverlay.astro';
 import '../styles/global.css';
 import SiteHeader from '../components/SiteHeader.astro';
 import { THEME_COOKIE, themeFrom } from '../lib/theme';
@@ -41,6 +43,32 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     <main id="main" tabindex="-1">
       <slot />
     </main>
+    {Astro.locals.user && <JobTray />}
+    <SearchOverlay />
+    <script>
+      // Every pop-up menu (a <details data-menu>) closes on a click or tap
+      // anywhere outside it, on Escape, and when another one opens.
+      const menus = () => [...document.querySelectorAll<HTMLDetailsElement>('details[data-menu][open]')];
+      document.addEventListener('click', (event) => {
+        for (const menu of menus()) if (!menu.contains(event.target as Node)) menu.open = false;
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        for (const menu of menus()) {
+          menu.open = false;
+          menu.querySelector('summary')?.focus();
+        }
+      });
+      document.addEventListener(
+        'toggle',
+        (event) => {
+          const opened = event.target as HTMLDetailsElement;
+          if (!opened.matches?.('details[data-menu]') || !opened.open) return;
+          for (const menu of menus()) if (menu !== opened && !menu.contains(opened)) menu.open = false;
+        },
+        true,
+      );
+    </script>
   </body>
 </html>
 

@@ -1,0 +1,408 @@
+---
+/**
+ * Import from local files (ARCHITECTURE.md §5, rung 4): choose or drop a
+ * folder; the browser reads each file's tags and fingerprint and sends
+ * only that text. Audio never leaves the machine.
+ */
+import Base from '../../../layouts/Base.astro';
+import { MAX_FILES } from '../../../lib/import/files';
+---
+
+<Base title="Import from files">
+  <div class="wrap page">
+    <header>
+      <p><a class="back" href="/manage/import">← Import</a></p>
+      <h1>Import from files</h1>
+      <p class="muted">
+        Choose a folder of music. Its tags are read here in your browser, and only the tags, file names and checksums
+        are sent. The audio stays on your machine.
+      </p>
+    </header>
+
+    <noscript>
+      <p class="notice">Reading files needs JavaScript. <a href="/manage/import/manual">Add an album by hand</a> instead.</p>
+    </noscript>
+
+    <section class="choose" data-choose hidden>
+      <div class="field">
+        <label for="root">Where this folder lives <span class="optional">(optional)</span></label>
+        <input class="input" id="root" type="text" autocomplete="off" spellcheck="false" placeholder="D:\Music" aria-describedby="root-hint" />
+        <span class="hint" id="root-hint">Browsers only reveal paths inside the folder you choose, so this is put in front of them. Remembered on this device.</span>
+      </div>
+
+      <label class="drop" data-drop>
+        <input type="file" {...{ webkitdirectory: true }} multiple class="visually-hidden" data-picker />
+        <strong data-pick-label>Choose a folder</strong>
+        <span class="muted" data-pick-hint>or drop one here. Up to {MAX_FILES} files at a time.</span>
+      </label>
+    </section>
+
+    <p class="status" role="status" data-status></p>
+    <progress max="1" value="0" hidden data-progress></progress>
+
+    <section class="preview" data-preview hidden aria-labelledby="preview-heading">
+      <h2 id="preview-heading" tabindex="-1" data-preview-heading>What will be added</h2>
+      <ul role="list" class="albums" data-albums></ul>
+      <div class="buttons">
+        <button class="button button--primary" type="button" data-add>Add to catalogue</button>
+        <button class="button button--quiet" type="button" data-again>Choose another folder</button>
+      </div>
+    </section>
+
+    <template data-album-template>
+      <li class="album">
+        <div class="album-head">
+          <p class="album-title"></p>
+          <p class="album-meta muted"></p>
+        </div>
+        <p class="album-source"></p>
+        <ul class="album-notes"></ul>
+        <details>
+          <summary>Tracks</summary>
+          <ol class="tracks"></ol>
+        </details>
+      </li>
+    </template>
+  </div>
+</Base>
+
+<script>
+  import { groupAlbums, type AlbumGroup, type FileRecord } from '../../../lib/tags/albums';
+  import { AUDIO_EXTENSIONS } from '../../../lib/tags/albums';
+  import { readTags } from '../../../lib/tags/read';
+
+  const MAX_FILES = 2000;
+  const $ = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
+  const choose = $<HTMLElement>('[data-choose]');
+  const picker = $<HTMLInputElement>('[data-picker]');
+  const drop = $<HTMLElement>('[data-drop]');
+  const rootInput = $<HTMLInputElement>('#root');
+  const status = $<HTMLElement>('[data-status]');
+  const progress = $<HTMLProgressElement>('[data-progress]');
+  const preview = $<HTMLElement>('[data-preview]');
+  const list = $<HTMLUListElement>('[data-albums]');
+  const template = $<HTMLTemplateElement>('[data-album-template]');
+  const addButton = $<HTMLButtonElement>('[data-add]');
+
+  choose.hidden = false;
+  // Phones cannot pick a folder; there the same input takes a set of files.
+  if (!('webkitdirectory' in picker)) {
+    $('[data-pick-label]').textContent = 'Choose files';
+    $('[data-pick-hint]').textContent = `Every track of an album at once. Up to ${MAX_FILES} files.`;
+  }
+  try {
+    rootInput.value = localStorage.getItem('import-root') ?? '';
+  } catch {
+    /* storage unavailable: nothing remembered */
+  }
+  rootInput.addEventListener('change', () => {
+    try {
+      localStorage.setItem('import-root', rootInput.value.trim());
+    } catch {
+      /* fine */
+    }
+  });
+
+  let records: FileRecord[] = [];
+
+  const extension = (name: string) => name.split('.').at(-1)?.toLowerCase() ?? '';
+  const isAudio = (file: File) => extension(file.name) in AUDIO_EXTENSIONS;
+
+  async function sha256(file: File): Promise<string> {
+    const hash = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+    return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function readAll(files: { file: File; path: string }[]) {
+    const audio = files.filter((f) => isAudio(f.file));
+    preview.hidden = true;
+    if (audio.length === 0) {
+      status.textContent = 'No audio files in that folder (MP3, FLAC, Ogg, Opus or M4A).';
+      return;
+    }
+    if (audio.length > MAX_FILES) {
+      status.textContent = `That is ${audio.length} files; choose a smaller folder (up to ${MAX_FILES}).`;
+      return;
+    }
+    progress.hidden = false;
+    progress.max = audio.length;
+    records = [];
+    let unreadable = 0;
+    for (const [i, { file, path }] of audio.entries()) {
+      progress.value = i;
+      status.textContent = `Reading ${i + 1} of ${audio.length}…`;
+      const tags = await readTags(async (offset, length) => new Uint8Array(await file.slice(offset, offset + length).arrayBuffer())).catch(() => null);
+      if (!tags) {
+        unreadable += 1;
+        continue;
+      }
+      records.push({ ...tags, path, size: file.size, checksum: await sha256(file) });
+    }
+    progress.hidden = true;
+    status.textContent = unreadable ? `${unreadable} ${unreadable === 1 ? 'file' : 'files'} could not be read and will be left out.` : '';
+    render(groupAlbums(records));
+  }
+
+  function render(albums: AlbumGroup[]) {
+    list.replaceChildren();
+    for (const album of albums) {
+      const item = template.content.firstElementChild!.cloneNode(true) as HTMLLIElement;
+      // Tag text is untrusted: textContent only.
+      item.querySelector('.album-title')!.textContent = `${album.title}, ${album.artist}`;
+      item.querySelector('.album-meta')!.textContent = [album.date, `${album.tracks.length} ${album.tracks.length === 1 ? 'track' : 'tracks'}`]
+        .filter(Boolean)
+        .join(' · ');
+      item.querySelector('.album-source')!.textContent = album.mbReleaseId
+        ? 'Tagged by MusicBrainz: imported from there, with these files attached.'
+        : 'Added from the tags.';
+      const notes = item.querySelector('.album-notes')!;
+      for (const note of album.notes) {
+        const li = document.createElement('li');
+        li.textContent = note;
+        notes.appendChild(li);
+      }
+      const tracks = item.querySelector('.tracks')!;
+      for (const t of album.tracks) {
+        const li = document.createElement('li');
+        li.value = t.position;
+        li.textContent = t.artist === album.artist ? t.title : `${t.title} (${t.artist})`;
+        tracks.appendChild(li);
+      }
+      list.appendChild(item);
+    }
+    $('[data-preview-heading]').textContent = `${albums.length} ${albums.length === 1 ? 'album' : 'albums'} found`;
+    addButton.textContent = `Add ${albums.length === 1 ? 'it' : `all ${albums.length}`} to the catalogue`;
+    addButton.disabled = false;
+    preview.hidden = false;
+    $<HTMLElement>('#preview-heading').focus();
+  }
+
+  addButton.addEventListener('click', async () => {
+    addButton.disabled = true;
+    status.textContent = 'Adding…';
+    try {
+      const response = await fetch('/api/write/import/files', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ root: rootInput.value.trim(), files: records }),
+      });
+      const body = (await response.json()) as {
+        error?: string;
+        albums?: { title: string; artist: string; status: string; href: string | null; note: string | null }[];
+      };
+      if (!response.ok || !body.albums) throw new Error(body.error ?? 'The import failed.');
+      list.replaceChildren();
+      for (const album of body.albums) {
+        const li = document.createElement('li');
+        li.className = 'album';
+        const verb = album.status === 'added' ? 'Added' : album.status === 'queued' ? 'Importing from MusicBrainz' : 'Skipped';
+        const head = document.createElement('p');
+        head.className = 'album-title';
+        if (album.href) {
+          const a = document.createElement('a');
+          a.href = album.href;
+          a.textContent = `${album.title}, ${album.artist}`;
+          head.appendChild(document.createTextNode(`${verb}: `));
+          head.appendChild(a);
+        } else {
+          head.textContent = `${verb}: ${album.title}, ${album.artist}`;
+        }
+        li.appendChild(head);
+        if (album.note) {
+          const note = document.createElement('p');
+          note.className = 'muted';
+          note.textContent = album.note;
+          li.appendChild(note);
+        }
+        list.appendChild(li);
+      }
+      $('[data-preview-heading]').textContent = 'Done';
+      addButton.hidden = true;
+      status.textContent = '';
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : 'The import failed.';
+      addButton.disabled = false;
+    }
+  });
+
+  $('[data-again]').addEventListener('click', () => {
+    addButton.hidden = false;
+    picker.value = '';
+    picker.click();
+  });
+
+  picker.addEventListener('change', () => {
+    const files = [...(picker.files ?? [])].map((file) => ({ file, path: file.webkitRelativePath || file.name }));
+    void readAll(files);
+  });
+
+  // Dropped folders: walk the entries, since a drop gives no file list for a directory.
+  async function walk(entry: FileSystemEntry, out: { file: File; path: string }[]): Promise<void> {
+    if (entry.isFile) {
+      const file = await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject));
+      out.push({ file, path: entry.fullPath.replace(/^\//, '') });
+    } else if (entry.isDirectory) {
+      const reader = (entry as FileSystemDirectoryEntry).createReader();
+      for (;;) {
+        const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+        if (batch.length === 0) break;
+        for (const child of batch) await walk(child, out);
+      }
+    }
+  }
+
+  drop.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    drop.dataset.over = '';
+  });
+  drop.addEventListener('dragleave', () => delete drop.dataset.over);
+  drop.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    delete drop.dataset.over;
+    const entries = [...(event.dataTransfer?.items ?? [])].map((item) => item.webkitGetAsEntry()).filter((e): e is FileSystemEntry => e !== null);
+    const files: { file: File; path: string }[] = [];
+    status.textContent = 'Looking through the folder…';
+    for (const entry of entries) await walk(entry, files);
+    void readAll(files);
+  });
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+    --content-max: 48rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .back {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+  }
+
+  .muted,
+  .optional {
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+
+  .notice {
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--accent);
+    background: var(--surface-2);
+  }
+
+  .choose {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .drop {
+    display: grid;
+    place-items: center;
+    gap: var(--space-1);
+    min-height: 9rem;
+    padding: var(--space-5);
+    border: 2px dashed var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+    text-align: center;
+    cursor: pointer;
+  }
+
+  .drop:hover,
+  .drop[data-over] {
+    border-color: var(--accent);
+  }
+
+  .drop:focus-within {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .drop strong {
+    font-size: var(--step-1);
+  }
+
+  .status:empty {
+    display: none;
+  }
+
+  progress {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  .preview {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .albums {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .albums :global(.album) {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    min-width: 0;
+  }
+
+  .albums :global(.album-title) {
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+
+  .albums :global(.album-source),
+  .albums :global(.album-notes) {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .albums :global(.album-notes) {
+    margin: 0;
+    padding-left: 1.2rem;
+  }
+
+  .albums :global(.album-notes:empty) {
+    display: none;
+  }
+
+  .albums :global(summary) {
+    min-height: var(--target);
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    color: var(--text-muted);
+  }
+
+  .albums :global(.tracks) {
+    margin: 0;
+    padding-left: 1.8rem;
+    font-size: var(--step--1);
+  }
+
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+</style>

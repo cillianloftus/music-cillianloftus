@@ -1,0 +1,59 @@
+---
+/**
+ * Beside a field's label: "Edited" when it was set by hand, with Undo when
+ * what it replaced is known. Undo submits the surrounding form to the
+ * revert action (formaction), so it needs no form of its own.
+ */
+
+interface Props {
+  entity: 'release_group' | 'release' | 'recording' | 'artist';
+  id: string;
+  field: string;
+  /** field -> whether the replaced value is known (so it can be undone). */
+  edits: Map<string, boolean>;
+}
+
+const { entity, id, field, edits } = Astro.props;
+const known = edits.get(field);
+---
+
+{
+  known !== undefined && (
+    <span class="edited-mark">
+      Edited
+      {known && (
+        <button class="undo" type="submit" formaction="/api/write/revert" formnovalidate name="revert" value={`${entity}:${id}:${field}`}>
+          Undo
+        </button>
+      )}
+    </span>
+  )
+}
+
+<style>
+  .edited-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--accent);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .undo {
+    min-height: 1.75rem;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+    color: var(--text-muted);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .undo:hover {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+</style>

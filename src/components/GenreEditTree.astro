@@ -8,6 +8,8 @@ export interface EditNode {
   id: string;
   name: string;
   parent: string | null;
+  /** Further parents, beyond the primary one. */
+  also: { id: string; name: string }[];
   tracks: number;
   children: EditNode[];
 }
@@ -28,6 +30,16 @@ const { nodes, suggestOpen, level = 1 } = Astro.props;
         <div class="row">
           <span class="name">{node.name}</span>
           <span class="count tabular">{node.tracks > 0 ? `${node.tracks} ${node.tracks === 1 ? 'track' : 'tracks'}` : ''}</span>
+          {node.also.map((p) => (
+            <form method="post" action="/api/write/genre" class="also">
+              <input type="hidden" name="intent" value="remove_parent" />
+              <input type="hidden" name="id" value={node.id} />
+              <input type="hidden" name="parent_id" value={p.id} />
+              {suggestOpen && <input type="hidden" name="suggest" value="1" />}
+              <span>also under {p.name}</span>
+              <button type="submit" aria-label={`Stop filing ${node.name} under ${p.name}`}>×</button>
+            </form>
+          ))}
           <details class="move">
             <summary>
               Move<span class="visually-hidden"> {node.name}</span>
@@ -46,6 +58,14 @@ const { nodes, suggestOpen, level = 1 } = Astro.props;
                 placeholder="Top level"
               />
               <button class="button" type="submit">Move</button>
+            </form>
+            <form method="post" action="/api/write/genre">
+              <input type="hidden" name="intent" value="add_parent" />
+              <input type="hidden" name="id" value={node.id} />
+              {suggestOpen && <input type="hidden" name="suggest" value="1" />}
+              <label for={`also-${node.id}`}>Also under</label>
+              <input class="input" id={`also-${node.id}`} name="parent" list="genre-names" autocomplete="off" placeholder="Another parent" required />
+              <button class="button" type="submit">Add</button>
             </form>
           </details>
         </div>
@@ -129,5 +149,33 @@ const { nodes, suggestOpen, level = 1 } = Astro.props;
   label {
     color: var(--text-muted);
     font-size: var(--step--1);
+  }
+
+  .also {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding-left: 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .also button {
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .also button:hover {
+    background: var(--surface-2);
+    color: var(--text);
   }
 </style>

@@ -13,12 +13,14 @@ const plural = (n: number) => `${n} ${n === 1 ? 'track' : 'tracks'}`;
   {
     nodes.map((node) => (
       <li>
-        <span class="name">{node.name}</span>{' '}
+        <a class="name" href={`/genre/${node.id}`}>{node.name}</a>{' '}
         <span class="count">
           {plural(node.total)}
           {node.children.length > 0 && node.tracks > 0 && ` (${node.tracks} tagged ${node.name} itself)`}
+          {node.secondary && ' · also filed here'}
         </span>
-        {node.children.length > 0 && <Astro.self nodes={node.children} />}
+        {/* A genre filed here as a further parent is listed, not expanded again. */}
+        {node.children.length > 0 && !node.secondary && <Astro.self nodes={node.children} />}
       </li>
     ))
   }

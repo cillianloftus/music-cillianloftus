@@ -43,7 +43,9 @@ const noted = ratings.filter((r) => r.impact_note).length;
       ) : (
         [...months].map(([name, entries]) => (
           <section aria-labelledby={`m-${name.replace(/\s+/g, '-')}`} class="month">
-            <h2 id={`m-${name.replace(/\s+/g, '-')}`}>{name}</h2>
+            <h2 id={`m-${name.replace(/\s+/g, '-')}`}>
+              {name.split(' ')[0]} <span class="year">{name.split(' ')[1]}</span>
+            </h2>
             <ol role="list" class="entries">
               {entries.map((r) => (
                 <li class:list={[{ noted: r.impact_note }]}>
@@ -52,9 +54,9 @@ const noted = ratings.filter((r) => r.impact_note).length;
                     <CoverArt artKey={r.art_key} title={r.album_title ?? r.title} sizes="4rem" />
                   </span>
                   <div class="text">
-                    <p class="title">{r.album_id ? <a href={`/album/${r.album_id}`}>{r.title}</a> : r.title}</p>
+                    <p class="title"><a href={r.entity_type === 'recording' ? `/track/${r.entity_id}` : `/album/${r.entity_id}`}>{r.title}</a></p>
                     <p class="by">
-                      <CreditLine credits={r.credits} link={false} />
+                      <CreditLine credits={r.credits} />
                       {' · '}
                       {r.entity_type === 'release_group' ? 'Album' : 'Track'}
                     </p>
@@ -77,7 +79,7 @@ const noted = ratings.filter((r) => r.impact_note).length;
   .page {
     display: grid;
     gap: var(--space-6);
-    max-width: 50rem;
+    --content-max: 50rem;
   }
 
   header {
@@ -98,18 +100,17 @@ const noted = ratings.filter((r) => r.impact_note).length;
     color: var(--text-muted);
   }
 
-  /* Month headings stay in view while their entries scroll past. */
+  /* A month opens like a chapter: the name large, the year quiet beside it. */
   h2 {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    padding: var(--space-2) 0;
-    background: var(--bg);
-    color: var(--text-muted);
-    font-size: var(--step--1);
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    margin: 0 0 var(--space-3);
+    font-size: var(--step-2);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+
+  .year {
+    color: var(--text-subtle);
+    font-weight: 500;
   }
 
   .entries {

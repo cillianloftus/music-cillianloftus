@@ -34,7 +34,7 @@ export class SpotifyNotConfigured extends Error {
 
 export class ReauthorizationRequired extends Error {
   constructor() {
-    super('Spotify needs reconnecting: the authorisation has expired or been revoked. Reconnect at /edit/spotify.');
+    super('Spotify needs reconnecting: the authorisation has expired or been revoked. Reconnect at /manage/spotify.');
     this.name = 'ReauthorizationRequired';
   }
 }

@@ -46,11 +46,11 @@ async function resolveExisting(plan: ImportPlan): Promise<Record<Table, Map<stri
   const withSpotify = all
     .filter(([table]) => table !== 'work')
     .map(([table, entries]) => [table, entries.filter((e) => e.spotify_id)] as const);
-  const unidentifiedArtists = plan.artists.filter((a) => a.mbid === null);
+  const artistNames = plan.artists.map((a) => a.name);
   // An ISRC names one recording; trusted only when exactly one row holds it.
   const byIsrc = plan.recordings.filter((r) => r.mbid === null && r.isrc);
 
-  const results = await env.DB.batch<{ id: string; ext: string; name: string; matches: number }>([
+  const results = await env.DB.batch<{ id: string; ext: string; name: string; matches: number; mbid: string | null; spotify_id: string | null }>([
     ...withMbid.map(([table, entries]) =>
       env.DB.prepare(`SELECT id, mbid AS ext FROM ${table} WHERE mbid IN (SELECT value FROM json_each(?))`).bind(
         JSON.stringify(entries.map((e) => e.mbid)),
@@ -65,12 +65,14 @@ async function resolveExisting(plan: ImportPlan): Promise<Record<Table, Map<stri
       `SELECT min(id) AS id, isrc AS ext, count(*) AS matches FROM recording
        WHERE isrc IN (SELECT value FROM json_each(?)) GROUP BY isrc`,
     ).bind(JSON.stringify(byIsrc.map((r) => r.isrc))),
-    // Hand-typed artists: the existing artist of that name, if unambiguous.
+    // Everyone answering to a plan artist's name or alias (Benjamin Lasky
+    // is Quadeca), for artists no id identifies.
     env.DB.prepare(
-      `SELECT min(id) AS id, lower(name) AS name, count(*) AS matches FROM artist
-       WHERE lower(name) IN (SELECT lower(value) FROM json_each(?))
-       GROUP BY lower(name)`,
-    ).bind(JSON.stringify(unidentifiedArtists.map((a) => a.name))),
+      `SELECT DISTINCT n.id, lower(n.name) AS name, a.mbid, a.spotify_id
+       FROM (SELECT id, name FROM artist UNION SELECT artist_id AS id, name FROM artist_alias) n
+       JOIN artist a ON a.id = n.id
+       WHERE lower(n.name) IN (SELECT lower(value) FROM json_each(?))`,
+    ).bind(JSON.stringify(artistNames)),
   ]);
 
   const resolved = Object.fromEntries(all.map(([table]) => [table, new Map<string, string>()])) as Record<Table, Map<string, string>>;
@@ -86,11 +88,21 @@ async function resolveExisting(plan: ImportPlan): Promise<Record<Table, Map<stri
   const isrcIds = new Map(results[i++]!.results.filter((r) => r.matches === 1).map((r) => [r.ext, r.id]));
   for (const r of byIsrc) if (!resolved.recording.has(r.key) && isrcIds.has(r.isrc!)) resolved.recording.set(r.key, isrcIds.get(r.isrc!)!);
 
-  const byName = new Map(results[i]!.results.filter((r) => r.matches === 1).map((r) => [r.name, r.id]));
+  // By name, when no id matched: the one artist of that name, provided it
+  // holds no id that contradicts the plan's. So John Lindahl imported from
+  // Spotify (no MusicBrainz id) is the John Lindahl a MusicBrainz import
+  // brings, and gains the id; two artists that both have MusicBrainz ids
+  // are never joined on a name.
+  const byName = new Map<string, { id: string; mbid: string | null; spotify_id: string | null }[]>();
+  for (const row of results[i]!.results) byName.set(row.name, [...(byName.get(row.name) ?? []), row]);
   for (const artist of plan.artists) {
-    if (resolved.artist.has(artist.key) || artist.mbid !== null) continue;
-    const id = byName.get(artist.name.toLowerCase());
-    if (id) resolved.artist.set(artist.key, id);
+    if (resolved.artist.has(artist.key)) continue;
+    const candidates = byName.get(artist.name.toLowerCase()) ?? [];
+    if (new Set(candidates.map((c) => c.id)).size !== 1) continue;
+    const c = candidates[0]!;
+    const mbidFits = !c.mbid || !artist.mbid || c.mbid === artist.mbid;
+    const spotifyFits = !c.spotify_id || !artist.spotify_id || c.spotify_id === artist.spotify_id;
+    if (mbidFits && spotifyFits) resolved.artist.set(artist.key, c.id);
   }
   return resolved;
 }
@@ -129,8 +141,18 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
 
   const artists = plan.artists.map((a) => ({ ...a, id: idFor('artist', a.key), source }));
   const works = plan.works.map((w) => ({ ...w, id: idFor('work', w.key), source }));
+  // The title as the release prints it, when it differs only in capitals:
+  // "born yesterday" on the album beats MusicBrainz's "Born Yesterday".
+  const styled = new Map<string, string>();
+  for (const t of plan.tracks) {
+    const r = plan.recordings.find((x) => x.key === t.recording_key);
+    if (r && t.title_on_release && !styled.has(r.key) && t.title_on_release.toLowerCase() === r.title.toLowerCase()) {
+      styled.set(r.key, t.title_on_release);
+    }
+  }
   const recordings = plan.recordings.map((r) => ({
     ...r,
+    title: styled.get(r.key) ?? r.title,
     id: idFor('recording', r.key),
     work_id: r.work_key ? idFor('work', r.work_key) : null,
     source,
@@ -167,6 +189,7 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
        FROM json_each(?1) j
        WHERE ${table}.id = j.value ->> '$.id'
          AND ${table}.spotify_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM field_override fo WHERE fo.entity_type = '${table}' AND fo.entity_id = ${table}.id AND fo.field = 'spotify_id')
          AND j.value ->> '$.spotify_id' IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM ${table} other WHERE other.spotify_id = j.value ->> '$.spotify_id')`,
     ).bind(json(rows.map((r) => ({ id: r.id, spotify_id: r.spotify_id ?? null }))));
@@ -182,7 +205,10 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
     ).bind(json(artists)),
     db.prepare(
       `UPDATE artist
-       SET disambiguation = coalesce(artist.disambiguation, j.value ->> '$.disambiguation')
+       SET disambiguation = coalesce(artist.disambiguation, j.value ->> '$.disambiguation'),
+           mbid = CASE WHEN artist.mbid IS NULL
+                        AND NOT EXISTS (SELECT 1 FROM artist other WHERE other.mbid = j.value ->> '$.mbid')
+                       THEN j.value ->> '$.mbid' ELSE artist.mbid END
        FROM json_each(?1) j
        WHERE artist.id = j.value ->> '$.id'`,
     ).bind(json(artists)),
@@ -242,10 +268,13 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
     db.prepare(
       `UPDATE release
        SET country = coalesce(country, ?2),
-           label   = coalesce(label, ?3),
-           format  = coalesce(format, ?4)
+           label   = CASE WHEN label IS NULL AND NOT EXISTS (
+                       SELECT 1 FROM field_override o WHERE o.entity_type = 'release' AND o.entity_id = ?1 AND o.field = 'label')
+                     THEN ?3 ELSE label END,
+           format  = coalesce(format, ?4),
+           barcode = coalesce(barcode, ?5)
        WHERE id = ?1`,
-    ).bind(releaseId, plan.release.country, plan.release.label, plan.release.format),
+    ).bind(releaseId, plan.release.country, plan.release.label, plan.release.format, plan.release.barcode ?? null),
 
     // Recordings
     db.prepare(
@@ -288,7 +317,11 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
        SELECT j.value ->> '$.id', j.value ->> '$.entity', j.value ->> '$.entity_id',
               j.value ->> '$.artist_id', j.value ->> '$.role', j.value ->> '$.position',
               j.value ->> '$.credited_as', j.value ->> '$.join_phrase'
-       FROM json_each(?1) j WHERE true
+       FROM json_each(?1) j
+       -- A track or album whose credits were edited by hand keeps exactly those.
+       WHERE NOT EXISTS (
+         SELECT 1 FROM field_override o
+         WHERE o.entity_type = j.value ->> '$.entity' AND o.entity_id = j.value ->> '$.entity_id' AND o.field = 'credits')
        ON CONFLICT DO NOTHING`,
     ).bind(json(credits)),
   ];

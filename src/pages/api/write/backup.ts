@@ -6,5 +6,5 @@ import { runJobs } from '../../../lib/jobs/runner';
 export const POST: APIRoute = async ({ redirect, locals }) => {
   await enqueue('backup', {});
   locals.cfContext.waitUntil(runJobs({ budgetMs: 25_000 }));
-  return redirect('/edit/backups', 303);
+  return redirect('/manage/backups', 303);
 };

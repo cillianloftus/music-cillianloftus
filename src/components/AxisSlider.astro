@@ -1,0 +1,330 @@
+---
+/**
+ * One rating axis, 0 to 10 in halves. A plain number field without
+ * JavaScript; with it, a large touch slider with the value shown big in
+ * the score colours, and a clear button, because leaving an axis blank is
+ * meaningful (it is left out of the composite, not counted as zero).
+ *
+ * The number field stays the form's real input either way; the slider
+ * only drives it, so what is submitted never depends on the script.
+ */
+
+interface Props {
+  name: string;
+  label: string;
+  hint?: string;
+  value: number | null | undefined;
+  /** Colour the value on the score scale (axes); impact uses the accent. */
+  tone?: 'score' | 'accent';
+  /** Offer "Doesn't apply" (an instrumental has no lyrics). */
+  canNotApply?: boolean;
+  notApplicable?: boolean;
+}
+
+const { name, label, hint, value, tone = 'score', canNotApply = false, notApplicable = false } = Astro.props;
+const hintId = hint ? `${name}-hint` : undefined;
+---
+
+<div class:list={['axis', { 'is-na': notApplicable }]} data-axis data-tone={tone}>
+  <div class="axis-head">
+    <label for={name}>{label}</label>
+    <output class="axis-value tabular" for={name} data-value aria-hidden="true">{notApplicable ? 'n/a' : (value ?? '–')}</output>
+  </div>
+  <input
+    class="input axis-number"
+    id={name}
+    name={name}
+    type="number"
+    inputmode="decimal"
+    min="0"
+    max="10"
+    step="0.5"
+    value={value ?? ''}
+    aria-describedby={hintId}
+  />
+  <div class="axis-foot">
+    {hint && <span class="hint" id={hintId}>{hint}</span>}
+    {
+      canNotApply && (
+        <label class="axis-na">
+          <input type="checkbox" name={`na_${name}`} checked={notApplicable} data-na />
+          Doesn’t apply
+        </label>
+      )
+    }
+  </div>
+</div>
+
+<script>
+  import { scoreHue } from '../lib/format';
+
+  const CLEAR_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>';
+
+  for (const row of document.querySelectorAll<HTMLElement>('[data-axis]')) {
+    const number = row.querySelector<HTMLInputElement>('.axis-number')!;
+    const output = row.querySelector<HTMLOutputElement>('[data-value]')!;
+    const head = row.querySelector('.axis-head')!;
+
+    // The slider takes the label (by taking the id); the number field stays
+    // in the form, hidden, as the value that is submitted.
+    const range = document.createElement('input');
+    range.type = 'range';
+    range.min = '0';
+    range.max = '10';
+    range.step = '0.5';
+    range.id = number.id;
+    number.id = `${number.id}-typed`;
+    const described = number.getAttribute('aria-describedby');
+    if (described) range.setAttribute('aria-describedby', described);
+    number.hidden = true;
+    number.tabIndex = -1;
+
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'axis-clear';
+    clear.innerHTML = CLEAR_ICON;
+    clear.setAttribute('aria-label', `Clear ${row.querySelector('label')?.textContent ?? 'this axis'}`);
+
+    const control = document.createElement('div');
+    control.className = 'axis-control';
+    control.appendChild(range);
+    control.appendChild(clear);
+    head.parentNode!.insertBefore(control, head.nextSibling);
+
+    const set = (value: number | null, announce = true) => {
+      number.value = value === null ? '' : String(value);
+      row.classList.toggle('is-unset', value === null);
+      output.textContent = value === null ? '–' : String(value);
+      range.setAttribute('aria-valuetext', value === null ? 'Not rated' : `${value} out of 10`);
+      if (value === null) {
+        range.value = '5';
+        range.style.setProperty('--fill', '0%');
+        output.style.color = '';
+      } else {
+        range.value = String(value);
+        range.style.setProperty('--fill', `${value * 10}%`);
+        if (row.dataset.tone === 'score') {
+          const hue = scoreHue(value * 10);
+          range.style.setProperty('--h', String(hue));
+          output.style.color = `oklch(var(--score-l) var(--score-c) ${hue})`;
+        } else {
+          output.style.color = 'var(--accent)';
+        }
+      }
+      // The live score preview listens on the form.
+      if (announce) number.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+
+    // "Doesn't apply": the slider stands down and the value reads n/a.
+    const na = row.querySelector<HTMLInputElement>('[data-na]');
+    const applyNa = () => {
+      const off = Boolean(na?.checked);
+      row.classList.toggle('is-na', off);
+      range.disabled = off;
+      if (off) {
+        set(null);
+        output.textContent = 'n/a';
+      }
+    };
+    na?.addEventListener('change', applyNa);
+
+    range.addEventListener('input', () => {
+      if (na?.checked) {
+        na.checked = false;
+        applyNa();
+      }
+      set(Number(range.value));
+    });
+    // A tap exactly on the resting position changes nothing, so a click on
+    // an unset slider sets it too.
+    range.addEventListener('click', () => {
+      if (row.classList.contains('is-unset')) set(Number(range.value));
+    });
+    clear.addEventListener('click', () => {
+      set(null);
+      range.focus();
+    });
+
+    set(number.value === '' ? null : Number(number.value), false);
+    if (na?.checked) applyNa();
+  }
+</script>
+
+<style>
+  .axis {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .axis-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  label {
+    font-weight: 650;
+  }
+
+  .axis-value {
+    min-width: 3ch;
+    color: var(--text-subtle);
+    font-size: var(--step-2);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    text-align: right;
+  }
+
+  .axis-number {
+    max-width: 8rem;
+  }
+
+  .hint {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .axis-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .axis-foot:empty {
+    display: none;
+  }
+
+  .axis-na {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .axis-na input {
+    width: 1.1rem;
+    height: 1.1rem;
+    accent-color: var(--accent);
+  }
+
+  .is-na .axis-value {
+    color: var(--text-subtle) !important;
+    font-size: var(--step-1);
+  }
+
+  .is-na :global(.axis-control) {
+    opacity: 0.35;
+  }
+
+  .is-na :global(.axis-clear) {
+    visibility: hidden;
+  }
+
+  /* Enhanced: the slider replaces the number field on screen. */
+  .axis :global(.axis-control) {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .axis :global(input[type='range']) {
+    flex: 1;
+    min-width: 0;
+    height: var(--target);
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    --fill: 0%;
+    --thumb: oklch(var(--score-l) var(--score-c) var(--h, 145));
+  }
+
+  .axis[data-tone='accent'] :global(input[type='range']) {
+    --thumb: var(--accent);
+  }
+
+  .axis :global(input[type='range']::-webkit-slider-runnable-track) {
+    height: 8px;
+    border-radius: 999px;
+    background: linear-gradient(to right, var(--thumb) var(--fill), color-mix(in srgb, var(--text) 14%, transparent) var(--fill));
+  }
+
+  .axis :global(input[type='range']::-moz-range-track) {
+    height: 8px;
+    border-radius: 999px;
+    background: linear-gradient(to right, var(--thumb) var(--fill), color-mix(in srgb, var(--text) 14%, transparent) var(--fill));
+  }
+
+  .axis :global(input[type='range']::-webkit-slider-thumb) {
+    width: 28px;
+    height: 28px;
+    margin-top: -10px;
+    border: 3px solid var(--surface-1);
+    border-radius: 50%;
+    background: var(--thumb);
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
+    -webkit-appearance: none;
+  }
+
+  .axis :global(input[type='range']::-moz-range-thumb) {
+    width: 22px;
+    height: 22px;
+    border: 3px solid var(--surface-1);
+    border-radius: 50%;
+    background: var(--thumb);
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
+  }
+
+  .axis :global(input[type='range']:focus-visible) {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: 999px;
+  }
+
+  /* Not rated yet: the thumb waits, faint, until the slider is touched. */
+  .axis:global(.is-unset) :global(input[type='range']) {
+    --thumb: var(--text-subtle);
+    opacity: 0.55;
+  }
+
+  .axis :global(.axis-clear) {
+    display: grid;
+    place-items: center;
+    width: var(--target);
+    height: var(--target);
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-subtle);
+    cursor: pointer;
+  }
+
+  .axis :global(.axis-clear:hover) {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .axis:global(.is-unset) :global(.axis-clear) {
+    visibility: hidden;
+  }
+
+  .axis :global(.axis-clear svg) {
+    width: 1rem;
+    height: 1rem;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+</style>
