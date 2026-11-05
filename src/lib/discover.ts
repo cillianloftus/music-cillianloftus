@@ -51,6 +51,8 @@ export interface TrackFact {
   genres: { id: string; name: string }[];
   plays: number;
   axes: { production: number | null; songwriting: number | null; lyrics: number | null; performance: number | null };
+  /** The quick gut score (out of 100) given alongside a considered rating, if any. */
+  gut: number | null;
 }
 
 interface Row {
@@ -74,6 +76,7 @@ interface Row {
   songwriting: number | null;
   lyrics: number | null;
   performance: number | null;
+  gut_score: number | null;
 }
 
 /** Everything known about each rated track; one artist's when given. */
@@ -94,7 +97,7 @@ export async function trackFacts(userId: string, scope: { artistId?: string; alb
              WHERE (gt.entity_type = 'recording' AND gt.entity_id = r.id)
                 OR (gt.entity_type = 'release_group' AND gt.entity_id = g.id)) AS genres,
             (SELECT count(*) FROM play p WHERE p.user_id = s.user_id AND p.recording_id = r.id) AS plays,
-            ax.production, ax.songwriting, ax.lyrics, ax.performance
+            ax.production, ax.songwriting, ax.lyrics, ax.performance, ax.gut_score
      FROM v_recording_score s
      JOIN recording r ON r.id = s.recording_id
      LEFT JOIN rating ax ON ax.user_id = s.user_id AND ax.entity_type = 'recording' AND ax.entity_id = r.id
@@ -137,6 +140,8 @@ export async function trackFacts(userId: string, scope: { artistId?: string; alb
     genres: parse<{ id: string; name: string }>(r.genres),
     plays: r.plays ?? 0,
     axes: { production: r.production, songwriting: r.songwriting, lyrics: r.lyrics, performance: r.performance },
+    // Only where the considered axes are there too: otherwise the score is the gut.
+    gut: r.gut_score !== null && r.production !== null ? r.gut_score * 10 : null,
   }));
 }
 
@@ -155,7 +160,7 @@ export async function libraryFacts(userId: string): Promise<TrackFact[]> {
   )
     .bind(userId)
     .first<Record<string, string | number | null>>();
-  const key = `facts:v1:${userId}:${Object.values(stamp ?? {}).join(':')}`;
+  const key = `facts:v2:${userId}:${Object.values(stamp ?? {}).join(':')}`;
   try {
     const hit = await env.CACHE.get<TrackFact[]>(key, 'json');
     if (hit) return hit;
@@ -343,6 +348,13 @@ function groupsOf(facts: TrackFact[], opts: Options): Group[] {
       else if (hour < 11) add('habit:hour', 'morning', f, 'What you rate in the morning');
     }
     if (f.plays >= 20) add('plays', 'many', f, 'Songs you’ve played 20 times or more');
+    // How the title is written: a stylistic choice that may say something.
+    const letters = f.title.replace(/[^\p{L}]/gu, '');
+    if (letters.length >= 3 && letters === letters.toUpperCase() && letters !== letters.toLowerCase()) add('title', 'caps', f, 'Songs titled in capitals');
+    else if (letters.length >= 3 && letters === letters.toLowerCase() && letters !== letters.toUpperCase()) add('title', 'lower', f, 'Songs titled all in lower case');
+    const words = f.title.replace(/\(.*?\)|\[.*?\]/g, '').trim().split(/\s+/).filter(Boolean).length;
+    if (words === 1) add('title', 'one-word', f, 'One-word titles');
+    else if (words >= 5) add('title', 'long', f, 'Titles of five words or more');
   }
   return [...groups.values()];
 }
@@ -425,6 +437,17 @@ function measures(facts: TrackFact[], opts: Options): Measure[] {
       falls: 'The fewer people credited on a song, the higher you rate it',
     },
     { key: 'plays', value: (f) => (f.plays ? Math.log1p(f.plays) : null), rises: 'What you play most, you rate highest', falls: 'You rate highest what you play least', min: 15 },
+    {
+      key: 'fresh',
+      // Days from release to rating, on a log scale: a week and a month differ more than year nine and ten.
+      value: (f) => {
+        if (!f.ratedAt || !f.released || !/^\d{4}-\d{2}-\d{2}/.test(f.released)) return null;
+        const days = (Date.parse(f.ratedAt) - Date.parse(f.released.slice(0, 10))) / 86_400_000;
+        return days >= 0 ? Math.log1p(days) : null;
+      },
+      rises: 'The longer after release you get to something, the higher you rate it',
+      falls: 'You rate music highest when you hear it new',
+    },
     { key: 'size', value: (f) => f.size, rises: 'Longer albums get higher scores from you', falls: 'Shorter albums get higher scores from you' },
     {
       key: 'drift',
@@ -500,6 +523,37 @@ function axisFindings(facts: TrackFact[]): Finding[] {
       strength: Math.abs(t),
       tracks: detailed.length,
       tone: 'neutral',
+    });
+  }
+  return out;
+}
+
+/**
+ * Where the first instinct and the considered rating part ways: groups
+ * whose gut scores run further above (or below) the considered score than
+ * usual. The usual gap is calibration and already allowed for; this finds
+ * who or what it is biased about.
+ */
+function gutFindings(facts: TrackFact[], opts: Options): Finding[] {
+  const both = facts.filter((f) => f.gut !== null);
+  if (both.length < 10) return [];
+  const gap = new Map(both.map((f) => [f.id, f.gut! - f.score]));
+  const out: Finding[] = [];
+  for (const g of groupsOf(both, opts)) {
+    if (!['artist', 'genre', 'credit:production', 'decade', 'type'].includes(g.kind) || g.ids.size < 4 || both.length - g.ids.size < 4) continue;
+    const inside = [...g.ids].map((id) => gap.get(id)!);
+    const outside = both.filter((f) => !g.ids.has(f.id)).map((f) => gap.get(f.id)!);
+    const { diff, t } = separation(inside, outside);
+    if (Math.abs(diff) < 4 || Math.abs(t) < 2) continue;
+    out.push({
+      key: `gut:${g.kind}:${g.key}`,
+      kind: 'gut',
+      headline: `Your gut ${diff > 0 ? 'overrates' : 'underrates'} ${g.subject.replace(/^Tracks |^Your /, '').replace(/’s tracks$/, '')}`,
+      detail: `First instincts run ${points(diff)} ${diff > 0 ? 'higher' : 'lower'} than your considered scores there, compared with everything else (${tracksWord(inside.length)}).`,
+      strength: Math.abs(t),
+      tracks: inside.length,
+      tone: 'neutral',
+      href: g.href,
     });
   }
   return out;
@@ -590,6 +644,7 @@ export function discover(facts: TrackFact[], opts: Options = {}): Finding[] {
     ...groupFindings(facts, opts),
     ...trendFindings(facts, opts),
     ...axisFindings(facts),
+    ...gutFindings(facts, opts),
     ...oddOnes(facts),
     ...(opts.artistId ? [] : consistency(facts)),
   ].sort((a, b) => b.strength - a.strength);

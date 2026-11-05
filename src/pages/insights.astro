@@ -30,6 +30,15 @@ const lead = (bands: Band[]) => {
   const others = rest.reduce((sum, b) => sum + b.average * b.count, 0) / Math.max(1, rest.reduce((sum, b) => sum + b.count, 0));
   return { best, margin: rest.length ? Math.round(best.average - others) : 0 };
 };
+// A chart earns its place only when it shows something: at least two bands
+// with two or more tracks each, a few points apart. Otherwise it is a row of
+// equal bars, and the page leaves it out rather than fill a slot.
+const tells = (bands: Band[] | undefined) => {
+  const solid = (bands ?? []).filter((b) => b.count >= 2);
+  if (solid.length < 2) return false;
+  const averages = solid.map((b) => b.average);
+  return Math.max(...averages) - Math.min(...averages) >= 3;
+};
 const sweetSpot = deep ? lead(deep.length) : null;
 const placeLead = deep ? lead(deep.position) : null;
 const ageLead = deep ? lead(deep.ageByYear) : null;
@@ -151,7 +160,7 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             </section>
           )}
 
-          {deep && deep.length.length > 1 && (
+          {deep && tells(deep.length) && (
             <section aria-labelledby="length-heading" class="finding">
               <h2 id="length-heading">Song length</h2>
               {sweetSpot && (
@@ -164,7 +173,7 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             </section>
           )}
 
-          {deep && deep.position.length > 1 && (
+          {deep && tells(deep.position) && (
             <section aria-labelledby="position-heading" class="finding">
               <h2 id="position-heading">Where it sits on the album</h2>
               {placeLead && (
@@ -176,7 +185,7 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             </section>
           )}
 
-          {deep && solo && guest && (
+          {deep && solo && guest && tells(deep.features) && (
             <section aria-labelledby="features-heading" class="finding">
               <h2 id="features-heading">Solo or with a guest</h2>
               <p class="lead-line">
@@ -193,7 +202,7 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             </section>
           )}
 
-          {deep && deep.ageByYear.length > 1 && (
+          {deep && (tells(deep.ageByYear) || (deep.ageLink && Math.abs(deep.ageLink.r) >= 0.15)) && (
             <section aria-labelledby="age-heading" class="finding">
               <h2 id="age-heading">How old they were</h2>
               {deep.ageLink && (
@@ -228,7 +237,7 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             </section>
           )}
 
-          {deep && deep.axes.length > 0 && deep.axes.some((a) => a.count > 0) && (
+          {deep && tells(deep.axes) && (
             <section aria-labelledby="axes-heading" class="finding">
               <h2 id="axes-heading">What you rate highest</h2>
               {axisLead && (

@@ -55,6 +55,7 @@ function library(): TrackFact[] {
       genres: [],
       plays: 0,
       axes: { production: null, songwriting: null, lyrics: null, performance: null },
+      gut: null,
     });
   }
   return facts;
@@ -122,5 +123,24 @@ describe('favouriteScore', () => {
 
   it('keeps an unrated but much played track in the running', () => {
     expect(favouriteScore(null, 150, 200)).toBeGreaterThan(favouriteScore(70, 0, 200));
+  });
+});
+
+describe('discover, beyond the obvious', () => {
+  it('notices when titles in capitals score higher', () => {
+    const facts = library().map((f, i) => (i % 3 === 0 ? { ...f, title: `LOUD ${i}`, score: f.score + 12 } : { ...f, title: `Quiet ${i}` }));
+    const caps = discover(facts, { limit: 40 }).find((f) => f.key === 'title:caps');
+    expect(caps?.headline).toMatch(/^Songs titled in capitals average \d+, \d+ points above the rest$/);
+  });
+
+  it('finds whose music the gut overrates', () => {
+    // Considered scores as they are; the quick gut score runs 15 high for artist0 only.
+    const facts = library().map((f) => ({
+      ...f,
+      axes: { production: 8, songwriting: 8, lyrics: 8, performance: 8 },
+      gut: f.score + (f.credits[0]!.id === 'artist0' ? 15 : 0) + ((Number(f.id.slice(1)) % 5) - 2),
+    }));
+    const gut = discover(facts, { limit: 40 }).find((f) => f.key === 'gut:artist:artist0');
+    expect(gut?.headline).toBe('Your gut overrates Artist0');
   });
 });
