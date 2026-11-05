@@ -111,6 +111,34 @@ const searched = q.trim().length >= MIN_QUERY_LENGTH;
       history.replaceState(null, '', url);
     }, 150);
   });
+
+  // Arrow keys walk the results: down from the box into them, up and down
+  // between them, up from the first (or Escape) back to the box.
+  const links = () => {
+    const seen = new Set<string>();
+    return [...root.querySelectorAll<HTMLAnchorElement>('[data-results] a[href]')].filter((a) => {
+      if (seen.has(a.href) || a.getClientRects().length === 0) return false;
+      seen.add(a.href);
+      return true;
+    });
+  };
+  root.addEventListener('keydown', (event) => {
+    if (!['ArrowDown', 'ArrowUp', 'Escape'].includes(event.key)) return;
+    const all = links();
+    const target = event.target as HTMLElement;
+    if (target === input) {
+      if (event.key === 'ArrowDown' && all.length) {
+        event.preventDefault();
+        all[0]!.focus();
+      }
+      return;
+    }
+    const at = all.findIndex((a) => a === target || a.href === (target as HTMLAnchorElement).href);
+    if (at < 0) return;
+    event.preventDefault();
+    if (event.key === 'Escape' || (event.key === 'ArrowUp' && at === 0)) input.focus();
+    else all[Math.max(0, Math.min(all.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))]!.focus();
+  });
 </script>
 
 <style>
