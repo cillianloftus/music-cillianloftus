@@ -6,6 +6,8 @@
  * not thereby a pop song); ?beneath=1 counts its subgenres too.
  */
 import Base from '../../layouts/Base.astro';
+import Findings from '../../components/Findings.astro';
+import { discover, trackFacts } from '../../lib/discover';
 import AlbumCard from '../../components/AlbumCard.astro';
 import ResultList from '../../components/ResultList.astro';
 import { hueOf } from '../../lib/art/playlist';
@@ -22,7 +24,9 @@ if (!genre) return Astro.rewrite('/404');
 const user = Astro.locals.user;
 const viewerId = user?.id ?? (await ownerId());
 const [albums, trackIds] = await Promise.all([genreAlbums(id, viewerId, 18, deep), genreTopTracks(id, viewerId, 10, deep)]);
-const tracks = await hydrateTracks(trackIds, viewerId);
+const [tracks, genreFacts] = await Promise.all([hydrateTracks(trackIds, viewerId), viewerId && !deep ? trackFacts(viewerId, { genreId: id }) : Promise.resolve([])]);
+// What stands out within the genre: who makes your favourite of it, which era, and so on.
+const genreFindings = discover(genreFacts, { genreId: id, limit: 6 }).filter((f) => f.kind !== 'habit');
 
 const family = genre.ancestors[0]?.name ?? genre.name;
 const hue = hueOf(family);
@@ -114,6 +118,15 @@ const list = (items: string[]) =>
         <section aria-labelledby="tracks-heading">
           <h2 id="tracks-heading">Best tracks</h2>
           <ResultList results={tracks} />
+        </section>
+      )
+    }
+
+    {
+      genreFindings.length > 0 && (
+        <section aria-labelledby="standout-heading">
+          <h2 id="standout-heading">What stands out</h2>
+          <Findings findings={genreFindings} />
         </section>
       )
     }

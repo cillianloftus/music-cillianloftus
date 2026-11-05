@@ -80,7 +80,7 @@ interface Row {
 }
 
 /** Everything known about each rated track; one artist's when given. */
-export async function trackFacts(userId: string, scope: { artistId?: string; albumId?: string } = {}): Promise<TrackFact[]> {
+export async function trackFacts(userId: string, scope: { artistId?: string; albumId?: string; genreId?: string } = {}): Promise<TrackFact[]> {
   const { results } = await env.DB.prepare(
     `SELECT s.recording_id AS id, r.title, s.quality_score AS score, ax.rated_at, r.length_ms,
             g.id AS album_id, g.title AS album_title, g.type AS album_type,
@@ -111,9 +111,14 @@ export async function trackFacts(userId: string, scope: { artistId?: string; alb
                                   AND pc.artist_id = ?2 AND pc.role IN ('primary', 'featured')))
        AND (?3 IS NULL OR EXISTS (SELECT 1 FROM track at JOIN release ar ON ar.id = at.release_id
                                   WHERE at.recording_id = r.id AND ar.release_group_id = ?3))
+       -- A genre: tagged on the track, or on its album when the track has no genre of its own.
+       AND (?4 IS NULL OR EXISTS (SELECT 1 FROM genre_tag gt4 WHERE gt4.genre_id = ?4
+                                  AND ((gt4.entity_type = 'recording' AND gt4.entity_id = r.id)
+                                    OR (gt4.entity_type = 'release_group' AND gt4.entity_id = g.id
+                                        AND NOT EXISTS (SELECT 1 FROM genre_tag own WHERE own.entity_type = 'recording' AND own.entity_id = r.id)))))
      GROUP BY s.recording_id`,
   )
-    .bind(userId, scope.artistId ?? null, scope.albumId ?? null)
+    .bind(userId, scope.artistId ?? null, scope.albumId ?? null, scope.genreId ?? null)
     .all<Row>();
   const parse = <T,>(json: string | null): T[] => {
     try {
@@ -279,6 +284,8 @@ interface Options {
   artistId?: string;
   /** One album's page: groups by album, label, year and type say nothing there. */
   albumId?: string;
+  /** One genre's page: every track has the genre, so genre groups say nothing. */
+  genreId?: string;
   /** Smallest group worth a sentence. */
   minGroup?: number;
   limit?: number;
@@ -310,7 +317,7 @@ function groupsOf(facts: TrackFact[], opts: Options): Group[] {
         add(`credit:${c.family}`, `${c.id}:${c.role}`, f, `Tracks ${name} ${verb(c.role, c.label)}`, `/artist/${c.id}/as/${c.role}`);
       }
     }
-    for (const g of f.genres) add('genre', g.id, f, `Your ${g.name}`, `/genre/${g.id}`);
+    for (const g of f.genres) if (g.id !== opts.genreId) add('genre', g.id, f, `Your ${g.name}`, `/genre/${g.id}`);
     // On one album's page these are the same for every track.
     const whole = !opts.albumId;
     if (whole && f.label) add('label', f.label.toLowerCase(), f, `Releases on ${f.label}`);

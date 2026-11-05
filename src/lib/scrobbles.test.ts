@@ -166,6 +166,18 @@ describe('track facts', () => {
     expect(facts.find((f) => f.id === 'a2')).toMatchObject({ position: 2, size: 3, extra: false });
   });
 
+  it('narrows to a genre: the track’s own genre first, else its album’s', async () => {
+    const rock = await trackFacts('u-owner', { genreId: 'g-rock' });
+    // b2 is rock itself (on a bedroom-pop album); c1 takes rock from its album.
+    expect(rock.map((f) => f.id).sort()).toEqual(['b2', 'c1']);
+    const bedroom = await trackFacts('u-owner', { genreId: 'g-bedroom' });
+    expect(bedroom.map((f) => f.id)).toEqual(['b1']);
+  });
+
+  it('narrows to an album, deluxe tracks included', async () => {
+    expect((await trackFacts('u-owner', { albumId: 'rg-a' })).map((f) => f.id).sort()).toEqual(['a1', 'a2', 'a3', 'a4']);
+  });
+
   it('gives an artist their breakdown', async () => {
     const b = await artistBreakdown('u-owner', 'art-x');
     expect(b).toMatchObject({ rated: 6, best: { id: 'a4' }, worst: { id: 'a3' }, rank: { position: 1, of: 1 } });
