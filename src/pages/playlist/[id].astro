@@ -251,12 +251,37 @@ const summary = [
   }
 
   /* Spotify as one slim strip across the page, under the header. */
+  /* Label and status on the left, the action at the far end. */
   .spotify-strip :global(.spotify) {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: 'head status push';
     align-items: center;
-    justify-content: space-between;
     gap: var(--space-2) var(--space-5);
     padding: var(--space-3) var(--space-5);
+  }
+
+  .spotify-strip :global(.spotify .head) {
+    grid-area: head;
+  }
+
+  .spotify-strip :global(.spotify [role='status']),
+  .spotify-strip :global(.spotify > p) {
+    grid-area: status;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .spotify-strip :global(.spotify form[data-push]) {
+    grid-area: push;
+  }
+
+  @media (max-width: 40rem) {
+    .spotify-strip :global(.spotify) {
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        'head push'
+        'status status';
+    }
   }
 </style>

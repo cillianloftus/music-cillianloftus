@@ -31,7 +31,7 @@ const canPush = entity === 'recording' && configured && status && status.days_le
     {
       spotifyPlaylistId && (
         <a href={`https://open.spotify.com/playlist/${spotifyPlaylistId}`} rel="external">
-          Open in Spotify
+          Open<span class="visually-hidden"> in Spotify</span>
         </a>
       )
     }
