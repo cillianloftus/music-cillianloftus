@@ -151,7 +151,7 @@ async function deezerCandidate(name: string): Promise<Candidate | null> {
  * Genius's default avatar is skipped.
  */
 async function geniusCandidate(name: string): Promise<Candidate | null> {
-  const token = geniusToken();
+  const token = await geniusToken();
   if (!token) return null;
   const res = await fetch(`https://api.genius.com/search?${new URLSearchParams({ q: name })}`, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },

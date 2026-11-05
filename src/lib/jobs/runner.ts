@@ -7,6 +7,7 @@ import { enrichArtist } from '../artists';
 import { fillCreditsFromGenius } from '../genius';
 import { detectAnomalies } from '../review';
 import { fillFromDeezer } from '../sources/deezer';
+import { fillFromDiscogs } from '../sources/discogs';
 import { deriveAlbumGenres } from '../genres';
 import { ownerId } from '../auth/user';
 import { connection, spotifyFor } from '../spotify/client';
@@ -50,6 +51,8 @@ async function enrichImportedArtists(releaseGroupId: string): Promise<void> {
   // raised for review straight away rather than at night.
   await fillCreditsFromGenius({ albumId: releaseGroupId, budgetMs: 15_000 }).catch((error) => console.warn('Genius after import failed', error));
   await fillFromDeezer(releaseGroupId).catch((error) => console.warn('Deezer after import failed', error));
+  // Without a Discogs token this returns at once.
+  await fillFromDiscogs(releaseGroupId).catch((error) => console.warn('Discogs after import failed', error));
   await detectAnomalies().catch((error) => console.warn('Review check after import failed', error));
   await deriveAlbumGenres().catch((error) => console.warn('Genre derivation after import failed', error));
 }

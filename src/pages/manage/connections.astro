@@ -1,0 +1,322 @@
+---
+/**
+ * Outside services that need a key. Each says what it adds and where its
+ * key comes from; paste it and it is tried at once. A key set as a Worker
+ * secret shows as such and can't be changed here. Nothing that uses a
+ * service runs until it has its key, so wiring one in early is harmless.
+ */
+import Base from '../../layouts/Base.astro';
+import LinkIcon from '../../components/LinkIcon.astro';
+import { mask, SERVICES, states, stored } from '../../lib/connections';
+import { playsBySource } from '../../lib/scrobbles';
+import { formatRelative } from '../../lib/format';
+
+const user = Astro.locals.user!;
+const [state, plays, values] = await Promise.all([states(), playsBySource(user.id), Promise.all(SERVICES.map((s) => stored(s.id)))]);
+const services = SERVICES.map((s, i) => {
+  const have = values[i]!;
+  const complete = s.fields.every((f) => f.optional || have[f.key]);
+  const st = state.get(s.id) ?? null;
+  return { ...s, have, complete, state: st, plays: plays[s.id] ?? 0 };
+});
+const waiting = services.filter((s) => !s.complete).length;
+
+const flashFor = Astro.url.searchParams.get('service');
+const ok = Astro.url.searchParams.get('ok');
+const error = Astro.url.searchParams.get('error');
+const ICON: Record<string, string> = { lastfm: 'lastfm', listenbrainz: 'L', discogs: 'discogs', setlistfm: 'S', genius: 'genius' };
+// Password managers took these for logins; they are not.
+const quiet = { autocomplete: 'off', spellcheck: false, 'data-1p-ignore': '', 'data-lpignore': 'true', 'data-bwignore': '', 'data-form-type': 'other' };
+---
+
+<Base title="Connections">
+  <div class="wrap page">
+    <header>
+      <h1>Connections</h1>
+      <p class="muted">
+        {waiting === 0 ? 'Every service has its key.' : `${waiting} of ${services.length} still waiting for a key. Each one only adds; nothing breaks without it.`}
+      </p>
+    </header>
+
+    <ul class="services" role="list">
+      {
+        services.map((s) => (
+          <li id={s.id} class="service" data-state={s.complete ? (s.state?.status ?? 'unchecked') : 'waiting'}>
+            <div class="top">
+              <LinkIcon name={ICON[s.id] ?? s.id} />
+              <h2>{s.name}</h2>
+              <span class="pill">
+                {!s.complete ? 'Waiting for a key' : s.state?.status === 'failed' ? 'Not working' : s.state?.status === 'ok' ? 'Connected' : 'Not tried yet'}
+              </span>
+            </div>
+            <p>{s.gives}</p>
+
+            {flashFor === s.id && ok && (
+              <p class="flash flash--ok" role="status">
+                {ok}
+              </p>
+            )}
+            {flashFor === s.id && error && (
+              <p class="flash flash--error" role="alert">
+                {error}
+              </p>
+            )}
+            {!(flashFor === s.id) && s.state?.detail && (
+              <p class:list={['flash', s.state.status === 'ok' ? 'flash--ok' : 'flash--error']}>
+                {s.state.detail}
+                <span class="when"> · {formatRelative(s.state.checked_at)}</span>
+              </p>
+            )}
+
+            <form method="post" action="/api/write/connections" class="fields">
+              <input type="hidden" name="service" value={s.id} />
+              {s.fields.map((f) => {
+                const have = s.have[f.key];
+                return (
+                  <label>
+                    <span class="label">
+                      {f.label}
+                      {f.optional && <span class="muted"> · optional</span>}
+                    </span>
+                    {have?.from === 'secret' ? (
+                      <span class="fixed">
+                        Set as the Worker secret <code>{f.env}</code>
+                      </span>
+                    ) : (
+                      <input
+                        name={f.key}
+                        type="text"
+                        placeholder={have ? (f.secret ? `Saved ${mask(have.value)} · paste to replace` : have.value) : f.hint ?? `Paste the ${f.label.replace(/^[A-Z][a-z]/, (c) => c.toLowerCase())}`}
+                        {...quiet}
+                      />
+                    )}
+                  </label>
+                );
+              })}
+              <div class="actions">
+                <button class="button" type="submit" name="intent" value="save">
+                  Save and try it
+                </button>
+                {s.complete && (
+                  <button class="button button--quiet" type="submit" name="intent" value="check" formnovalidate>
+                    Try again
+                  </button>
+                )}
+                {s.complete && (s.id === 'lastfm' ? Boolean(s.have.username) : s.id === 'listenbrainz') && (
+                  <button class="button button--quiet" type="submit" name="intent" value="sync" formnovalidate>
+                    Sync now
+                  </button>
+                )}
+                {Object.values(s.have).some((v) => v.from === 'pasted') && (
+                  <button class="link-button" type="submit" name="intent" value="forget" formnovalidate>
+                    Forget
+                  </button>
+                )}
+              </div>
+            </form>
+
+            {(s.id === 'lastfm' || s.id === 'listenbrainz') && (s.plays > 0 || s.state?.synced_at) && (
+              <p class="muted small">
+                {s.plays.toLocaleString('en-GB')} plays of library tracks so far
+                {s.state?.synced_at && <> · last synced {formatRelative(s.state.synced_at)}</>}. Syncs nightly.
+              </p>
+            )}
+
+            <details class="how">
+              <summary>Where the key comes from</summary>
+              <p>
+                {s.steps}{' '}
+                <a href={s.keyUrl} rel="external noopener" target="_blank">
+                  Open {new URL(s.keyUrl).hostname.replace(/^www\./, '')}
+                  <span class="visually-hidden"> (opens in a new tab)</span>
+                </a>
+              </p>
+              <p class="muted small">
+                Or set it as a Worker secret instead: <code>npx wrangler secret put {s.fields[0]!.env}</code>
+                {s.fields.length > 1 && (
+                  <>
+                    {' '}
+                    (and <code>{s.fields.slice(1).map((f) => f.env).join(', ')}</code>)
+                  </>
+                )}
+                . A secret wins over a pasted key.
+              </p>
+            </details>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    --content-max: 52rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  .services {
+    display: grid;
+    gap: var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .service {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+    scroll-margin-top: 6rem;
+  }
+
+  .top {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .pill {
+    margin-left: auto;
+    padding: 0.2rem 0.65rem;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    white-space: nowrap;
+  }
+
+  [data-state='ok'] .pill {
+    background: color-mix(in srgb, oklch(0.7 0.16 150) 20%, transparent);
+    color: oklch(0.8 0.15 150);
+  }
+
+  [data-state='failed'] .pill {
+    background: color-mix(in srgb, oklch(0.65 0.18 30) 22%, transparent);
+    color: oklch(0.78 0.15 30);
+  }
+
+  .flash {
+    padding: var(--space-2) var(--space-3);
+    border-left: 3px solid var(--border);
+    font-size: var(--step--1);
+  }
+
+  .flash--ok {
+    border-color: oklch(0.7 0.16 150);
+  }
+
+  .flash--error {
+    border-color: oklch(0.65 0.18 30);
+  }
+
+  .when {
+    color: var(--text-muted);
+  }
+
+  .fields {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  @media (min-width: 40rem) {
+    .fields {
+      grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+      align-items: end;
+    }
+
+    .actions {
+      grid-column: 1 / -1;
+    }
+  }
+
+  label {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .label {
+    font-size: var(--step--1);
+    font-weight: 650;
+  }
+
+  input {
+    min-height: var(--target);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-s, 8px);
+    background: var(--surface-0, var(--bg));
+    color: var(--text);
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: var(--step--1);
+  }
+
+  .fixed {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .link-button {
+    margin-left: auto;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--step--1);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  .how summary {
+    width: fit-content;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .how p {
+    margin-top: var(--space-2);
+    max-width: 44rem;
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+  }
+</style>

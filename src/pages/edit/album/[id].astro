@@ -95,7 +95,7 @@ const links = await env.DB.prepare(
   .first<{ spotify_id: string | null; label_edited: number | null }>();
 const IGNORE = { autocomplete: 'off', 'data-1p-ignore': true, 'data-lpignore': 'true', 'data-bwignore': true, 'data-form-type': 'other' };
 const canRefresh = Boolean(sources && (sources.mb > 0 || sources.spotify));
-const hasGenius = Boolean(geniusToken());
+const hasGenius = Boolean(await geniusToken());
 const edited = new Set(overrides.results.map((o) => o.field));
 const genresValue = (manualGenres.results.length ? manualGenres.results : otherGenres.results).map((g) => g.name).join(', ');
 const date = album.first_release_date ?? '';

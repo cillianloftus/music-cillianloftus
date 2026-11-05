@@ -6,6 +6,7 @@
 import { env } from 'cloudflare:workers';
 import Base from '../../layouts/Base.astro';
 import { connection } from '../../lib/spotify/client';
+import { waitingCount } from '../../lib/connections';
 
 const user = Astro.locals.user!;
 const [counts, spotify] = await Promise.all([
@@ -20,6 +21,7 @@ const [counts, spotify] = await Promise.all([
     .first<{ review: number; failed: number; running: number; files: number; plays: number }>(),
   connection(user.id).catch(() => null),
 ]);
+const waiting = await waitingCount().catch(() => 0);
 
 type Tone = 'attention' | 'quiet';
 interface Item {
@@ -43,6 +45,7 @@ const ICONS = {
   genres: 'M12 7a3 3 0 1 0 0-.1M6 20a3 3 0 1 0 0-.1M18 20a3 3 0 1 0 0-.1M12 7v4m0 0l-5 5m5-5l5 5',
   weights: 'M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4',
   jobs: 'M4 6h16M4 12h10M4 18h6M17 15l2 2 3-4',
+  connections: 'M9 15l6-6M10 6l1.5-1.5a4.2 4.2 0 0 1 6 6L16 12M8 12l-1.5 1.5a4.2 4.2 0 0 0 6 6L14 18',
   backups: 'M5 7c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3zm0 0v10c0 1.7 3.1 3 7 3s7-1.3 7-3V7M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3',
 };
 
@@ -109,6 +112,13 @@ const groups: { heading: string; items: Item[] }[] = [
           : counts?.running
             ? { text: `${counts.running} running`, tone: 'quiet' }
             : null,
+      },
+      {
+        href: '/manage/connections',
+        title: 'Connections',
+        text: 'Keys for Last.fm, ListenBrainz, Discogs, setlist.fm and Genius. Paste one and it works.',
+        icon: ICONS.connections,
+        status: waiting ? { text: `${waiting} waiting for a key`, tone: 'attention' } : { text: 'All connected', tone: 'quiet' },
       },
       { href: '/manage/backups', title: 'Backups', text: 'Daily copies of every table, and how to restore one.', icon: ICONS.backups },
     ],

@@ -28,8 +28,8 @@ export interface Backup {
 
 /**
  * Tables a backup leaves out: SQLite and D1 internals, the search index
- * (derived, and rebuilt by its triggers as rows are restored) and Spotify
- * tokens (secrets; reconnecting is one click).
+ * (derived, and rebuilt by its triggers as rows are restored), Spotify
+ * tokens and pasted API keys (secrets; reconnecting is quick).
  */
 export function isExcluded(table: string): boolean {
   return (
@@ -37,7 +37,9 @@ export function isExcluded(table: string): boolean {
     table.startsWith('_cf_') ||
     table === 'd1_migrations' ||
     table.startsWith('search_index') ||
-    table === 'spotify_token'
+    table === 'spotify_token' ||
+    // Pasted API keys: secrets too.
+    table === 'connection_secret'
   );
 }
 

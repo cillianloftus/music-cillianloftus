@@ -311,34 +311,58 @@ export async function artistAppearances(
 export interface ArtistTrack {
   id: string;
   title: string;
-  quality_score: number;
-  personal_score: number;
+  quality_score: number | null;
+  personal_score: number | null;
   album_id: string | null;
   album_title: string | null;
   art_key: string | null;
+  /** Plays from listening history (Spotify export, Last.fm, ListenBrainz). */
+  plays: number;
 }
 
-/** An artist's best-rated recordings, as primary artist. */
+/**
+ * How much of a favourite a track is: the rating, balanced against how
+ * often it is played, each out of 100. Plays count on a log scale against
+ * the artist's most played track, so the hundredth play adds less than the
+ * tenth. Until there is any listening history for the artist it is the
+ * rating alone; a track played a lot but not yet rated still makes the list.
+ */
+export function favouriteScore(rating: number | null, plays: number, mostPlays: number): number {
+  if (mostPlays <= 0) return rating ?? 0;
+  const played = (Math.log1p(plays) / Math.log1p(mostPlays)) * 100;
+  if (rating === null) return played * 0.85;
+  return rating * 0.6 + played * 0.4;
+}
+
+/** An artist's favourite recordings, as primary artist: rated highly, played a lot, or both. */
 export async function artistTopTracks(artistId: string, viewerId: string | null, limit = 5): Promise<ArtistTrack[]> {
   const { results } = await env.DB.prepare(
-    `SELECT r.id, r.title, s.quality_score, s.personal_score,
-            ra.release_group_id AS album_id, g.title AS album_title,
+    `WITH theirs AS (
+       SELECT r.id, r.title, s.quality_score, s.personal_score,
+              (SELECT count(*) FROM play p WHERE p.user_id = ?1 AND p.recording_id = r.id) AS plays
+       FROM artist_credit c
+       JOIN recording r ON r.id = c.entity_id
+       LEFT JOIN v_recording_score s ON s.recording_id = r.id AND s.user_id = ?1
+       WHERE c.entity_type = 'recording' AND c.artist_id = ?2 AND c.role = 'primary'
+     )
+     SELECT t.*, ra.release_group_id AS album_id, g.title AS album_title,
             -- The cover it first came out under: a single's, before the album's.
-            coalesce((SELECT fa.art_key FROM v_recording_first_art fa WHERE fa.recording_id = r.id), x.art_key) AS art_key
-     FROM artist_credit c
-     JOIN recording r ON r.id = c.entity_id
-     JOIN v_recording_score s ON s.recording_id = r.id AND s.user_id = ?1
-     LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
+            coalesce((SELECT fa.art_key FROM v_recording_first_art fa WHERE fa.recording_id = t.id), x.art_key) AS art_key
+     FROM theirs t
+     LEFT JOIN v_recording_album ra ON ra.recording_id = t.id
      LEFT JOIN release_group g ON g.id = ra.release_group_id
      LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
      LEFT JOIN release x ON x.id = gc.release_id
-     WHERE c.entity_type = 'recording' AND c.artist_id = ?2 AND c.role = 'primary'
-     ORDER BY s.personal_score DESC, s.quality_score DESC, r.title
-     LIMIT ?3`,
+     WHERE t.quality_score IS NOT NULL OR t.plays > 0`,
   )
-    .bind(viewerId, artistId, limit)
+    .bind(viewerId, artistId)
     .all<ArtistTrack>();
-  return results;
+  const most = Math.max(0, ...results.map((t) => t.plays));
+  return results
+    .map((t) => ({ t, favour: favouriteScore(t.personal_score, t.plays, most) }))
+    .sort((a, b) => b.favour - a.favour || (b.t.quality_score ?? 0) - (a.t.quality_score ?? 0) || a.t.title.localeCompare(b.t.title))
+    .slice(0, limit)
+    .map(({ t }) => t);
 }
 
 export interface Collaborator {

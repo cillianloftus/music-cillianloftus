@@ -38,6 +38,7 @@ const home = appearances[0]?.album ?? null;
 const params = Astro.url.searchParams;
 const hasWriter = credits.some((c) => c.role === 'writer');
 const IGNORE = { autocomplete: 'off', 'data-1p-ignore': true, 'data-lpignore': 'true', 'data-bwignore': true, 'data-form-type': 'other' };
+const hasGenius = Boolean(await geniusToken());
 ---
 
 <Base title={`Edit ${track.title}`}>
@@ -84,7 +85,7 @@ const IGNORE = { autocomplete: 'off', 'data-1p-ignore': true, 'data-lpignore': '
 
     <CreditEditor entity="recording" id={id} credits={credits} byHand={byHand} defaultRole={hasWriter ? 'producer' : 'writer'}>
       {
-          !hasWriter && !byHand && home && geniusToken() && (
+          !hasWriter && !byHand && home && hasGenius && (
             <form method="post" action="/api/write/track/edit" class="lookup">
               <input type="hidden" name="id" value={id} />
               <input type="hidden" name="album" value={home.id} />

@@ -1,0 +1,163 @@
+---
+/**
+ * Patterns found in the ratings (src/lib/discover.ts), one card each: the
+ * finding as a sentence, the numbers behind it underneath. A finding about
+ * something with a page links there. The arrow says which way it goes;
+ * the words say it too, so colour is never the only cue.
+ */
+import type { Finding } from '../lib/discover';
+
+interface Props {
+  findings: Finding[];
+  /** How many to show before "More"; the rest wait one tap away. */
+  show?: number;
+}
+const { findings, show = findings.length } = Astro.props;
+const first = findings.slice(0, show);
+const more = findings.slice(show);
+---
+
+<ul class="findings" role="list">
+  {
+    first.map((f) => (
+      <li class:list={['finding', `finding--${f.tone}`, { 'finding--link': f.href }]}>
+        <span class="mark" aria-hidden="true">
+          {f.tone === 'up' ? '↑' : f.tone === 'down' ? '↓' : '∿'}
+        </span>
+        <p class="headline">{f.href ? <a href={f.href}>{f.headline}</a> : f.headline}</p>
+        <p class="detail">{f.detail}</p>
+      </li>
+    ))
+  }
+</ul>
+{
+  more.length > 0 && (
+    <details class="more">
+      <summary>{more.length} more</summary>
+      <ul class="findings" role="list">
+        {more.map((f) => (
+          <li class:list={['finding', `finding--${f.tone}`, { 'finding--link': f.href }]}>
+            <span class="mark" aria-hidden="true">
+              {f.tone === 'up' ? '↑' : f.tone === 'down' ? '↓' : '∿'}
+            </span>
+            <p class="headline">{f.href ? <a href={f.href}>{f.headline}</a> : f.headline}</p>
+            <p class="detail">{f.detail}</p>
+          </li>
+        ))}
+      </ul>
+    </details>
+  )
+}
+
+<style>
+  .findings {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .finding {
+    position: relative;
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr);
+    column-gap: var(--space-3);
+    row-gap: var(--space-1);
+    align-content: start;
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+  }
+
+  .finding--link:hover {
+    border-color: var(--accent);
+  }
+
+  .mark {
+    grid-row: span 2;
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-weight: 800;
+  }
+
+  .finding--up .mark {
+    background: color-mix(in srgb, oklch(0.7 0.16 150) 22%, transparent);
+    color: oklch(0.78 0.16 150);
+  }
+
+  .finding--down .mark {
+    background: color-mix(in srgb, oklch(0.65 0.18 30) 22%, transparent);
+    color: oklch(0.75 0.16 30);
+  }
+
+  .headline {
+    font-weight: 650;
+    line-height: 1.35;
+    text-wrap: pretty;
+  }
+
+  .headline a {
+    text-decoration: none;
+  }
+
+  /* The whole card is the link. */
+  .headline a::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+
+  .headline a:focus-visible {
+    outline: none;
+  }
+
+  .headline a:focus-visible::after {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .detail {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .more {
+    margin-top: var(--space-3);
+  }
+
+  .more summary {
+    width: fit-content;
+    margin-bottom: var(--space-3);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme='dark']) .finding--up .mark {
+      color: oklch(0.5 0.15 150);
+    }
+
+    :root:not([data-theme='dark']) .finding--down .mark {
+      color: oklch(0.5 0.17 30);
+    }
+  }
+
+  :global(:root[data-theme='light']) .finding--up .mark {
+    color: oklch(0.5 0.15 150);
+  }
+
+  :global(:root[data-theme='light']) .finding--down .mark {
+    color: oklch(0.5 0.17 30);
+  }
+</style>

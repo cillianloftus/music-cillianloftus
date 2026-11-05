@@ -12,6 +12,8 @@ import { deriveAlbumGenres } from './lib/genres';
 import { connection, spotifyFor } from './lib/spotify/client';
 import { linkAlbumsToSpotify } from './lib/spotify/link';
 import { detectAnomalies } from './lib/review';
+import { syncAllScrobbles } from './lib/scrobbles';
+import { fillAlbumsFromDiscogs } from './lib/sources/discogs';
 
 /** Must match the daily entry in wrangler.jsonc triggers.crons. */
 const DAILY_BACKUP = '0 4 * * *';
@@ -57,6 +59,9 @@ export default {
             ['Spotify album links', linkSpotifyAlbums],
             ['Writing credits from Genius', () => fillCreditsFromGenius({ budgetMs: 20_000 })],
             ['Labels and barcodes from Deezer', () => fillAlbumsFromDeezer({ budgetMs: 15_000 })],
+            // Each does nothing until its key is pasted on /manage/connections.
+            ['Scrobbles from Last.fm and ListenBrainz', () => syncAllScrobbles({ budgetMs: 25_000 })],
+            ['Release details from Discogs', () => fillAlbumsFromDiscogs({ budgetMs: 25_000 })],
           ] as const) {
             try {
               await task();

@@ -21,13 +21,15 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { credentials } from './connections';
 import { addRole, fillCredits, type CreditRole } from './credits';
 import { normaliseName, normaliseTitle } from './text';
 
 const API = 'https://api.genius.com';
 
-export function geniusToken(): string | null {
-  return (env as unknown as { GENIUS_ACCESS_TOKEN?: string }).GENIUS_ACCESS_TOKEN || null;
+/** The token, from the GENIUS_ACCESS_TOKEN secret or pasted on /manage/connections. */
+export async function geniusToken(): Promise<string | null> {
+  return (await credentials('genius'))?.token ?? null;
 }
 
 interface Hit {
@@ -164,7 +166,7 @@ export async function fillCreditsFromGenius({
   limit?: number;
   fetcher?: typeof fetch;
 }): Promise<{ looked: number; matched: number; added: number }> {
-  const token = geniusToken();
+  const token = await geniusToken();
   const report = { looked: 0, matched: 0, added: 0 };
   if (!token) return report;
   const deadline = Date.now() + budgetMs;

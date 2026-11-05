@@ -12,6 +12,15 @@ const marks: Record<string, { bg: string; fg: string; text: string }> = {
   genius: { bg: '#ffff64', fg: '#111', text: 'G' },
   musicbrainz: { bg: '#ba478f', fg: '#fff', text: 'MB' },
   wikipedia: { bg: '#e8e8e8', fg: '#111', text: 'W' },
+  discogs: { bg: '#333', fg: '#fff', text: 'D' },
+  lastfm: { bg: '#d51007', fg: '#fff', text: 'fm' },
+  instagram: { bg: '#c13584', fg: '#fff', text: 'IG' },
+  youtube: { bg: '#ff0033', fg: '#fff', text: '▶' },
+  x: { bg: '#111', fg: '#fff', text: 'X' },
+  bandcamp: { bg: '#1da0c3', fg: '#fff', text: 'B' },
+  soundcloud: { bg: '#ff5500', fg: '#fff', text: 'SC' },
+  tiktok: { bg: '#111', fg: '#fff', text: 'TT' },
+  facebook: { bg: '#1877f2', fg: '#fff', text: 'f' },
   website: { bg: 'var(--surface-2)', fg: 'var(--text)', text: '' },
 };
 const m = marks[name] ?? { bg: 'var(--surface-2)', fg: 'var(--text)', text: name.slice(0, 1).toUpperCase() };

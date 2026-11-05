@@ -4,6 +4,7 @@ import AlbumCard from '../../components/AlbumCard.astro';
 import Backdrop from '../../components/Backdrop.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import Score from '../../components/Score.astro';
+import LinkIcon from '../../components/LinkIcon.astro';
 import { ownerId } from '../../lib/auth/user';
 import {
   artist as getArtist,
@@ -14,6 +15,8 @@ import {
   redirectFor,
 } from '../../lib/catalogue';
 import { artistImages } from '../../lib/artist-images';
+import { artistBreakdown } from '../../lib/discover';
+import Findings from '../../components/Findings.astro';
 import { ageOf, artistAbout, artistGenres, lifeWords } from '../../lib/artists';
 import { groupCredits } from '../../lib/credits';
 import { formatPartialDate, yearOf } from '../../lib/dates';
@@ -27,7 +30,7 @@ if (!artist) {
 }
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const [albums, appearances, topTracks, collaborators, about, images, genres] = await Promise.all([
+const [albums, appearances, topTracks, collaborators, about, images, genres, breakdown] = await Promise.all([
   artistReleaseGroups(artist.id, viewerId),
   artistAppearances(artist.id),
   artistTopTracks(artist.id, viewerId, 5),
@@ -35,6 +38,7 @@ const [albums, appearances, topTracks, collaborators, about, images, genres] = a
   artistAbout(artist.id),
   artistImages(artist.id),
   artistGenres(artist.id),
+  viewerId ? artistBreakdown(viewerId, id) : Promise.resolve(null),
 ]);
 // Releases by kind, each newest first: the records, then the shorter ones.
 // Sections that earn their place: mixtapes get their own only when there
@@ -112,6 +116,33 @@ const span = years.length
 // Their credits beyond being the artist, by kind, in a panel beside the best tracks.
 const otherRoles = appearances.filter((a) => a.family !== 'artist');
 const roleFamilies = groupCredits(otherRoles, (r) => r).map((g) => ({ name: g.name, roles: g.items }));
+// About: the first paragraph or so of the bio, never a wall of text.
+const bioText = about.bio ? (about.bio.length > 700 ? `${about.bio.slice(0, about.bio.lastIndexOf('. ', 700) + 1 || 700)}` : about.bio) : null;
+const sentence = (items: string[]) => {
+  const words = items.slice(0, 6);
+  const text = words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words.at(-1)}` : (words[0] ?? '');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+};
+const LINK_NAMES: Record<string, string> = {
+  website: 'Website',
+  instagram: 'Instagram',
+  x: 'X',
+  youtube: 'YouTube',
+  tiktok: 'TikTok',
+  bandcamp: 'Bandcamp',
+  soundcloud: 'SoundCloud',
+  facebook: 'Facebook',
+  genius: 'Genius',
+};
+const links = [
+  ...about.urls.filter((u) => u.kind in LINK_NAMES).map((u) => ({ href: u.url, label: LINK_NAMES[u.kind]!, icon: u.kind })),
+  ...(about.spotify_id ? [{ href: `https://open.spotify.com/artist/${about.spotify_id}`, label: 'Spotify', icon: 'spotify' }] : []),
+  ...(about.mbid ? [{ href: `https://musicbrainz.org/artist/${about.mbid}`, label: 'MusicBrainz', icon: 'musicbrainz' }] : []),
+  ...(about.discogs_id ? [{ href: `https://www.discogs.com/artist/${about.discogs_id}`, label: 'Discogs', icon: 'discogs' }] : []),
+];
+// Album bars start a little below the lowest average, so close scores still differ visibly.
+const albumFloor = breakdown?.albums.length ? Math.max(0, Math.min(...breakdown.albums.map((x) => x.average)) - 15) : 0;
+const albumShare = (avg: number) => Math.max(6, Math.round(((avg - albumFloor) / Math.max(1, 100 - albumFloor)) * 100));
 const count = albums.length ? `${albums.length} ${albums.length === 1 ? 'release' : 'releases'}` : null;
 const facts = [
   active && count ? `${count} ${span}` : count,
@@ -268,8 +299,19 @@ const facts = [
         }
         </div>
         <div class="what">
-        {facts.length > 0 && <p class="facts">{facts.join(' · ')}</p>}
-      
+          {(average !== null || count) && (
+            <div class="verdict">
+              {average !== null && (
+                <span class="verdict-score">
+                  <Score quality={average} personal={null} size="l" />
+                </span>
+              )}
+              <span class="verdict-facts">
+                {average !== null && <span>Average of {rated.length} rated {rated.length === 1 ? 'release' : 'releases'}</span>}
+                {count && <span class="muted">{[active ? `${count} ${span}` : count, active ? null : span].filter(Boolean).join(' · ')}</span>}
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </header>
@@ -280,7 +322,7 @@ const facts = [
     {
           topTracks.length > 0 && (
             <section aria-labelledby="tracks-heading">
-              <h2 id="tracks-heading">Best tracks</h2>
+              <h2 id="tracks-heading">Favourites</h2>
               <ol class="tracks" role="list">
                 {topTracks.map((t, i) => (
                   <li>
@@ -293,6 +335,7 @@ const facts = [
                     <span class="track-text">
                       <a href={`/track/${t.id}`}>{t.title}</a>
                       {t.album_title && (t.album_id ? <a class="muted small album-link" href={`/album/${t.album_id}`}>{t.album_title}</a> : <span class="muted small">{t.album_title}</span>)}
+                      {t.plays > 0 && <span class="muted small tabular">{t.plays.toLocaleString('en-GB')} {t.plays === 1 ? 'play' : 'plays'}</span>}
                     </span>
                     <Score ranked quality={t.quality_score} personal={t.personal_score} size="m" />
                   </li>
@@ -327,6 +370,83 @@ const facts = [
             )
           }
         </div>
+      )
+    }
+
+    {
+      breakdown && (
+        <section class="breakdown" aria-labelledby="breakdown-heading">
+          <h2 id="breakdown-heading">Breakdown</h2>
+          <dl class="tiles">
+            <div>
+              <dt>Highest</dt>
+              <dd>
+                <span class="tile-value tabular">{Math.round(breakdown.best.score)}</span>
+                <a href={`/track/${breakdown.best.id}`}>{breakdown.best.title}</a>
+              </dd>
+            </div>
+            <div>
+              <dt>Lowest</dt>
+              <dd>
+                <span class="tile-value tabular">{Math.round(breakdown.worst.score)}</span>
+                <a href={`/track/${breakdown.worst.id}`}>{breakdown.worst.title}</a>
+              </dd>
+            </div>
+            <div>
+              <dt>Range</dt>
+              <dd>
+                <span class="tile-value tabular">{Math.round(breakdown.best.score - breakdown.worst.score)}</span>
+                <span>
+                  {breakdown.steadiness === 'steady' ? 'Steadier than most' : breakdown.steadiness === 'uneven' ? 'More uneven than most' : 'About as even as most'}
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt>Against your average</dt>
+              <dd>
+                <span class="tile-value tabular">
+                  {breakdown.versusLibrary >= 0 ? '+' : '−'}
+                  {Math.abs(Math.round(breakdown.versusLibrary))}
+                </span>
+                <span>Median {Math.round(breakdown.median)} over {breakdown.rated} tracks</span>
+              </dd>
+            </div>
+            {breakdown.rank && breakdown.rank.of > 1 && (
+              <div>
+                <dt>Rank</dt>
+                <dd>
+                  <span class="tile-value tabular">
+                    {breakdown.rank.position}
+                    <span class="of"> of {breakdown.rank.of}</span>
+                  </span>
+                  <a href="/artists">Among artists you’ve rated</a>
+                </dd>
+              </div>
+            )}
+          </dl>
+          {breakdown.albums.length > 1 && (
+            <>
+              <h3>Their releases, best first</h3>
+              <ol class="ranked-albums" role="list">
+                {breakdown.albums.map((a) => (
+                  <li>
+                    <span class="bar" style={`--share: ${albumShare(a.average)}%`} aria-hidden="true" />
+                    <a href={`/album/${a.id}`}>{a.title}</a>
+                    <span class="muted small tabular">
+                      {Math.round(a.average)} · {a.tracks} rated
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
+          {breakdown.findings.length > 0 && (
+            <>
+              <h3>What stands out</h3>
+              <Findings findings={breakdown.findings} />
+            </>
+          )}
+        </section>
       )
     }
 
@@ -373,16 +493,87 @@ const facts = [
     }
 
     {
-      artist.mbid && (
-        <p class="external">
-          <a href={`https://musicbrainz.org/artist/${artist.mbid}`} rel="external">
-            View on MusicBrainz
-          </a>
-        </p>
+      (about.bio || about.occupations.length > 0 || links.length > 0) && (
+        <section class="about" aria-labelledby="about-heading">
+          <h2 id="about-heading">About</h2>
+          <div class="about-grid">
+            {about.bio && (
+              <div class="bio">
+                <p>{bioText}</p>
+                {about.bio_url && (
+                  <p class="small">
+                    <a href={about.bio_url} rel="external noopener">
+                      More on Wikipedia
+                    </a>
+                  </p>
+                )}
+              </div>
+            )}
+            {(about.occupations.length > 0 || about.instruments.length > 0) && (
+              <dl class="does">
+                {about.occupations.length > 0 && (
+                  <div>
+                    <dt>Does</dt>
+                    <dd>{sentence(about.occupations)}</dd>
+                  </div>
+                )}
+                {about.instruments.length > 0 && (
+                  <div>
+                    <dt>Plays</dt>
+                    <dd>{sentence(about.instruments)}</dd>
+                  </div>
+                )}
+              </dl>
+            )}
+          </div>
+          {links.length > 0 && (
+            <ul class="links" role="list" aria-label="Elsewhere">
+              {links.map((l) => (
+                <li>
+                  <a href={l.href} rel="external noopener" target="_blank">
+                    <LinkIcon name={l.icon} />
+                    {l.label}
+                    <span class="visually-hidden"> (opens in a new tab)</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       )
     }
+
+    <div class="elsewhere" data-elsewhere={`/artist/${artist.id}/elsewhere`} aria-live="polite"></div>
   </div>
 </Base>
+
+<script>
+  // The outside view (Last.fm, setlist.fm) arrives after the page: a slow
+  // service never holds up the rest. Fetched when it is nearly in view.
+  const slot = document.querySelector<HTMLElement>('[data-elsewhere]');
+  if (slot) {
+    const load = async () => {
+      try {
+        const res = await fetch(slot.dataset.elsewhere!);
+        if (res.ok) slot.innerHTML = await res.text();
+      } catch {
+        /* Nothing to add. */
+      }
+    };
+    if ('IntersectionObserver' in window) {
+      const seen = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((e) => e.isIntersecting)) {
+            seen.disconnect();
+            void load();
+          }
+        },
+        { rootMargin: '600px' },
+      );
+      seen.observe(slot);
+    } else void load();
+  }
+</script>
 
 <script>
   // Queue the whole catalogue without leaving the page; the tray follows each album.
@@ -996,5 +1187,368 @@ const facts = [
   .manage-menu a:hover,
   .manage-menu button:hover {
     background: var(--surface-2);
+  }
+
+  /* The average, set like an album's score: large, with its basis beside it. */
+  .verdict {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .verdict-facts {
+    display: grid;
+    gap: 2px;
+    color: var(--text);
+    font-size: var(--step--1);
+  }
+
+  .verdict-score + .verdict-facts {
+    padding-left: var(--space-4);
+    border-left: 1px solid var(--border);
+  }
+
+  .verdict-facts .muted {
+    color: var(--text-muted);
+  }
+
+  .about-grid {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  @media (min-width: 60rem) {
+    .about-grid {
+      grid-template-columns: minmax(0, 1fr) 20rem;
+      column-gap: var(--space-7);
+      align-items: start;
+    }
+  }
+
+  .bio {
+    display: grid;
+    gap: var(--space-3);
+    max-width: 44rem;
+  }
+
+  .bio p:first-child {
+    line-height: 1.65;
+  }
+
+  .does {
+    display: grid;
+    gap: var(--space-4);
+    margin: 0;
+  }
+
+  .does dt {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .does dd {
+    margin: 2px 0 0;
+  }
+
+  .about .links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: var(--space-5) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .about .links a {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+    padding: 0 var(--space-4) 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .about .links a:hover {
+    border-color: var(--accent);
+  }
+
+  /* The fetched outside view: Last.fm and setlist.fm side by side when both. */
+  .elsewhere:empty {
+    display: none;
+  }
+
+  .elsewhere {
+    display: grid;
+    gap: var(--space-7);
+  }
+
+  @media (min-width: 60rem) {
+    .elsewhere {
+      grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+      align-items: start;
+    }
+  }
+
+  .elsewhere :global(.ext) {
+    display: grid;
+    gap: var(--space-3);
+    align-content: start;
+  }
+
+  .elsewhere :global(.ext h2) {
+    margin-bottom: var(--space-1);
+  }
+
+  .elsewhere :global(.ext h3) {
+    margin-top: var(--space-3);
+    font-size: var(--step-0);
+    font-weight: 650;
+  }
+
+  .elsewhere :global(.stats) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-6);
+    margin: 0;
+  }
+
+  .elsewhere :global(.stats dt) {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .elsewhere :global(.stats dd) {
+    margin: 0;
+    font-size: var(--step-2);
+    font-weight: 750;
+    letter-spacing: -0.02em;
+  }
+
+  .elsewhere :global(.chips) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .elsewhere :global(.chips a) {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.25rem;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  /* Similar artists already in the library stand out: they lead somewhere here. */
+  .elsewhere :global(.chips a.here) {
+    border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+    background: var(--surface-1);
+    color: var(--text);
+  }
+
+  .elsewhere :global(.chips a:hover) {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .elsewhere :global(.played),
+  .elsewhere :global(.shows) {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .elsewhere :global(.played li) {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-s, 6px);
+    isolation: isolate;
+  }
+
+  /* How often it is played, as a faint bar behind the title. */
+  .elsewhere :global(.played .bar) {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: -1;
+    width: var(--share);
+    border-radius: inherit;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+
+  .elsewhere :global(.played .count) {
+    margin-left: auto;
+  }
+
+  .elsewhere :global(.played a),
+  .elsewhere :global(.shows a) {
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .elsewhere :global(.played a:hover),
+  .elsewhere :global(.shows a:hover) {
+    text-decoration: underline;
+  }
+
+  .elsewhere :global(.shows li) {
+    display: grid;
+    grid-template-columns: 6.5rem minmax(0, 1fr);
+    column-gap: var(--space-3);
+    padding: var(--space-1) 0;
+  }
+
+  .elsewhere :global(.shows li > :last-child) {
+    grid-column: 2;
+  }
+
+  .elsewhere :global(.source) {
+    margin-top: var(--space-2);
+    color: var(--text-muted);
+  }
+
+  .elsewhere :global(.muted) {
+    color: var(--text-muted);
+  }
+
+  .elsewhere :global(.small) {
+    font-size: var(--step--1);
+  }
+
+  .breakdown {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .breakdown h2 {
+    margin-bottom: 0;
+  }
+
+  .breakdown h3 {
+    margin-top: var(--space-3);
+    font-size: var(--step-0);
+    font-weight: 650;
+  }
+
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  .tiles > div {
+    display: grid;
+    align-content: start;
+    gap: var(--space-1);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+  }
+
+  .tiles dt {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+  }
+
+  .tiles dd {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    min-width: 0;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .tiles dd > :not(.tile-value) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tiles a {
+    color: var(--text);
+    text-decoration: none;
+  }
+
+  .tiles a:hover {
+    text-decoration: underline;
+  }
+
+  .tile-value {
+    color: var(--text);
+    font-size: var(--step-3);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+  }
+
+  .tile-value .of {
+    color: var(--text-muted);
+    font-size: var(--step-0);
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+
+  .ranked-albums {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ranked-albums li {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-s, 6px);
+    isolation: isolate;
+  }
+
+  /* The average as a faint bar behind each title. */
+  .ranked-albums .bar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: -1;
+    width: var(--share);
+    border-radius: inherit;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+
+  .ranked-albums a {
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .ranked-albums a:hover {
+    text-decoration: underline;
+  }
+
+  .ranked-albums .muted {
+    margin-left: auto;
   }
 </style>

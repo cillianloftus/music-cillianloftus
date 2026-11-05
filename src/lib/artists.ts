@@ -237,12 +237,24 @@ export interface ArtistAbout {
   memberOf: { id: string; name: string }[];
   members: { id: string; name: string }[];
   sameAs: { id: string; name: string }[];
+  /** The opening of their Wikipedia article, and the article. */
+  bio: string | null;
+  bio_url: string | null;
+  /** What they do and play, from Wikidata ("rapper", "piano"). */
+  occupations: string[];
+  instruments: string[];
+  /** Where they are on the web: official site and profiles. */
+  urls: { kind: string; url: string }[];
+  mbid: string | null;
+  spotify_id: string | null;
+  discogs_id: string | null;
 }
 
 export async function artistAbout(artistId: string): Promise<ArtistAbout> {
-  const [row, aliases, links] = await env.DB.batch([
+  const [row, aliases, links, urls] = await env.DB.batch([
     env.DB.prepare(
-      `SELECT kind, begin_date, begin_precision, end_date, end_precision, area FROM artist WHERE id = ?`,
+      `SELECT kind, begin_date, begin_precision, end_date, end_precision, area, bio, bio_url, occupations, instruments, mbid, spotify_id, discogs_id
+       FROM artist WHERE id = ?`,
     ).bind(artistId),
     env.DB.prepare(
       `SELECT name, kind FROM artist_alias WHERE artist_id = ?
@@ -254,8 +266,23 @@ export async function artistAbout(artistId: string): Promise<ArtistAbout> {
        SELECT l.kind, 'in' AS dir, a.id, a.name FROM artist_link l JOIN artist a ON a.id = l.artist_id WHERE l.other_id = ?1
        ORDER BY 4`,
     ).bind(artistId),
+    env.DB.prepare(
+      `SELECT kind, url FROM artist_url WHERE artist_id = ?
+       ORDER BY CASE kind WHEN 'website' THEN 0 WHEN 'bandcamp' THEN 1 WHEN 'instagram' THEN 2 WHEN 'youtube' THEN 3 ELSE 4 END, kind`,
+    ).bind(artistId),
   ]);
-  const base = (row!.results[0] ?? {}) as Omit<ArtistAbout, 'aliases' | 'memberOf' | 'members' | 'sameAs'>;
+  const base = (row!.results[0] ?? {}) as Omit<ArtistAbout, 'aliases' | 'memberOf' | 'members' | 'sameAs' | 'occupations' | 'instruments' | 'urls'> & {
+    occupations?: string | null;
+    instruments?: string | null;
+  };
+  const list = (json: string | null | undefined): string[] => {
+    try {
+      const value = JSON.parse(json ?? '[]') as unknown;
+      return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+    } catch {
+      return [];
+    }
+  };
   const linkRows = links!.results as { kind: string; dir: 'in' | 'out'; id: string; name: string }[];
   const pick = (kind: string, dir?: 'in' | 'out') =>
     linkRows.filter((l) => l.kind === kind && (!dir || l.dir === dir)).map(({ id, name }) => ({ id, name }));
@@ -270,6 +297,14 @@ export async function artistAbout(artistId: string): Promise<ArtistAbout> {
     memberOf: pick('member_of', 'out'),
     members: pick('member_of', 'in'),
     sameAs: pick('same_person'),
+    bio: base.bio ?? null,
+    bio_url: base.bio_url ?? null,
+    occupations: list(base.occupations),
+    instruments: list(base.instruments),
+    urls: urls!.results as { kind: string; url: string }[],
+    mbid: base.mbid ?? null,
+    spotify_id: base.spotify_id ?? null,
+    discogs_id: base.discogs_id ?? null,
   };
 }
 

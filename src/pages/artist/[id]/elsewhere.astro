@@ -1,0 +1,102 @@
+---
+/**
+ * The artist page's outside view (Last.fm, setlist.fm), as an HTML
+ * fragment the page fetches once it has drawn. Empty when no service has a
+ * key or none knows the artist. Styled by the artist page.
+ */
+import { elsewhere } from '../../../lib/elsewhere';
+import { formatPartialDate } from '../../../lib/dates';
+
+export const partial = true;
+
+const data = await elsewhere(Astro.params.id!);
+const lastfm = data?.lastfm ?? null;
+const live = data?.live ?? null;
+Astro.response.headers.set('cache-control', 'private, max-age=600');
+
+const compact = new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 });
+const whole = (n: number) => n.toLocaleString('en-GB');
+---
+
+{
+  lastfm && (
+    <section class="ext" aria-labelledby="lastfm-heading">
+      <h2 id="lastfm-heading">Listening</h2>
+      <dl class="stats">
+        <div>
+          <dt>Listeners</dt>
+          <dd class="tabular">{compact.format(lastfm.listeners)}</dd>
+        </div>
+        <div>
+          <dt>Scrobbles</dt>
+          <dd class="tabular">{compact.format(lastfm.playcount)}</dd>
+        </div>
+        {lastfm.userPlaycount != null && (
+          <div>
+            <dt>Yours</dt>
+            <dd class="tabular">{whole(lastfm.userPlaycount)}</dd>
+          </div>
+        )}
+      </dl>
+      {lastfm.similarHere.length > 0 && (
+        <>
+          <h3>Similar</h3>
+          <ul class="chips" role="list">
+            {lastfm.similarHere.map((s) => (
+              <li>{s.id ? <a class="here" href={`/artist/${s.id}`}>{s.name}</a> : <a href={s.url} rel="external noopener">{s.name}</a>}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      {lastfm.tags.length > 0 && <p class="tags muted small">Tagged {lastfm.tags.join(', ')}</p>}
+      <p class="source small">
+        <a href={lastfm.url} rel="external noopener">On Last.fm</a>
+      </p>
+    </section>
+  )
+}
+
+{
+  live && (
+    <section class="ext" aria-labelledby="live-heading">
+      <h2 id="live-heading">On stage</h2>
+      {live.favouritesHere.length > 0 && (
+        <>
+          <h3>
+            Played most <span class="muted small">over their last {live.counted} shows</span>
+          </h3>
+          <ol class="played" role="list">
+            {live.favouritesHere.map((f) => (
+              <li>
+                <span class="bar" style={`--share: ${Math.round((f.shows / live.counted) * 100)}%`} aria-hidden="true" />
+                {f.trackId ? <a href={`/track/${f.trackId}`}>{f.title}</a> : <span>{f.title}</span>}
+                {f.cover && <span class="muted small"> cover</span>}
+                <span class="muted small tabular count">{f.shows}</span>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+      <h3>Recent shows</h3>
+      <ul class="shows" role="list">
+        {live.shows.map((s) => (
+          <li>
+            <span class="tabular muted small date">{formatPartialDate(s.date, 'day')}</span>
+            <a href={s.url} rel="external noopener">{s.venue}</a>
+            <span class="muted small">
+              {s.city}, {s.country}
+              {s.tour ? ` · ${s.tour}` : ''}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {live.url && (
+        <p class="source small">
+          <a href={live.url} rel="external noopener">
+            All {whole(live.total)} on setlist.fm
+          </a>
+        </p>
+      )}
+    </section>
+  )
+}
