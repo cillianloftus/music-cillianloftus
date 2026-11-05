@@ -1,0 +1,119 @@
+---
+/**
+ * An album's scores in running order: a bar a track, coloured by score,
+ * with each third's average drawn across it, which is what the line above
+ * it reads from. Unrated tracks leave an empty slot. The tracklist below
+ * carries every number, so this is a picture of it, not a second copy:
+ * one label for screen readers, and the bars stay out of the tab order.
+ */
+import { scoreHue } from '../lib/format';
+import type { AlbumShape } from '../lib/shape';
+
+interface Props {
+  tracks: { id: string; position: string | number; title: string; score: number | null }[];
+  shape: AlbumShape;
+  albumTitle: string;
+}
+
+const { tracks, shape, albumTitle } = Astro.props;
+const n = tracks.length;
+const SLOT = Math.min(28, Math.max(10, Math.floor(560 / n)));
+const BAR = Math.min(22, SLOT - 2);
+const W = n * SLOT;
+const H = 72;
+const scores = tracks.map((t) => t.score).filter((s): s is number => s !== null);
+const floor = Math.max(0, Math.floor((Math.min(...scores) - 10) / 10) * 10);
+const top = Math.max(100, Math.ceil(Math.max(...scores) / 10) * 10);
+const y = (s: number) => H - ((s - floor) / (top - floor)) * (H - 4);
+const cut1 = Math.floor(n / 3);
+const cut2 = n - cut1;
+const spans: [number, number][] = [
+  [0, cut1],
+  [cut1, cut2],
+  [cut2, n],
+];
+const fill = (s: number) => (s > 100 ? 'oklch(var(--score-l) 0.17 305)' : `oklch(var(--score-l) var(--score-c) ${scoreHue(s)})`);
+/** A bar with a rounded top and a square foot on the baseline. */
+const barPath = (x: number, s: number) => {
+  const t = y(s);
+  const r = Math.min(4, BAR / 2, H - t);
+  return `M${x},${H} V${t + r} Q${x},${t} ${x + r},${t} H${x + BAR - r} Q${x + BAR},${t} ${x + BAR},${t + r} V${H} Z`;
+};
+const summary = `${albumTitle}, track by track: ${shape.thirds.map((t, i) => `${['first', 'middle', 'last'][i]} third ${t === null ? 'unrated' : Math.round(t)}`).join(', ')}`;
+---
+
+<figure class="shape">
+  {shape.words && <figcaption>{shape.words}</figcaption>}
+  <svg viewBox={`0 0 ${W} ${H + 2}`} width={W} role="img" aria-label={summary}>
+    {
+      tracks.map((t, i) => (
+        <a href={`/track/${t.id}`} tabindex="-1" class="track">
+          <title>{t.score === null ? `${t.position}. ${t.title}: not rated` : `${t.position}. ${t.title}: ${Math.round(t.score)}`}</title>
+          <rect class="hit" x={i * SLOT} y="0" width={SLOT} height={H} />
+          {t.score === null ? (
+            <rect class="unrated" x={i * SLOT + (SLOT - BAR) / 2} y={H - 3} width={BAR} height="3" rx="1.5" />
+          ) : (
+            <path d={barPath(i * SLOT + (SLOT - BAR) / 2, t.score)} style={`fill: ${fill(t.score)}`} />
+          )}
+        </a>
+      ))
+    }
+    {
+      spans.map(([from, to], i) =>
+        shape.thirds[i] === null ? null : (
+          <line class="third" x1={from * SLOT + 2} x2={to * SLOT - 2} y1={y(shape.thirds[i]!)} y2={y(shape.thirds[i]!)} aria-hidden="true" />
+        ),
+      )
+    }
+    <line class="baseline" x1="0" x2={W} y1={H} y2={H} aria-hidden="true" />
+  </svg>
+</figure>
+
+<style>
+  .shape {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  figcaption {
+    color: var(--text-muted);
+  }
+
+  svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+
+  .hit {
+    fill: transparent;
+  }
+
+  .track path {
+    transition: opacity 0.15s;
+  }
+
+  .track:hover path {
+    opacity: 0.75;
+  }
+
+  .unrated {
+    fill: var(--border);
+  }
+
+  /* Each third's average: what the line above compares. */
+  .third {
+    stroke: var(--text);
+    stroke-width: 2;
+    stroke-linecap: round;
+    opacity: 0.55;
+    pointer-events: none;
+  }
+
+  .baseline {
+    stroke: var(--border);
+    stroke-width: 1;
+  }
+</style>

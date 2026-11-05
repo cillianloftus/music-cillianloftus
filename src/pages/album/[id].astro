@@ -1,6 +1,8 @@
 ---
 import Base from '../../layouts/Base.astro';
 import Findings from '../../components/Findings.astro';
+import AlbumShape from '../../components/AlbumShape.astro';
+import { hasShape, shapeOf } from '../../lib/shape';
 import { discover, trackFacts } from '../../lib/discover';
 import { albumScores, albumStanding } from '../../lib/standing';
 import CoverArt from '../../components/CoverArt.astro';
@@ -140,6 +142,15 @@ const best = bestTrack && (album.rated_track_count ?? 0) > 1 ? { title: bestTrac
 
 // The first track on the standard edition not rated yet, for "Rate the next".
 const nextUnrated = (standardTracks.length ? standardTracks : tracks).find((t) => t.quality_score == null) ?? null;
+
+// How its scores run from first track to last, on the standard edition.
+const runningOrder = (standardTracks.length ? standardTracks : tracks).map((t) => ({
+  id: t.recording_id,
+  position: discs.length > 1 ? `${t.disc}.${t.position}` : t.position,
+  title: t.title,
+  score: t.quality_score ?? null,
+}));
+const shape = hasShape(runningOrder.map((t) => t.score)) ? shapeOf(runningOrder.map((t) => t.score)) : null;
 
 const similar = await similarAlbums(album.id, viewerId, 10);
 const albumArtistKey = album.credits.map((c) => c.artist_id).join();
@@ -419,10 +430,11 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     }
 
     {
-      albumFindings.length > 0 && (
+      (albumFindings.length > 0 || shape) && (
         <section class="standout" aria-labelledby="standout-heading">
           <h2 id="standout-heading">What stands out</h2>
-          <Findings findings={albumFindings} />
+          {shape && <AlbumShape tracks={runningOrder} shape={shape} albumTitle={album.title} />}
+          {albumFindings.length > 0 && <Findings findings={albumFindings} />}
         </section>
       )
     }
@@ -748,6 +760,16 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   h2 {
     font-size: var(--step-1);
     margin-bottom: var(--space-4);
+  }
+
+  /* The shape, then what the ratings say. */
+  .standout {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .standout h2 {
+    margin-bottom: 0;
   }
 
   .disc {

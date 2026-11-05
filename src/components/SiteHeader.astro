@@ -70,7 +70,8 @@ const next = theme === 'dark' ? 'light' : 'dark';
       class="icon-button search-link"
       href="/search"
       aria-label="Search"
-      title="Search"
+      aria-keyshortcuts="/"
+      title="Search (/)"
       aria-current={path === '/search' ? 'page' : undefined}
     >
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -120,6 +121,22 @@ const next = theme === 'dark' ? 'light' : 'dark';
 </header>
 
 <script>
+  // "/" goes to search from anywhere, as on most sites with one; on the
+  // search page it puts the cursor in the box. Never while typing.
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('input, textarea, select, [contenteditable]')) return;
+    event.preventDefault();
+    const box = document.querySelector<HTMLInputElement>('input[name="q"]');
+    if (box) {
+      box.focus();
+      box.select();
+    } else {
+      location.href = '/search';
+    }
+  });
+
   // Progressive enhancement: without JS the form posts and reloads.
   const form = document.querySelector<HTMLFormElement>('[data-theme-toggle]');
   form?.addEventListener('submit', (event) => {
