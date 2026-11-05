@@ -153,6 +153,14 @@ export interface TrackRow extends Partial<Score> {
   credits: CreditPart[];
 }
 
+/** An album's standard edition, track by track: what its score is taken from. */
+export async function standardTracklist(albumId: string, viewerId: string | null): Promise<TrackRow[]> {
+  const row = await env.DB.prepare(`SELECT release_id FROM v_release_group_canonical WHERE release_group_id = ?`)
+    .bind(albumId)
+    .first<{ release_id: string | null }>();
+  return row?.release_id ? tracklist(row.release_id, viewerId) : [];
+}
+
 export async function tracklist(releaseId: string, viewerId: string | null): Promise<TrackRow[]> {
   const { results } = await env.DB.prepare(
     `SELECT t.id, t.disc, t.position, coalesce(t.title_on_release, rec.title) AS title,

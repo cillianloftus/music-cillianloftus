@@ -13,9 +13,11 @@ interface Props {
   tracks: { id: string; position: string | number; title: string; score: number | null }[];
   shape: AlbumShape;
   albumTitle: string;
+  /** One track to pick out (on a track's own page): the rest step back. */
+  highlight?: string;
 }
 
-const { tracks, shape, albumTitle } = Astro.props;
+const { tracks, shape, albumTitle, highlight } = Astro.props;
 const n = tracks.length;
 const SLOT = Math.min(28, Math.max(10, Math.floor(560 / n)));
 const BAR = Math.min(22, SLOT - 2);
@@ -44,10 +46,10 @@ const summary = `${albumTitle}, track by track: ${shape.thirds.map((t, i) => `${
 
 <figure class="shape">
   {shape.words && <figcaption>{shape.words}</figcaption>}
-  <svg viewBox={`0 0 ${W} ${H + 2}`} width={W} role="img" aria-label={summary}>
+  <svg viewBox={`0 0 ${W} ${H + (highlight ? 11 : 2)}`} width={W} role="img" aria-label={summary}>
     {
       tracks.map((t, i) => (
-        <a href={`/track/${t.id}`} tabindex="-1" class="track">
+        <a href={`/track/${t.id}`} tabindex="-1" class:list={['track', { picked: t.id === highlight, faded: highlight && t.id !== highlight }]}>
           <title>{t.score === null ? `${t.position}. ${t.title}: not rated` : `${t.position}. ${t.title}: ${Math.round(t.score)}`}</title>
           <rect class="hit" x={i * SLOT} y="0" width={SLOT} height={H} />
           {t.score === null ? (
@@ -66,6 +68,12 @@ const summary = `${albumTitle}, track by track: ${shape.thirds.map((t, i) => `${
       )
     }
     <line class="baseline" x1="0" x2={W} y1={H} y2={H} aria-hidden="true" />
+    {
+      highlight &&
+        tracks.map((t, i) =>
+          t.id === highlight ? <path class="marker" d={`M${i * SLOT + SLOT / 2 - 4},${H + 9} L${i * SLOT + SLOT / 2},${H + 4} L${i * SLOT + SLOT / 2 + 4},${H + 9} Z`} aria-hidden="true" /> : null,
+        )
+    }
   </svg>
 </figure>
 
@@ -101,6 +109,16 @@ const summary = `${albumTitle}, track by track: ${shape.thirds.map((t, i) => `${
 
   .unrated {
     fill: var(--border);
+  }
+
+  /* On a track's page: the others step back, and a marker points it out. */
+  .faded path,
+  .faded .unrated {
+    opacity: 0.35;
+  }
+
+  .marker {
+    fill: var(--text);
   }
 
   /* Each third's average: what the line above compares. */

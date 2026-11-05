@@ -12,7 +12,9 @@ import ScorePanel from '../../components/ScorePanel.astro';
 import { groupCredits } from '../../lib/credits';
 import LinkIcon from '../../components/LinkIcon.astro';
 import { ownerId } from '../../lib/auth/user';
-import { genresFor, redirectFor } from '../../lib/catalogue';
+import { genresFor, redirectFor, standardTracklist } from '../../lib/catalogue';
+import AlbumShape from '../../components/AlbumShape.astro';
+import { hasShape, shapeOf } from '../../lib/shape';
 import { yearOf } from '../../lib/dates';
 import { describeDuration, formatDuration, roleLabel } from '../../lib/format';
 import { playCounts, trackListening } from '../../lib/history';
@@ -75,6 +77,10 @@ const playCount = plays.get(id) ?? 0;
 const listening = user && playCount > 0 ? await trackListening(user.id, id) : null;
 // Where it stands among everything else rated: only the notable is said.
 const standingLines = viewerId && track.quality_score !== null ? standing(await libraryFacts(viewerId), id) : [];
+// Where it falls in its album's run, when the album has a shape to show.
+const homeTracks = home ? await standardTracklist(home.album.id, viewerId) : [];
+const homeOrder = homeTracks.map((t) => ({ id: t.recording_id, position: t.position, title: t.title, score: t.quality_score ?? null }));
+const homeShape = homeOrder.some((t) => t.id === id) && hasShape(homeOrder.map((t) => t.score)) ? shapeOf(homeOrder.map((t) => t.score)) : null;
 const monthName = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' });
 const dayName = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Dublin' });
 const SOURCE: Record<string, string> = { spotify_export: 'Spotify', lastfm: 'Last.fm', listenbrainz: 'ListenBrainz', manual: 'by hand' };
@@ -191,6 +197,16 @@ function ordinalOf(n: number): string {
             labelEvery={Math.max(1, Math.ceil(listening.months.length / 8))}
             bars={listening.months.map((m) => ({ label: monthName(m.month), value: m.count, detail: `${m.count} ${m.count === 1 ? 'play' : 'plays'}` }))}
           />
+        </section>
+      )
+    }
+    {
+      home && homeShape && (
+        <section aria-labelledby="place-heading">
+          <h2 id="place-heading">
+            Track {homeOrder.findIndex((t) => t.id === id) + 1} of {homeOrder.length} on <a href={`/album/${home.album.id}`}>{home.album.title}</a>
+          </h2>
+          <AlbumShape tracks={homeOrder} shape={homeShape} albumTitle={home.album.title} highlight={id} />
         </section>
       )
     }
