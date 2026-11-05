@@ -24,9 +24,14 @@
 	"observability": {
 		"enabled": true
 	},
+	// One database and one image store for every version of the site: the
+	// dev server reads and writes production's directly ("remote": true),
+	// so anything imported or rated locally is live at once. LOCAL_DB=1 or
+	// PERSIST_TO=<dir> runs on a local copy instead (astro.config.mjs).
 	"d1_databases": [
 		{
 			"binding": "DB",
+			"remote": true,
 			"database_name": "music-db",
 			"database_id": "1def270c-5393-4f62-a025-eec092098626"
 		}
@@ -40,6 +45,7 @@
 	"r2_buckets": [
 		{
 			"binding": "ASSET_STORE",
+			"remote": true,
 			"bucket_name": "music-assets"
 		}
 	],
