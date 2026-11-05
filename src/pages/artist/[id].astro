@@ -52,8 +52,26 @@ const ofType = (t: string) => albums.filter((a) => a.type === t).length;
 const ownMixtapes = ofType('mixtape') >= ENOUGH;
 const ownEps = ofType('ep') >= ENOUGH;
 const ownSingles = ofType('single') >= ENOUGH;
-// Only the kinds actually present, so one stray single isn't 'EPs and singles'.
-const smallTypes = [...(ownEps ? [] : ['ep']), ...(ownSingles ? [] : ['single'])].filter((t) => ofType(t) > 0);
+// EPs and singles: each its own shelf when there are enough of both; when
+// only one kind has enough, the few of the other join it; when neither
+// does, they share one shelf. Named for what is actually on it.
+const eps = ofType('ep');
+const singles = ofType('single');
+const shortShelves: { key: string; heading: string; types: string[] }[] =
+  ownEps && ownSingles
+    ? [
+        { key: 'eps', heading: 'EPs', types: ['ep'] },
+        { key: 'singles', heading: 'Singles', types: ['single'] },
+      ]
+    : eps + singles === 0
+      ? []
+      : [
+          {
+            key: 'short',
+            heading: !eps ? 'Singles' : !singles ? 'EPs' : ownSingles ? 'Singles and EPs' : 'EPs and singles',
+            types: ['ep', 'single'],
+          },
+        ];
 const SHELVES = [
   {
     key: 'albums',
@@ -61,12 +79,7 @@ const SHELVES = [
     types: ownMixtapes ? ['album'] : ['album', 'mixtape'],
   },
   ...(ownMixtapes ? [{ key: 'mixtapes', heading: 'Mixtapes', types: ['mixtape'] }] : []),
-  // A few EPs and singles share one shelf; EPs come before singles either way.
-  ...(smallTypes.length
-    ? [{ key: 'short', heading: smallTypes.length === 2 ? 'EPs and singles' : smallTypes[0] === 'ep' ? 'EPs' : 'Singles', types: smallTypes }]
-    : []),
-  ...(ownEps ? [{ key: 'eps', heading: 'EPs', types: ['ep'] }] : []),
-  ...(ownSingles ? [{ key: 'singles', heading: 'Singles', types: ['single'] }] : []),
+  ...shortShelves,
   { key: 'live', heading: 'Live', types: ['live'] },
   { key: 'compilations', heading: 'Compilations', types: ['compilation'] },
   { key: 'soundtracks', heading: 'Soundtracks', types: ['soundtrack'] },
@@ -526,7 +539,7 @@ const facts = [
     {
       (about.bio || about.occupations.length > 0 || links.length > 0) && (
         <section class="about" aria-labelledby="about-heading">
-          <h2 id="about-heading">About</h2>
+          <h2 id="about-heading">{about.bio || about.occupations.length > 0 ? 'About' : 'Links'}</h2>
           <div class="about-grid">
             {about.bio && (
               <div class="bio">
