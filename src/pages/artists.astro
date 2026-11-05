@@ -37,7 +37,13 @@ const SORTS: [RosterSort, string][] = [
   ['name', 'A–Z'],
 ];
 // Person or group stays behind the scenes; how much of theirs is here is what helps.
-const meta = (a: RosterArtist) => (a.releases ? `${a.releases} ${a.releases === 1 ? 'release' : 'releases'}` : '');
+// Releases of their own; for an artist here only through features, how many of their tracks are rated.
+const meta = (a: RosterArtist) =>
+  a.releases
+    ? `${a.releases} ${a.releases === 1 ? 'release' : 'releases'}`
+    : a.rated
+      ? `${a.rated} ${a.rated === 1 ? 'track' : 'tracks'} rated`
+      : '';
 ---
 
 <Base title="Artists" description={`All ${artists.length} artists in the catalogue.`}>

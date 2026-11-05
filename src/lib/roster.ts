@@ -21,10 +21,20 @@ export interface RosterArtist {
 
 export type RosterSort = 'score' | 'rated' | 'releases' | 'recent' | 'name';
 
+/**
+ * For ordering by score: each artist's average is pulled toward the
+ * viewer's overall track average as if this many more tracks had been
+ * rated at it. One rated track barely moves an artist from the norm;
+ * twenty mostly speak for themselves. The average shown is never adjusted.
+ */
+export const EVIDENCE = 4;
+
 export async function roster(viewerId: string | null, sort: RosterSort = 'score'): Promise<RosterArtist[]> {
   const orders: Record<RosterSort, string> = {
     // Rated artists by score; the unrated after, by how much of theirs is here.
-    score: 'average IS NULL, average DESC, rated DESC, releases DESC, a.sort_name COLLATE NOCASE',
+    // The score is weighed by how much stands behind it (see EVIDENCE), so one
+    // 99 does not outrank twenty tracks averaging 95.
+    score: `average IS NULL, (scored.average * scored.rated + norm.mean * ${EVIDENCE}) / (scored.rated + ${EVIDENCE}) DESC, rated DESC, releases DESC, a.sort_name COLLATE NOCASE`,
     rated: 'rated DESC, average DESC, releases DESC, a.sort_name COLLATE NOCASE',
     releases: 'releases DESC, average IS NULL, average DESC, a.sort_name COLLATE NOCASE',
     recent: 'a.created_at DESC, a.sort_name COLLATE NOCASE',
@@ -47,6 +57,7 @@ export async function roster(viewerId: string | null, sort: RosterSort = 'score'
             coalesce(scored.rated, 0) AS rated,
             scored.average
      FROM artist a JOIN own ON own.artist_id = a.id
+     CROSS JOIN (SELECT avg(quality_score) AS mean FROM v_recording_score WHERE user_id = ?1) norm
      -- Grouped once, not a scoring subquery per artist (thousands of them).
      LEFT JOIN (SELECT c.artist_id, avg(s.quality_score) AS average, count(*) AS rated
                 FROM artist_credit c JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
