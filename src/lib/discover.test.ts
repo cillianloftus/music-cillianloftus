@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { favouriteScore } from './catalogue';
 import { decodeDefinition } from './query/builder';
 import { definitionSchema } from './query/schema';
-import { discover, pearson, separation, type Credit, type TrackFact } from './discover';
+import { discover, discoveries, pValue, pearson, separation, type Credit, type TrackFact } from './discover';
 
 const credit = (id: string, role: string, extra: Partial<Credit> = {}): Credit => ({
   id,
@@ -159,5 +159,51 @@ describe('playlists from findings', () => {
 
   it('offers none for the low end', () => {
     expect(discover(library(), { limit: 30 }).filter((f) => f.tone === 'down').every((f) => !f.playlist)).toBe(true);
+  });
+});
+
+describe('telling patterns from chance', () => {
+  it('gives the usual p-values', () => {
+    expect(pValue(1.96, Infinity)).toBeCloseTo(0.05, 3);
+    // Few degrees of freedom: the same t is weaker evidence.
+    expect(pValue(1.96, 4)).toBeGreaterThan(0.1);
+    expect(pValue(0, 10)).toBeCloseTo(1, 5);
+  });
+
+  it('keeps what survives Benjamini–Hochberg across every test run', () => {
+    // Out of 100 tests, 0.0004 clears 1/100 × 0.1; 0.03 alone would not.
+    expect(discoveries([0.0004, 0.03], 100)).toEqual([true, false]);
+    // The same 0.03 among just two tests does.
+    expect(discoveries([0.0004, 0.03], 2)).toEqual([true, true]);
+  });
+
+  it('finds nothing in a big library of noise, however many producers it has', () => {
+    const rand = random(11);
+    const noise: TrackFact[] = library().flatMap((f, copy) =>
+      Array.from({ length: 6 }, (_, k) => ({
+        ...f,
+        id: `${f.id}-${copy}-${k}`,
+        title: `Song ${copy}-${k}`,
+        albumId: `album-${(copy * 6 + k) % 60}`,
+        score: 60 + rand() * 40,
+        lengthMs: null,
+        ratedAt: null,
+        credits: [credit(`artist${k}`, 'primary'), credit(`prod${Math.floor(rand() * 120)}`, 'producer')],
+      })),
+    );
+    expect(noise.length).toBe(480);
+    // Tested one at a time, as before the correction, noise does throw up "patterns".
+    const producers = new Map<string, number[]>();
+    for (const f of noise) producers.set(f.credits[1]!.id, [...(producers.get(f.credits[1]!.id) ?? []), f.score]);
+    const naive = [...producers].filter(([id, scores]) => {
+      if (scores.length < 4) return false;
+      const { diff, t } = separation(scores, noise.filter((f) => f.credits[1]!.id !== id).map((f) => f.score));
+      return Math.abs(diff) >= 3 && Math.abs(t) >= 2;
+    });
+    expect(naive.length).toBeGreaterThan(0);
+    // With the correction, none of it is presented as clear; at most a hunch.
+    const found = discover(noise, { limit: 40 }).filter((f) => f.p !== undefined);
+    expect(found.filter((f) => f.confidence === 'clear')).toEqual([]);
+    expect(found.every((f) => f.confidence === 'hunch')).toBe(true);
   });
 });

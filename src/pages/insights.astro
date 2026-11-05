@@ -104,8 +104,8 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             <h2 id="patterns-heading">What stands out</h2>
             <p class="muted lead">
               {facts.length < 60
-                ? `Found in ${facts.length} rated ${facts.length === 1 ? 'track' : 'tracks'}. Only patterns too strong to be chance are shown, so more appear as you rate.`
-                : `Every producer, writer, genre, label, decade, guest and habit tested against the rest of ${facts.length.toLocaleString('en-GB')} rated tracks. Only the strongest are shown.`}
+                ? `Found in ${facts.length} rated ${facts.length === 1 ? 'track' : 'tracks'}. Hunches could still be chance; they firm up or fade as you rate more.`
+                : `Every producer, writer, genre, label, decade, guest and habit tested against the rest of ${facts.length.toLocaleString('en-GB')} rated tracks, allowing for how many were tested. Hunches could still be chance.`}
             </p>
             {findings.length > 0 ? <Findings findings={findings} show={9} /> : <p>Nothing stands out yet.</p>}
           </section>

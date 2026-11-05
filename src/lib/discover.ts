@@ -197,11 +197,56 @@ export function pearson(xs: number[], ys: number[]): number | null {
  * How clearly a group differs from the rest: Welch's t. Each side's
  * variance has a floor, so three identical 100s don't read as certainty.
  */
-export function separation(group: number[], rest: number[]): { diff: number; t: number } {
+export function separation(group: number[], rest: number[]): { diff: number; t: number; df: number } {
   const floor = 9;
   const diff = mean(group) - mean(rest);
   const se = Math.sqrt(Math.max(variance(group), floor) / group.length + Math.max(variance(rest), floor) / rest.length);
-  return { diff, t: diff / se };
+  // The smaller side's degrees of freedom: cautious, as Welch's are at least this.
+  return { diff, t: diff / se, df: Math.max(1, Math.min(group.length, rest.length) - 1) };
+}
+
+/** erfc(x), to about 1e-7 (Numerical Recipes' Chebyshev fit). */
+function erfc(x: number): number {
+  const z = Math.abs(x);
+  const t = 1 / (1 + z / 2);
+  const r =
+    t *
+    Math.exp(
+      -z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))),
+    );
+  return x >= 0 ? r : 2 - r;
+}
+
+/**
+ * Two-sided p-value for a t statistic. Wallace's approximation turns t
+ * with df degrees of freedom into a normal z, so small groups get the
+ * heavier tails they should.
+ */
+export function pValue(t: number, df: number): number {
+  const z = df === Infinity ? Math.abs(t) : (Math.abs(t) * (1 - 1 / (4 * df))) / Math.sqrt(1 + (t * t) / (2 * df));
+  return Math.min(1, erfc(z / Math.SQRT2));
+}
+
+/**
+ * Benjamini–Hochberg: of tests with these p-values, out of `tests` run in
+ * all, which to keep so that about q of what is kept is chance. Thousands of
+ * groups are tested on a big library; without this, dozens of "patterns"
+ * would be noise.
+ */
+export function discoveries(ps: number[], tests: number, q = 0.1): boolean[] {
+  const order = ps.map((p, i) => ({ p, i })).sort((a, b) => a.p - b.p);
+  let cut = -1;
+  order.forEach(({ p }, k) => {
+    if (p <= ((k + 1) / Math.max(tests, ps.length)) * q) cut = k;
+  });
+  const keep = ps.map(() => false);
+  for (let k = 0; k <= cut; k++) keep[order[k]!.i] = true;
+  return keep;
+}
+
+/** Counts every test run, so the correction knows how many chances there were. */
+interface Tally {
+  tests: number;
 }
 
 /** A correlation's t, so trends and group differences rank on one scale. */
@@ -226,6 +271,14 @@ export interface Finding {
   href?: string;
   /** For a group that scores high: a playlist of it, on the query page. */
   playlist?: string;
+  /** The test's p-value, where there was one; judged against all tests run. */
+  p?: number;
+  /**
+   * 'clear' survives the correction for every test run; 'hunch' would pass
+   * on its own but not among so many, and may firm up or fade with more
+   * ratings. Findings without a test are 'clear'.
+   */
+  confidence?: 'clear' | 'hunch';
 }
 
 const round = (x: number) => Math.round(x);
@@ -291,6 +344,8 @@ interface Options {
   genreId?: string;
   /** Smallest group worth a sentence. */
   minGroup?: number;
+  /** Include hunches after the clear findings (default true). */
+  hunches?: boolean;
   limit?: number;
 }
 
@@ -376,7 +431,7 @@ function groupsOf(facts: TrackFact[], opts: Options): Group[] {
 }
 
 /** How a group's tracks compare with all the others, as a finding when they clearly differ. */
-function groupFindings(facts: TrackFact[], opts: Options): Finding[] {
+function groupFindings(facts: TrackFact[], opts: Options, tally: Tally): Finding[] {
   const min = opts.minGroup ?? (facts.length > 60 ? 4 : 3);
   const all = facts.map((f) => f.score);
   const out: Finding[] = [];
@@ -391,10 +446,12 @@ function groupFindings(facts: TrackFact[], opts: Options): Finding[] {
   for (const g of groups) {
     if (g.kind.startsWith('credit:') && artistSets.some((s) => same(s, g.ids))) continue;
     const rest = facts.filter((f) => !g.ids.has(f.id)).map((f) => f.score);
-    const { diff, t } = separation(g.scores, rest);
-    if (Math.abs(diff) < 3 || Math.abs(t) < 2) continue;
+    const { diff, t, df } = separation(g.scores, rest);
+    tally.tests++;
+    if (Math.abs(diff) < 3 || Math.abs(t) < 1.5) continue;
     const m = mean(g.scores);
     out.push({
+      p: pValue(t, df),
       key: `${g.kind}:${g.key}`,
       kind: g.kind.split(':')[0]!,
       headline: `${g.subject} average ${round(m)}, ${points(diff)} ${above(diff)} the rest`,
@@ -477,7 +534,7 @@ function measures(facts: TrackFact[], opts: Options): Measure[] {
   ];
 }
 
-function trendFindings(facts: TrackFact[], opts: Options): Finding[] {
+function trendFindings(facts: TrackFact[], opts: Options, tally: Tally): Finding[] {
   const out: Finding[] = [];
   for (const m of measures(facts, opts)) {
     const pairs = facts.map((f) => [m.value(f), f.score] as const).filter((p): p is readonly [number, number] => p[0] !== null);
@@ -486,10 +543,12 @@ function trendFindings(facts: TrackFact[], opts: Options): Finding[] {
       pairs.map((p) => p[0]),
       pairs.map((p) => p[1]),
     );
-    if (r === null || Math.abs(r) < 0.2) continue;
+    if (r === null) continue;
+    tally.tests++;
+    if (Math.abs(r) < 0.2) continue;
     const t = correlationT(r, pairs.length);
-    if (Math.abs(t) < 2) continue;
     out.push({
+      p: pValue(t, pairs.length - 2),
       key: `trend:${m.key}`,
       kind: 'trend',
       headline: r > 0 ? m.rises : m.falls,
@@ -552,7 +611,7 @@ function axisFindings(facts: TrackFact[]): Finding[] {
  * usual. The usual gap is calibration and already allowed for; this finds
  * who or what it is biased about.
  */
-function gutFindings(facts: TrackFact[], opts: Options): Finding[] {
+function gutFindings(facts: TrackFact[], opts: Options, tally: Tally): Finding[] {
   const both = facts.filter((f) => f.gut !== null);
   if (both.length < 10) return [];
   const gap = new Map(both.map((f) => [f.id, f.gut! - f.score]));
@@ -561,9 +620,11 @@ function gutFindings(facts: TrackFact[], opts: Options): Finding[] {
     if (!['artist', 'genre', 'credit:production', 'decade', 'type'].includes(g.kind) || g.ids.size < 4 || both.length - g.ids.size < 4) continue;
     const inside = [...g.ids].map((id) => gap.get(id)!);
     const outside = both.filter((f) => !g.ids.has(f.id)).map((f) => gap.get(f.id)!);
-    const { diff, t } = separation(inside, outside);
-    if (Math.abs(diff) < 4 || Math.abs(t) < 2) continue;
+    const { diff, t, df } = separation(inside, outside);
+    tally.tests++;
+    if (Math.abs(diff) < 4 || Math.abs(t) < 1.5) continue;
     out.push({
+      p: pValue(t, df),
       key: `gut:${g.kind}:${g.key}`,
       kind: 'gut',
       headline: `Your gut ${diff > 0 ? 'overrates' : 'underrates'} ${g.subject.replace(/^Tracks |^Your /, '').replace(/’s tracks$/, '')}`,
@@ -578,7 +639,7 @@ function gutFindings(facts: TrackFact[], opts: Options): Finding[] {
 }
 
 /** The track that doesn't fit its album: far below or above the rest of it. */
-function oddOnes(facts: TrackFact[]): Finding[] {
+function oddOnes(facts: TrackFact[], tally: Tally): Finding[] {
   const byAlbum = new Map<string, TrackFact[]>();
   for (const f of facts) if (f.albumId && !f.extra) byAlbum.set(f.albumId, [...(byAlbum.get(f.albumId) ?? []), f]);
   const out: Finding[] = [];
@@ -589,8 +650,11 @@ function oddOnes(facts: TrackFact[]): Finding[] {
       const diff = f.score - mean(rest);
       const spread = Math.max(sd(rest), 3);
       const z = diff / spread;
-      if (Math.abs(diff) < 10 || Math.abs(z) < 2.5) continue;
+      tally.tests++;
+      if (Math.abs(diff) < 10 || Math.abs(z) < 2) continue;
       out.push({
+        // How far one track sits from the rest of a small sample: t-like, with the rest's df.
+        p: pValue(z / Math.sqrt(1 + 1 / rest.length), rest.length - 1),
         key: `odd:${f.id}`,
         kind: 'odd',
         headline:
@@ -658,26 +722,35 @@ function consistency(facts: TrackFact[]): Finding[] {
  */
 export function discover(facts: TrackFact[], opts: Options = {}): Finding[] {
   if (facts.length < 6) return [];
-  const all = [
-    ...groupFindings(facts, opts),
-    ...trendFindings(facts, opts),
-    ...axisFindings(facts),
-    ...gutFindings(facts, opts),
-    ...oddOnes(facts),
-    ...(opts.artistId ? [] : consistency(facts)),
-  ].sort((a, b) => b.strength - a.strength);
+  const tally: Tally = { tests: 0 };
+  const tested = [...groupFindings(facts, opts, tally), ...trendFindings(facts, opts, tally), ...gutFindings(facts, opts, tally), ...oddOnes(facts, tally)];
+  // Of everything tested, only what survives the false-discovery correction.
+  const keep = discoveries(
+    tested.map((f) => f.p!),
+    tally.tests,
+  );
+  const clear = [...tested.filter((_, i) => keep[i]), ...axisFindings(facts), ...(opts.artistId ? [] : consistency(facts))]
+    .map((f) => ({ ...f, confidence: 'clear' as const }))
+    .sort((a, b) => b.strength - a.strength);
+  const hunches = opts.hunches === false ? [] : tested
+    .filter((f, i) => !keep[i] && f.p! < 0.05)
+    .map((f) => ({ ...f, confidence: 'hunch' as const }))
+    .sort((a, b) => a.p! - b.p!);
   const limit = opts.limit ?? 12;
   const picked: Finding[] = [];
   const perKind = new Map<string, number>();
-  for (const f of all) {
-    if (picked.length >= limit) break;
-    if ((perKind.get(f.kind) ?? 0) >= 2) continue;
-    picked.push(f);
-    perKind.set(f.kind, (perKind.get(f.kind) ?? 0) + 1);
-  }
-  for (const f of all) {
-    if (picked.length >= limit) break;
-    if (!picked.includes(f)) picked.push(f);
+  // Clear findings first, two of a kind before a third; hunches after.
+  for (const tier of [clear, hunches]) {
+    for (const f of tier) {
+      if (picked.length >= limit) break;
+      if ((perKind.get(f.kind) ?? 0) >= 2) continue;
+      picked.push(f);
+      perKind.set(f.kind, (perKind.get(f.kind) ?? 0) + 1);
+    }
+    for (const f of tier) {
+      if (picked.length >= limit) break;
+      if (!picked.includes(f)) picked.push(f);
+    }
   }
   return picked;
 }

@@ -20,12 +20,15 @@ const more = findings.slice(show);
 <ul class="findings" role="list">
   {
     first.map((f) => (
-      <li class:list={['finding', `finding--${f.tone}`, { 'finding--link': f.href }]}>
+      <li class:list={['finding', `finding--${f.tone}`, { 'finding--link': f.href, 'finding--hunch': f.confidence === 'hunch' }]}>
         <span class="mark" aria-hidden="true">
           {f.tone === 'up' ? '↑' : f.tone === 'down' ? '↓' : '∿'}
         </span>
         <p class="headline">{f.href ? <a href={f.href}>{f.headline}</a> : f.headline}</p>
-        <p class="detail">{f.detail}</p>
+        <p class="detail">
+          {f.confidence === 'hunch' && <span class="hunch">Hunch</span>}
+          {f.detail}
+        </p>
         {f.playlist && (
           <a class="playlist" href={f.playlist}>
             Make it a playlist
@@ -41,12 +44,15 @@ const more = findings.slice(show);
       <summary>{more.length} more</summary>
       <ul class="findings" role="list">
         {more.map((f) => (
-          <li class:list={['finding', `finding--${f.tone}`, { 'finding--link': f.href }]}>
+          <li class:list={['finding', `finding--${f.tone}`, { 'finding--link': f.href, 'finding--hunch': f.confidence === 'hunch' }]}>
             <span class="mark" aria-hidden="true">
               {f.tone === 'up' ? '↑' : f.tone === 'down' ? '↓' : '∿'}
             </span>
             <p class="headline">{f.href ? <a href={f.href}>{f.headline}</a> : f.headline}</p>
-            <p class="detail">{f.detail}</p>
+            <p class="detail">
+              {f.confidence === 'hunch' && <span class="hunch">Hunch</span>}
+              {f.detail}
+            </p>
             {f.playlist && (
               <a class="playlist" href={f.playlist}>
                 Make it a playlist
@@ -87,7 +93,7 @@ const more = findings.slice(show);
   }
 
   .mark {
-    grid-row: span 2;
+    grid-row: 1 / span 3;
     display: grid;
     place-items: center;
     width: 2rem;
@@ -133,6 +139,23 @@ const more = findings.slice(show);
   .headline a:focus-visible::after {
     outline: 3px solid var(--focus);
     outline-offset: 2px;
+  }
+
+  /* Not yet clear of chance: said so in words, not just a shade. */
+  .hunch {
+    display: inline-block;
+    margin-right: var(--space-1);
+    padding: 0 0.45rem;
+    border: 1px dashed var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+  }
+
+  .finding--hunch {
+    border-style: dashed;
   }
 
   .detail {
