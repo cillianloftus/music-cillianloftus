@@ -56,6 +56,8 @@
   --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
 
+  /* The sticky header's height; the backdrop starts this far up so its colour shows through. */
+  --header-height: 4.25rem;
   --step--1: clamp(0.82rem, 0.8rem + 0.1vw, 0.875rem);
   --step-0: clamp(1rem, 0.96rem + 0.2vw, 1.0625rem);
   --step-1: clamp(1.2rem, 1.12rem + 0.4vw, 1.375rem);

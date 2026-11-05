@@ -112,9 +112,9 @@ const image = src ?? (artKey ? `/${artKey}/250.jpg` : null);
      header shows the colour through it instead of a pale band. */
   .backdrop {
     position: absolute;
-    inset: calc(-1 * var(--header-height, 3.6rem)) 0 auto;
+    inset: calc(-1 * (var(--header-height) + 1px)) 0 auto;
     z-index: -1;
-    height: calc(var(--backdrop-height) + var(--header-height, 3.6rem));
+    height: calc(var(--backdrop-height) + var(--header-height) + 1px);
     max-width: none;
     pointer-events: none;
     /* Fades into the page rather than ending in an edge. Gradients only:
