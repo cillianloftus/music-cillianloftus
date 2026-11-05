@@ -10,11 +10,11 @@ import { ownerId } from '../lib/auth/user';
 import { scoreHue } from '../lib/format';
 import { insights } from '../lib/insights';
 import { deeperInsights, favourite, type Band } from '../lib/insights-deeper';
-import { discover, trackFacts } from '../lib/discover';
+import { discover, libraryFacts } from '../lib/discover';
 import Findings from '../components/Findings.astro';
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const [data, deep, facts] = viewerId ? await Promise.all([insights(viewerId), deeperInsights(viewerId), trackFacts(viewerId)]) : [null, null, []];
+const [data, deep, facts] = viewerId ? await Promise.all([insights(viewerId), deeperInsights(viewerId), libraryFacts(viewerId)]) : [null, null, []];
 // Whatever stands out in the ratings right now, found rather than chosen.
 const findings = discover(facts, { limit: 18 });
 const h = data?.headline;
@@ -90,12 +90,15 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             </div>
           </dl>
 
-          {findings.length > 0 && (
-            <section aria-labelledby="patterns-heading">
-              <h2 id="patterns-heading">What stands out</h2>
-              <Findings findings={findings} show={9} />
-            </section>
-          )}
+          <section aria-labelledby="patterns-heading">
+            <h2 id="patterns-heading">What stands out</h2>
+            <p class="muted lead">
+              {facts.length < 60
+                ? `Found in ${facts.length} rated ${facts.length === 1 ? 'track' : 'tracks'}. Only patterns too strong to be chance are shown, so more appear as you rate.`
+                : `Every producer, writer, genre, label, decade, guest and habit tested against the rest of ${facts.length.toLocaleString('en-GB')} rated tracks. Only the strongest are shown.`}
+            </p>
+            {findings.length > 0 ? <Findings findings={findings} show={9} /> : <p>Nothing stands out yet.</p>}
+          </section>
 
           <section aria-labelledby="spread-heading">
             <h2 id="spread-heading">How scores spread</h2>

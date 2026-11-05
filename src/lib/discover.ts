@@ -77,7 +77,7 @@ interface Row {
 }
 
 /** Everything known about each rated track; one artist's when given. */
-export async function trackFacts(userId: string, scope: { artistId?: string } = {}): Promise<TrackFact[]> {
+export async function trackFacts(userId: string, scope: { artistId?: string; albumId?: string } = {}): Promise<TrackFact[]> {
   const { results } = await env.DB.prepare(
     `SELECT s.recording_id AS id, r.title, s.quality_score AS score, ax.rated_at, r.length_ms,
             g.id AS album_id, g.title AS album_title, g.type AS album_type,
@@ -106,9 +106,11 @@ export async function trackFacts(userId: string, scope: { artistId?: string } = 
      WHERE s.user_id = ?1
        AND (?2 IS NULL OR EXISTS (SELECT 1 FROM artist_credit pc WHERE pc.entity_type = 'recording' AND pc.entity_id = r.id
                                   AND pc.artist_id = ?2 AND pc.role IN ('primary', 'featured')))
+       AND (?3 IS NULL OR EXISTS (SELECT 1 FROM track at JOIN release ar ON ar.id = at.release_id
+                                  WHERE at.recording_id = r.id AND ar.release_group_id = ?3))
      GROUP BY s.recording_id`,
   )
-    .bind(userId, scope.artistId ?? null)
+    .bind(userId, scope.artistId ?? null, scope.albumId ?? null)
     .all<Row>();
   const parse = <T,>(json: string | null): T[] => {
     try {
@@ -136,6 +138,33 @@ export async function trackFacts(userId: string, scope: { artistId?: string } = 
     plays: r.plays ?? 0,
     axes: { production: r.production, songwriting: r.songwriting, lyrics: r.lyrics, performance: r.performance },
   }));
+}
+
+/**
+ * The whole library's facts, cached in KV under a key that changes whenever
+ * a rating, a play or the catalogue does, so it is never stale and the
+ * home page doesn't gather every track's facts on every visit.
+ */
+export async function libraryFacts(userId: string): Promise<TrackFact[]> {
+  const stamp = await env.DB.prepare(
+    `SELECT (SELECT max(rated_at) FROM rating WHERE user_id = ?1) AS rated,
+            (SELECT count(*) FROM rating WHERE user_id = ?1) AS ratings,
+            (SELECT count(*) FROM play WHERE user_id = ?1) AS plays,
+            (SELECT count(*) FROM artist_credit) AS credits,
+            (SELECT count(*) FROM genre_tag) AS genres`,
+  )
+    .bind(userId)
+    .first<Record<string, string | number | null>>();
+  const key = `facts:v1:${userId}:${Object.values(stamp ?? {}).join(':')}`;
+  try {
+    const hit = await env.CACHE.get<TrackFact[]>(key, 'json');
+    if (hit) return hit;
+  } catch {
+    /* No cache: work them out. */
+  }
+  const facts = await trackFacts(userId);
+  await env.CACHE.put(key, JSON.stringify(facts), { expirationTtl: 7 * 24 * 60 * 60 }).catch(() => {});
+  return facts;
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +272,8 @@ interface Group {
 interface Options {
   /** One artist's page: the artist is a given, so groups by artist are left out. */
   artistId?: string;
+  /** One album's page: groups by album, label, year and type say nothing there. */
+  albumId?: string;
   /** Smallest group worth a sentence. */
   minGroup?: number;
   limit?: number;
@@ -275,14 +306,16 @@ function groupsOf(facts: TrackFact[], opts: Options): Group[] {
       }
     }
     for (const g of f.genres) add('genre', g.id, f, `Your ${g.name}`, `/genre/${g.id}`);
-    if (f.label) add('label', f.label.toLowerCase(), f, `Releases on ${f.label}`);
+    // On one album's page these are the same for every track.
+    const whole = !opts.albumId;
+    if (whole && f.label) add('label', f.label.toLowerCase(), f, `Releases on ${f.label}`);
     const year = yearOf(f.released);
-    if (year) {
+    if (whole && year) {
       if (opts.artistId) add('year', String(year), f, `Their ${year} tracks`);
       else add('decade', String(Math.floor(year / 10) * 10), f, `Music from the ${Math.floor(year / 10) * 10}s`);
     }
     if (opts.artistId && f.albumId) add('album', f.albumId, f, f.albumTitle ?? 'One album', `/album/${f.albumId}`);
-    if (f.albumType) {
+    if (whole && f.albumType) {
       const type: Record<string, string> = { album: 'Album tracks', ep: 'EP tracks', single: 'Singles', mixtape: 'Mixtape tracks', live: 'Live recordings', compilation: 'Compilation tracks', soundtrack: 'Soundtrack songs' };
       add('type', f.albumType, f, type[f.albumType] ?? f.albumType);
     }

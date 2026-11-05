@@ -1,5 +1,7 @@
 ---
 import Base from '../../layouts/Base.astro';
+import Findings from '../../components/Findings.astro';
+import { discover, trackFacts } from '../../lib/discover';
 import CoverArt from '../../components/CoverArt.astro';
 import CreditLine from '../../components/CreditLine.astro';
 import Backdrop from '../../components/Backdrop.astro';
@@ -70,12 +72,15 @@ const albumRating = viewerId ? ((await ratingHistory(viewerId, 'release_group', 
 const holdings = user ? await holdingsFor(user.id, album.id) : [];
 const holdingError = user ? Astro.url.searchParams.get('holding_error') : null;
 
-const [tracks, standardTracks, genres, people] = await Promise.all([
+const [tracks, standardTracks, genres, people, albumFacts] = await Promise.all([
   releaseId ? tracklist(releaseId, viewerId) : Promise.resolve([]),
   standardId && !isStandard ? tracklist(standardId, viewerId) : Promise.resolve([]),
   genresFor('release_group', album.id),
   releaseId ? contributors(releaseId) : Promise.resolve([]),
+  viewerId ? trackFacts(viewerId, { albumId: album.id }) : Promise.resolve([]),
 ]);
+// What stands out on this album: found in its tracks' ratings, not chosen.
+const albumFindings = discover(albumFacts, { albumId: album.id, limit: 4, minGroup: 2 }).filter((f) => f.kind !== 'habit');
 
 // Tracks on this edition but not the standard one: bonus tracks, which do
 // not count towards the album score.
@@ -399,6 +404,15 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
               </a>
             </p>
           )}
+        </section>
+      )
+    }
+
+    {
+      albumFindings.length > 0 && (
+        <section class="standout" aria-labelledby="standout-heading">
+          <h2 id="standout-heading">What stands out</h2>
+          <Findings findings={albumFindings} />
         </section>
       )
     }

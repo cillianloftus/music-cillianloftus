@@ -5,6 +5,8 @@
  * the notes that say why, and what arrived most recently.
  */
 import Base from '../layouts/Base.astro';
+import Findings from '../components/Findings.astro';
+import { discover, libraryFacts } from '../lib/discover';
 import AlbumCard from '../components/AlbumCard.astro';
 import Backdrop from '../components/Backdrop.astro';
 import CoverArt from '../components/CoverArt.astro';
@@ -25,7 +27,7 @@ import { hueOf } from '../lib/art/playlist';
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
 const isOwner = Boolean(Astro.locals.user);
-const [recent, top, ratings, stats, picks, topSingles, favourites, started, artistsLoved, genresLoved, unplayed] = await Promise.all([
+const [recent, top, ratings, stats, picks, topSingles, favourites, started, artistsLoved, genresLoved, unplayed, facts] = await Promise.all([
   recentReleaseGroups(viewerId, 12),
   topByType(viewerId, ['album', 'mixtape'], 10),
   recentRatings(viewerId, 8),
@@ -37,7 +39,17 @@ const [recent, top, ratings, stats, picks, topSingles, favourites, started, arti
   lovedArtists(viewerId, 12),
   lovedGenres(viewerId, 12),
   isOwner && viewerId ? playedNotRated(viewerId, 10) : Promise.resolve([]),
+  viewerId ? libraryFacts(viewerId) : Promise.resolve([]),
 ]);
+
+// Three things the ratings show, drawn from the strongest dozen and turned
+// over each day, so the home page keeps pointing at something new.
+const noticed = (() => {
+  const strongest = discover(facts, { limit: 12 });
+  if (strongest.length <= 3) return strongest;
+  const day = Math.floor(Date.now() / 86_400_000);
+  return Array.from({ length: 3 }, (_, i) => strongest[(day * 3 + i) % strongest.length]!).filter((f, i, all) => all.indexOf(f) === i);
+})();
 
 // Artist lines for the picks, so each artist links to their page.
 const pickAlbums = picks.filter((p) => ['anniversary', 'unrated', 'month', 'revisit'].includes(p.kind)).map((p) => p.id);
@@ -159,6 +171,18 @@ const statItems = [
           </p>
         </>
       ) : null
+    }
+
+    {
+      noticed.length > 0 && (
+        <section aria-labelledby="noticed-heading">
+          <div class="section-head">
+            <h2 id="noticed-heading">You might not have noticed</h2>
+            <a href="/insights#patterns-heading">More</a>
+          </div>
+          <Findings findings={noticed} />
+        </section>
+      )
     }
 
     {

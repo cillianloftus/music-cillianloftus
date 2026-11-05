@@ -100,6 +100,9 @@ const { label, item = 'min(11rem, 42vw)' } = Astro.props;
   /* The list inside: one row of fixed-width cards. */
   .track :global(> ol),
   .track :global(> ul) {
+    /* Holds anything absolutely positioned inside (visually hidden labels),
+       which would otherwise escape the scroller and widen the page. */
+    position: relative;
     display: grid;
     grid-auto-flow: column;
     grid-auto-columns: var(--item);

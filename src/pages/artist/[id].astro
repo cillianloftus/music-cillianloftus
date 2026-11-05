@@ -33,7 +33,7 @@ const viewerId = Astro.locals.user?.id ?? (await ownerId());
 const [albums, appearances, topTracks, collaborators, about, images, genres, breakdown] = await Promise.all([
   artistReleaseGroups(artist.id, viewerId),
   artistAppearances(artist.id),
-  artistTopTracks(artist.id, viewerId, 5),
+  artistTopTracks(artist.id, viewerId, 10),
   artistCollaborators(artist.id, 8),
   artistAbout(artist.id),
   artistImages(artist.id),
@@ -322,7 +322,7 @@ const facts = [
     {
           topTracks.length > 0 && (
             <section aria-labelledby="tracks-heading">
-              <h2 id="tracks-heading">Favourites</h2>
+              <h2 id="tracks-heading">Favourite tracks</h2>
               <ol class="tracks" role="list">
                 {topTracks.map((t, i) => (
                   <li>
@@ -1435,6 +1435,7 @@ const facts = [
   }
 
   .breakdown {
+    min-width: 0;
     display: grid;
     gap: var(--space-4);
   }
@@ -1457,6 +1458,8 @@ const facts = [
   }
 
   .tiles > div {
+    /* Without this a long title, kept to one line, widens the whole page. */
+    min-width: 0;
     display: grid;
     align-content: start;
     gap: var(--space-1);
