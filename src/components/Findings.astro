@@ -26,6 +26,11 @@ const more = findings.slice(show);
         </span>
         <p class="headline">{f.href ? <a href={f.href}>{f.headline}</a> : f.headline}</p>
         <p class="detail">{f.detail}</p>
+        {f.playlist && (
+          <a class="playlist" href={f.playlist}>
+            Make it a playlist
+          </a>
+        )}
       </li>
     ))
   }
@@ -42,6 +47,11 @@ const more = findings.slice(show);
             </span>
             <p class="headline">{f.href ? <a href={f.href}>{f.headline}</a> : f.headline}</p>
             <p class="detail">{f.detail}</p>
+            {f.playlist && (
+              <a class="playlist" href={f.playlist}>
+                Make it a playlist
+              </a>
+            )}
           </li>
         ))}
       </ul>
@@ -128,6 +138,23 @@ const more = findings.slice(show);
   .detail {
     color: var(--text-muted);
     font-size: var(--step--1);
+  }
+
+  /* A second link inside the card: lifted above the card-wide one. */
+  .playlist {
+    position: relative;
+    z-index: 1;
+    grid-column: 2;
+    width: fit-content;
+    margin-top: var(--space-1);
+    color: var(--accent);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .playlist:hover {
+    text-decoration: underline;
   }
 
   .more {

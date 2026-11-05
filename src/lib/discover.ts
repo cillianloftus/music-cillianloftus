@@ -18,6 +18,8 @@
 
 import { env } from 'cloudflare:workers';
 import { byLibrary } from './library-cache';
+import { encodeDefinition } from './query/builder';
+import type { Where } from './query/schema';
 
 // ---------------------------------------------------------------------------
 // Facts
@@ -222,6 +224,8 @@ export interface Finding {
   tracks: number;
   tone: Tone;
   href?: string;
+  /** For a group that scores high: a playlist of it, on the query page. */
+  playlist?: string;
 }
 
 const round = (x: number) => Math.round(x);
@@ -260,7 +264,23 @@ interface Group {
   /** Sentence pieces: the subject ("Tracks Pete Rango produced") and a link. */
   subject: string;
   href?: string;
+  /** The same group as a playlist filter, where the query language can say it. */
+  where?: Where;
 }
+
+/** The query field a credit role is searchable by, if any. */
+const CREDIT_FIELD: Record<string, string> = {
+  producer: 'producer',
+  writer: 'writer',
+  mixer: 'engineer',
+  engineer: 'engineer',
+  remixer: 'remixer',
+  performer: 'performer',
+};
+
+/** A playlist of a group's best, as a link to the query page. */
+export const playlistOf = (where: Where) =>
+  `/query?d=${encodeDefinition({ entity: 'recording', where, sort: [{ field: 'personal_score', dir: 'desc' }], collapse_by_work: true, limit: 50 })}`;
 
 interface Options {
   /** One artist's page: the artist is a given, so groups by artist are left out. */
@@ -277,10 +297,10 @@ interface Options {
 /** Every group the facts form, keyed so the same group from two routes is counted once. */
 function groupsOf(facts: TrackFact[], opts: Options): Group[] {
   const groups = new Map<string, Group>();
-  const add = (kind: string, key: string, fact: TrackFact, subject: string, href?: string) => {
+  const add = (kind: string, key: string, fact: TrackFact, subject: string, href?: string, where?: Where) => {
     const id = `${kind}:${key}`;
     let g = groups.get(id);
-    if (!g) groups.set(id, (g = { kind, key, ids: new Set(), scores: [], subject, href }));
+    if (!g) groups.set(id, (g = { kind, key, ids: new Set(), scores: [], subject, href, where }));
     if (g.ids.has(fact.id)) return;
     g.ids.add(fact.id);
     g.scores.push(fact.score);
@@ -290,24 +310,28 @@ function groupsOf(facts: TrackFact[], opts: Options): Group[] {
     const primary = f.credits.filter((c) => c.role === 'primary');
     for (const c of f.credits) {
       if (c.role === 'primary') {
-        if (!opts.artistId) add('artist', c.id, f, `${c.name}’s tracks`, `/artist/${c.id}`);
+        if (!opts.artistId) add('artist', c.id, f, `${c.name}’s tracks`, `/artist/${c.id}`, { field: 'artist', op: 'eq', value: c.name });
       } else if (c.role === 'featured') {
-        if (c.id !== opts.artistId) add('guest', c.id, f, `Tracks featuring ${c.name}`, `/artist/${c.id}`);
+        if (c.id !== opts.artistId) add('guest', c.id, f, `Tracks featuring ${c.name}`, `/artist/${c.id}`, { field: 'featured', op: 'eq', value: c.name });
       } else if (c.family !== 'artist') {
         // Someone credited for their part: grouped by person and part.
         const self = primary.some((p) => p.id === c.id);
         const name = self && opts.artistId === c.id ? 'they' : c.name;
-        add(`credit:${c.family}`, `${c.id}:${c.role}`, f, `Tracks ${name} ${verb(c.role, c.label)}`, `/artist/${c.id}/as/${c.role}`);
+        const field = CREDIT_FIELD[c.role];
+        add(`credit:${c.family}`, `${c.id}:${c.role}`, f, `Tracks ${name} ${verb(c.role, c.label)}`, `/artist/${c.id}/as/${c.role}`, field ? { field, op: 'eq', value: c.name } : undefined);
       }
     }
-    for (const g of f.genres) if (g.id !== opts.genreId) add('genre', g.id, f, `Your ${g.name}`, `/genre/${g.id}`);
+    for (const g of f.genres) if (g.id !== opts.genreId) add('genre', g.id, f, `Your ${g.name}`, `/genre/${g.id}`, { field: 'genre', op: 'eq', value: g.name });
     // On one album's page these are the same for every track.
     const whole = !opts.albumId;
     if (whole && f.label) add('label', f.label.toLowerCase(), f, `Releases on ${f.label}`);
     const year = yearOf(f.released);
     if (whole && year) {
       if (opts.artistId) add('year', String(year), f, `Their ${year} tracks`);
-      else add('decade', String(Math.floor(year / 10) * 10), f, `Music from the ${Math.floor(year / 10) * 10}s`);
+      else {
+        const decade = Math.floor(year / 10) * 10;
+        add('decade', String(decade), f, `Music from the ${decade}s`, undefined, { field: 'first_release_date', op: 'between', value: [`${decade}-01-01`, `${decade + 9}-12-31`] });
+      }
     }
     if (opts.artistId && f.albumId) add('album', f.albumId, f, f.albumTitle ?? 'One album', `/album/${f.albumId}`);
     if (whole && f.albumType) {
@@ -324,7 +348,9 @@ function groupsOf(facts: TrackFact[], opts: Options): Group[] {
     if (f.lengthMs) {
       const m = f.lengthMs / 60000;
       const band = m < 2 ? 'under 2 minutes' : m < 3 ? '2 to 3 minutes' : m >= 6 ? 'over 6 minutes' : null;
-      if (band) add('length', band, f, `Songs ${band}`);
+      const where: Where | undefined =
+        m < 2 ? { field: 'length_seconds', op: 'lt', value: 120 } : m < 3 ? { field: 'length_seconds', op: 'between', value: [120, 180] } : m >= 6 ? { field: 'length_seconds', op: 'gte', value: 360 } : undefined;
+      if (band) add('length', band, f, `Songs ${band}`, undefined, where);
     }
     const writers = new Set(f.credits.filter((c) => ['writer', 'composer', 'lyricist'].includes(c.role)).map((c) => c.id));
     if (writers.size >= 5) add('writers', 'many', f, 'Songs with five or more writers');
@@ -377,6 +403,8 @@ function groupFindings(facts: TrackFact[], opts: Options): Finding[] {
       tracks: g.scores.length,
       tone: diff > 0 ? 'up' : 'down',
       href: g.href,
+      // Only worth a playlist when it is the good end.
+      playlist: diff > 0 && g.where ? playlistOf(g.where) : undefined,
     });
   }
   void all;

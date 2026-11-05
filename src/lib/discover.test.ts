@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { favouriteScore } from './catalogue';
+import { decodeDefinition } from './query/builder';
+import { definitionSchema } from './query/schema';
 import { discover, pearson, separation, type Credit, type TrackFact } from './discover';
 
 const credit = (id: string, role: string, extra: Partial<Credit> = {}): Credit => ({
@@ -142,5 +144,20 @@ describe('discover, beyond the obvious', () => {
     }));
     const gut = discover(facts, { limit: 40 }).find((f) => f.key === 'gut:artist:artist0');
     expect(gut?.headline).toBe('Your gut overrates Artist0');
+  });
+});
+
+
+describe('playlists from findings', () => {
+  it('offers a playlist of a high-scoring group, as a definition the query page accepts', () => {
+    const rango = discover(library(), { limit: 30 }).find((f) => f.key === 'credit:production:rango:producer')!;
+    const encoded = new URL(rango.playlist!, 'https://x').searchParams.get('d')!;
+    const definition = decodeDefinition(encoded);
+    expect(definition).toMatchObject({ entity: 'recording', where: { field: 'producer', op: 'eq', value: 'Rango' } });
+    expect(definitionSchema.safeParse(definition).success).toBe(true);
+  });
+
+  it('offers none for the low end', () => {
+    expect(discover(library(), { limit: 30 }).filter((f) => f.tone === 'down').every((f) => !f.playlist)).toBe(true);
   });
 });
