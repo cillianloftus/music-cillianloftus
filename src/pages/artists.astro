@@ -209,6 +209,13 @@ const meta = (a: RosterArtist) => (a.releases ? `${a.releases} ${a.releases === 
     flex: 0 1 18rem;
   }
 
+  /* On a phone the filter takes the whole row, under the sorts. */
+  @media (max-width: 40rem) {
+    .filter {
+      flex-basis: 100%;
+    }
+  }
+
   .letters {
     display: flex;
     flex-wrap: wrap;

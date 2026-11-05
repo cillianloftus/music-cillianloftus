@@ -80,23 +80,22 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             <div>
               <dt>Average track</dt>
               <dd class="tabular">{h!.averageTrack == null ? '–' : Math.round(h!.averageTrack)}</dd>
-              <dd class="sub">out of 100</dd>
             </div>
             <div>
               <dt>Your gut</dt>
               <dd class="tabular">{gut === 0 ? 'Level' : `${gut > 0 ? '−' : '+'}${Math.abs(gut)}`}</dd>
               <dd class="sub">
                 {h!.gutSamples === 0
-                  ? 'No gut scores with a full breakdown yet'
+                  ? 'Nothing to compare yet'
                   : gut === 0
-                    ? `matches your considered scores, over ${plural(h!.gutSamples, 'rating')}`
-                    : `points ${gut > 0 ? 'lower' : 'higher'} than considered, over ${plural(h!.gutSamples, 'rating')}`}
+                    ? 'level with your considered score'
+                    : `${gut > 0 ? 'below' : 'above'} your considered score`}
               </dd>
             </div>
             <div>
               <dt>Impact given</dt>
               <dd class="tabular">{impactShare}%</dd>
-              <dd class="sub">of rated tracks ({h!.impactTracks}); meant to be rare</dd>
+              <dd class="sub">of rated tracks ({h!.impactTracks})</dd>
             </div>
           </dl>
 
@@ -309,7 +308,8 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
 
   .headline {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    /* Two across even on a phone: four tiles shouldn't fill a whole screen. */
+    grid-template-columns: repeat(auto-fit, minmax(min(9.5rem, calc(50% - var(--space-3))), 1fr));
     gap: var(--space-3);
     margin: 0;
   }
