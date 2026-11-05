@@ -9,6 +9,7 @@
  * same code the server used to render the page.
  */
 import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import CreditLine from '../../components/CreditLine.astro';
 import { releaseGroupsByIds, type CreditPart } from '../../lib/catalogue';
@@ -117,10 +118,8 @@ const clientData = {
 
 <Base title="Weights">
   <div class="wrap page">
-    <header class="intro">
-      <h1>Weights</h1>
-      <p class="muted">Changing a weight re-ranks the library. Saving keeps the old version.</p>
-    </header>
+    <PageHeader title="Weights" />
+    <p class="muted">Changing a weight re-ranks the library. Saving keeps the old version.</p>
 
     {
       saved && (
@@ -423,11 +422,6 @@ const clientData = {
     gap: var(--space-5);
   }
 
-  .intro {
-    display: grid;
-    gap: var(--space-2);
-    max-width: 44rem;
-  }
 
   h2 {
     font-size: var(--step-1);

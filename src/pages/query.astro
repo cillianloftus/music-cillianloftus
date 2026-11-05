@@ -7,6 +7,7 @@
  * comes back here as the same kind of definition, shown as the same chips.
  */
 import Base from '../layouts/Base.astro';
+import PageHeader from '../components/PageHeader.astro';
 import ResultList from '../components/ResultList.astro';
 import { getDefinition } from '../lib/definitions';
 import {
@@ -136,9 +137,7 @@ const saveHref = `/edit/definition/${saved ? saved.id : 'new'}?d=${encodeDefinit
 
 <Base title={saved ? `Edit ${saved.name}` : 'Build a playlist'}>
   <div class="wrap page">
-    <header>
-      <h1>{saved ? saved.name : 'Build a playlist'}</h1>
-    </header>
+    <PageHeader title={saved ? saved.name : 'Build a playlist'} />
 
     <form class="ask" method="post" action="/api/query" data-ask>
       <label for="utterance" class="visually-hidden">Ask for music</label>
@@ -532,10 +531,6 @@ const saveHref = `/edit/definition/${saved ? saved.id : 'new'}?d=${encodeDefinit
     gap: var(--space-5);
   }
 
-  header {
-    display: grid;
-    gap: var(--space-1);
-  }
 
   h2 {
     font-size: var(--step-1);

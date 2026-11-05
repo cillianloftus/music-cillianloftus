@@ -6,6 +6,7 @@
  */
 import { env } from 'cloudflare:workers';
 import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import { formatRelative } from '../../lib/format';
 import { queuePaused, recentJobs, type JobRow } from '../../lib/jobs/queue';
@@ -113,10 +114,8 @@ const groups = [
 
 <Base title="Jobs">
   <div class="wrap page" data-jobs data-active={active ? 'true' : undefined}>
-    <header class="head">
-      <h1>Jobs</h1>
-      <p class="visually-hidden" role="status">{active ? 'Working through the queue.' : ''}</p>
-    </header>
+    <PageHeader title="Jobs" />
+    <p class="visually-hidden" role="status">{active ? 'Working through the queue.' : ''}</p>
 
     {
       total > 0 && (
@@ -295,10 +294,6 @@ const groups = [
     --content-max: 52rem;
   }
 
-  .head {
-    display: grid;
-    gap: var(--space-2);
-  }
 
   .muted {
     color: var(--text-muted);

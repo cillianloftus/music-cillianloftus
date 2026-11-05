@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
 import { latestJob, type JobPayloads } from '../../lib/jobs/queue';
 import { BACKUP_PREFIX, listBackups } from '../../lib/backup/store';
 
@@ -13,10 +14,8 @@ const size = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024
 
 <Base title="Backups">
   <div class="wrap page">
-    <header>
-      <h1>Backups</h1>
-      <p class="muted">Daily at 04:00 UTC: 30 days, then monthly for a year.</p>
-    </header>
+    <PageHeader title="Backups" />
+    <p class="muted">Daily at 04:00 UTC: 30 days, then monthly for a year.</p>
 
     <div class="actions">
       <form method="post" action="/api/write/backup">
@@ -99,10 +98,6 @@ npm run restore -- music-backup.json.gz --local</code></pre>
     --content-max: 48rem;
   }
 
-  header {
-    display: grid;
-    gap: var(--space-2);
-  }
 
   h2 {
     font-size: var(--step-1);

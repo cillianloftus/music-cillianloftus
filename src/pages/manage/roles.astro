@@ -5,6 +5,7 @@
  * nobody holds them.
  */
 import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
 import { creditRoles, groupCredits, ROLE_FAMILIES } from '../../lib/credits';
 
 const roles = await creditRoles();
@@ -19,9 +20,7 @@ const IGNORE = { autocomplete: 'off', 'data-1p-ignore': true, 'data-lpignore': '
 
 <Base title="Credit roles">
   <div class="wrap page">
-    <header>
-      <h1>Credit roles</h1>
-    </header>
+    <PageHeader title="Credit roles" />
 
     {params.get('error') && <p class="notice notice--error" role="alert">{params.get('error')}</p>}
     {params.get('done') && <p class="notice" role="status">{params.get('done')}</p>}

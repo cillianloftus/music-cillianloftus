@@ -4,6 +4,7 @@
  * one card each, with the choices that fit. Rules raise; people resolve.
  */
 import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
 import { missingInfo } from '../../lib/gaps';
 import { openAnomalies, reviewEntities, type Anomaly, type AnomalyKind, type ReviewEntity } from '../../lib/review';
 
@@ -74,12 +75,11 @@ const sourceLabel = (e: ReviewEntity) => (e.source === 'musicbrainz' ? 'MusicBra
 
 <Base title="Review">
   <div class="wrap page">
-    <header class="intro">
-      <h1>Review</h1>
+    <PageHeader title="Review">
       <form method="post" action="/api/write/review">
         <button class="button" type="submit" name="intent" value="detect">Check now</button>
       </form>
-    </header>
+    </PageHeader>
 
     {error && <p class="notice notice--error" role="alert">{error}</p>}
     {done && <p class="notice" role="status">{done === 'detect' ? detectMessage() : DONE[done]}</p>}
@@ -211,11 +211,6 @@ const sourceLabel = (e: ReviewEntity) => (e.source === 'musicbrainz' ? 'MusicBra
     --content-max: 48rem;
   }
 
-  .intro {
-    display: grid;
-    gap: var(--space-3);
-    justify-items: start;
-  }
 
   h2 {
     font-size: var(--step-1);

@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
 import { connection, isConfigured } from '../../lib/spotify/client';
 
 const user = Astro.locals.user!;
@@ -25,10 +26,8 @@ const WARN_DAYS = 21;
 
 <Base title="Spotify">
   <div class="wrap page">
-    <header>
-      <h1>Spotify</h1>
-      <p class="muted">Authorisations last six months; this page warns before then.</p>
-    </header>
+    <PageHeader title="Spotify" />
+    <p class="muted">Authorisations last six months; this page warns before then.</p>
 
     {error && <p class="notice notice--error" role="alert">{ERRORS[error] ?? `Spotify returned: ${error}`}</p>}
     {connected && <p class="notice" role="status">Connected.</p>}
@@ -120,10 +119,6 @@ const WARN_DAYS = 21;
     --content-max: 40rem;
   }
 
-  header {
-    display: grid;
-    gap: var(--space-2);
-  }
 
   h2 {
     font-size: var(--step-1);

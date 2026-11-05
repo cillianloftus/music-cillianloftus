@@ -6,6 +6,7 @@
  * Checking happens in the browser and changes nothing.
  */
 import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
 import { catalogue } from '../../lib/import/files';
 
 const files = await catalogue();
@@ -23,10 +24,9 @@ const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
 
 <Base title="Files">
   <div class="wrap page">
-    <header>
-      <h1>Files</h1>
-      <p><a href="/manage/import/files">Import a folder</a></p>
-    </header>
+    <PageHeader title="Files">
+      <a href="/manage/import/files">Import a folder</a>
+    </PageHeader>
 
     {
       files.length === 0 ? (
@@ -167,10 +167,6 @@ const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
     --content-max: 52rem;
   }
 
-  header {
-    display: grid;
-    gap: var(--space-2);
-  }
 
   h2 {
     font-size: var(--step-1);

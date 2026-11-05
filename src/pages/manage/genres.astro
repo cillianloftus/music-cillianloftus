@@ -5,6 +5,7 @@
  * relations are offered as suggestions, never applied on their own.
  */
 import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
 import GenreEditTree, { type EditNode } from '../../components/GenreEditTree.astro';
 import { genreKey, genreRows, GenreError, wikidataParents } from '../../lib/genres';
 
@@ -64,10 +65,9 @@ const keep = suggestOpen ? [{ name: 'suggest', value: '1' }] : [];
 
 <Base title="Genre tree">
   <div class="wrap page">
-    <header>
-      <h1>Genre tree</h1>
-      <p><a href="/genres">See the tree as circles</a></p>
-    </header>
+    <PageHeader title="Genre tree">
+      <a href="/genres">As circles</a>
+    </PageHeader>
 
     {done && <p class="notice" role="status">{done === 'created' ? 'Genre added.' : 'Moved.'}</p>}
     {error && <p class="notice notice--error" role="alert">{error}</p>}
@@ -156,10 +156,6 @@ const keep = suggestOpen ? [{ name: 'suggest', value: '1' }] : [];
     --content-max: 44rem;
   }
 
-  header {
-    display: grid;
-    gap: var(--space-2);
-  }
 
   h2 {
     font-size: var(--step-1);
