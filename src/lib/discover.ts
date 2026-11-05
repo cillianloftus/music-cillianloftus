@@ -349,10 +349,10 @@ function groupsOf(facts: TrackFact[], opts: Options): Group[] {
     if (f.ratedAt) {
       const d = new Date(f.ratedAt);
       const day = d.toLocaleDateString('en-GB', { weekday: 'long', timeZone: 'Europe/Dublin' });
-      add('habit:day', day, f, `What you rate on ${day}s`);
+      add('habit:day', day, f, `Tracks you rate on ${day}s`);
       const hour = Number(d.toLocaleString('en-GB', { hour: 'numeric', hour12: false, timeZone: 'Europe/Dublin' }));
-      if (hour >= 23 || hour < 5) add('habit:hour', 'late', f, 'What you rate after 11 at night');
-      else if (hour < 11) add('habit:hour', 'morning', f, 'What you rate in the morning');
+      if (hour >= 23 || hour < 5) add('habit:hour', 'late', f, 'Tracks you rate after 11 at night');
+      else if (hour < 11) add('habit:hour', 'morning', f, 'Tracks you rate in the morning');
     }
     if (f.plays >= 20) add('plays', 'many', f, 'Songs you’ve played 20 times or more');
     // How the title is written: a stylistic choice that may say something.
