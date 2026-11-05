@@ -15,7 +15,7 @@ import CreditLine from '../../components/CreditLine.astro';
 import { releaseGroupsByIds, type CreditPart } from '../../lib/catalogue';
 import { hydrateTracks } from '../../lib/query/run';
 import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, computeScores, rank, type Weights } from '../../lib/scoring';
-import { AXIS_WEIGHT, sameWeights, scoreInputs, weightsForm, weightsVersions } from '../../lib/weights';
+import { AXIS_WEIGHT, scoreInputs, weightsForm, weightsVersions } from '../../lib/weights';
 
 const user = Astro.locals.user!;
 const params = Astro.url.searchParams;
@@ -92,7 +92,6 @@ const LABELS: Record<string, string> = {
 
 const tracksShare = Math.round(preview.release.tracks * 100);
 const nextVersion = (versions[0]?.version ?? 0) + 1;
-const unchanged = sameWeights(preview, active);
 const baselineName = current ? `version ${current.version}` : 'the defaults';
 
 /** A one-line summary of what sets a version apart from the defaults. */
@@ -209,7 +208,7 @@ const clientData = {
         </div>
         <p class="muted baseline" id="baseline">
           Arrows compare with {baselineName}.{' '}
-          <span data-summary role="status">{unchanged ? 'These are the current weights.' : ''}</span>
+          <span data-summary role="status"></span>
         </p>
 
         {

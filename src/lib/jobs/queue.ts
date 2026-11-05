@@ -156,6 +156,14 @@ export async function recentJobs(limit = 50): Promise<JobRow[]> {
   return results;
 }
 
+/** How many jobs are in each state, across the whole queue (not just the recent page). */
+export async function jobCounts(): Promise<Record<JobStatus, number>> {
+  const { results } = await env.DB.prepare('SELECT status, count(*) AS n FROM job GROUP BY status').all<{ status: JobStatus; n: number }>();
+  const counts: Record<JobStatus, number> = { queued: 0, running: 0, done: 0, failed: 0 };
+  for (const r of results) counts[r.status] = r.n;
+  return counts;
+}
+
 /** Whether the queue is paused: waiting jobs stay waiting until resumed. */
 export async function queuePaused(): Promise<boolean> {
   return Boolean(await env.DB.prepare(`SELECT 1 AS yes FROM app_setting WHERE key = 'jobs_paused' AND value = '1'`).first());

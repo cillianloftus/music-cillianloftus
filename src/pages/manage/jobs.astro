@@ -9,16 +9,17 @@ import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import { formatRelative } from '../../lib/format';
-import { queuePaused, recentJobs, type JobRow } from '../../lib/jobs/queue';
+import { jobCounts, queuePaused, recentJobs, type JobRow } from '../../lib/jobs/queue';
 import { runJobs } from '../../lib/jobs/runner';
 
-const jobs = await recentJobs(80);
+// The list shows the latest 80; the totals count everything.
+const [jobs, totals] = await Promise.all([recentJobs(80), jobCounts()]);
 const byStatus = (s: string) => jobs.filter((j) => j.status === s);
 const failedJobs = byStatus('failed');
 const moving = jobs.filter((j) => j.status === 'queued' || j.status === 'running');
 const doneJobs = byStatus('done');
-const queued = byStatus('queued').length;
-const running = byStatus('running').length;
+const queued = totals.queued;
+const running = totals.running;
 const paused = await queuePaused();
 // Paused with work waiting is not "active": nothing will change until resumed.
 const active = moving.length > 0 && !(paused && running === 0);
@@ -104,7 +105,7 @@ function describe(job: JobRow): Shown {
 }
 
 const total = jobs.length;
-const progress = moving.length + doneJobs.length > 0 ? doneJobs.length / (moving.length + doneJobs.length) : 0;
+const progress = queued + running + totals.done > 0 ? totals.done / (queued + running + totals.done) : 0;
 const groups = [
   { key: 'failed', heading: 'Needs attention', items: failedJobs },
   { key: 'moving', heading: 'In progress', items: moving },
@@ -131,11 +132,11 @@ const groups = [
             </div>
             <div>
               <dt>Done</dt>
-              <dd class="tabular">{doneJobs.length}</dd>
+              <dd class="tabular">{totals.done}</dd>
             </div>
-            <div class:list={[{ alert: failedJobs.length > 0 }]}>
+            <div class:list={[{ alert: totals.failed > 0 }]}>
               <dt>Failed</dt>
-              <dd class="tabular">{failedJobs.length}</dd>
+              <dd class="tabular">{totals.failed}</dd>
             </div>
           </dl>
           {moving.length > 0 && (
@@ -170,11 +171,11 @@ const groups = [
                 </button>
               </form>
             )}
-            {failedJobs.length > 0 && (
+            {totals.failed > 0 && (
               <form method="post" action="/api/write/jobs/retry">
                 <input type="hidden" name="all" value="1" />
                 <button class="button button--primary" type="submit">
-                  {failedJobs.length === 1 ? 'Retry the failed one' : `Retry all ${failedJobs.length} failed`}
+                  {totals.failed === 1 ? 'Retry the failed one' : `Retry all ${totals.failed} failed`}
                 </button>
               </form>
             )}

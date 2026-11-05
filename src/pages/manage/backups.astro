@@ -84,8 +84,7 @@ const size = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024
       <pre><code>npx wrangler d1 migrations apply music-db --local
 npm run restore -- music-backup.json.gz --local</code></pre>
       <p class="muted">
-        Use <code>--remote</code> for production. Every test run restores a backup to prove the
-        format round-trips.
+        Use <code>--remote</code> for production.
       </p>
     </section>
   </div>
