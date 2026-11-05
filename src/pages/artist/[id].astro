@@ -16,6 +16,7 @@ import {
 } from '../../lib/catalogue';
 import { artistImages } from '../../lib/artist-images';
 import { artistBreakdown } from '../../lib/discover';
+import { kinOf } from '../../lib/kin';
 import Findings from '../../components/Findings.astro';
 import { ageOf, artistAbout, artistGenres, lifeWords } from '../../lib/artists';
 import { groupCredits } from '../../lib/credits';
@@ -30,7 +31,7 @@ if (!artist) {
 }
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const [albums, appearances, topTracks, collaborators, about, images, genres, breakdown] = await Promise.all([
+const [albums, appearances, topTracks, collaborators, about, images, genres, breakdown, kin] = await Promise.all([
   artistReleaseGroups(artist.id, viewerId),
   artistAppearances(artist.id),
   artistTopTracks(artist.id, viewerId, 10),
@@ -39,6 +40,7 @@ const [albums, appearances, topTracks, collaborators, about, images, genres, bre
   artistImages(artist.id),
   artistGenres(artist.id),
   viewerId ? artistBreakdown(viewerId, id) : Promise.resolve(null),
+  kinOf(id, 6),
 ]);
 // Releases by kind, each newest first: the records, then the shorter ones.
 // Sections that earn their place: mixtapes get their own only when there
@@ -490,6 +492,29 @@ const facts = [
                 <a href={`/artist/${c.id}`}>{c.name}</a>
                 <span class="muted small tabular">
                   {c.count} {c.count === 1 ? 'credit' : 'credits'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+
+    {
+      kin.length > 0 && (
+        <section aria-labelledby="kin-heading">
+          <h2 id="kin-heading">Close to</h2>
+          <ul class="kin" role="list">
+            {kin.map((k) => (
+              <li>
+                <a href={`/artist/${k.id}`}>{k.name}</a>
+                <span class="muted small">
+                  {[
+                    k.sharedGenres.length ? k.sharedGenres.join(', ') : null,
+                    k.sharedPeople.length ? `both work with ${k.sharedPeople.map((p) => p.name).join(', ')}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
                 </span>
               </li>
             ))}
@@ -1559,5 +1584,30 @@ const facts = [
 
   .ranked-albums .muted {
     margin-left: auto;
+  }
+
+  .kin {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+    gap: var(--space-2) var(--space-6);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .kin li {
+    display: grid;
+    gap: 2px;
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .kin a {
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .kin a:hover {
+    text-decoration: underline;
   }
 </style>

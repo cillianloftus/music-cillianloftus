@@ -1,0 +1,42 @@
+/**
+ * Caching for whole-library computations (every track's facts, artists'
+ * likeness, rankings). The key carries a stamp of the library's state
+ * (the latest rating, counts of ratings, plays, credits, genre tags and
+ * artists), so any change anywhere makes a fresh key: nothing is ever
+ * stale, and nothing needs clearing by hand.
+ */
+
+import { env } from 'cloudflare:workers';
+
+/** A short string that changes whenever the library or a user's ratings or plays do. */
+export async function libraryStamp(userId: string | null): Promise<string> {
+  const row = await env.DB.prepare(
+    `SELECT (SELECT max(rated_at) FROM rating WHERE user_id = ?1) AS rated,
+            (SELECT count(*) FROM rating WHERE user_id = ?1) AS ratings,
+            (SELECT count(*) FROM play WHERE user_id = ?1) AS plays,
+            (SELECT count(*) FROM artist_credit) AS credits,
+            (SELECT count(*) FROM genre_tag) AS genres,
+            (SELECT count(*) FROM artist) AS artists`,
+  )
+    .bind(userId)
+    .first<Record<string, string | number | null>>();
+  return Object.values(row ?? {}).join(':');
+}
+
+/** The value under name for this library state, worked out and kept when missing. */
+export async function byLibrary<T>(name: string, userId: string | null, work: () => Promise<T>): Promise<T> {
+  const key = `lib:${name}:${userId ?? '-'}:${await libraryStamp(userId)}`;
+  try {
+    const hit = await env.CACHE.get<{ value: T }>(key, 'json');
+    if (hit) return hit.value;
+  } catch {
+    /* No cache: work it out. */
+  }
+  const value = await work();
+  try {
+    await env.CACHE.put(key, JSON.stringify({ value }), { expirationTtl: 7 * 24 * 60 * 60 });
+  } catch {
+    /* Uncached is only slower. */
+  }
+  return value;
+}

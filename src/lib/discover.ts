@@ -17,6 +17,7 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { byLibrary } from './library-cache';
 
 // ---------------------------------------------------------------------------
 // Facts
@@ -156,25 +157,7 @@ export async function trackFacts(userId: string, scope: { artistId?: string; alb
  * home page doesn't gather every track's facts on every visit.
  */
 export async function libraryFacts(userId: string): Promise<TrackFact[]> {
-  const stamp = await env.DB.prepare(
-    `SELECT (SELECT max(rated_at) FROM rating WHERE user_id = ?1) AS rated,
-            (SELECT count(*) FROM rating WHERE user_id = ?1) AS ratings,
-            (SELECT count(*) FROM play WHERE user_id = ?1) AS plays,
-            (SELECT count(*) FROM artist_credit) AS credits,
-            (SELECT count(*) FROM genre_tag) AS genres`,
-  )
-    .bind(userId)
-    .first<Record<string, string | number | null>>();
-  const key = `facts:v2:${userId}:${Object.values(stamp ?? {}).join(':')}`;
-  try {
-    const hit = await env.CACHE.get<TrackFact[]>(key, 'json');
-    if (hit) return hit;
-  } catch {
-    /* No cache: work them out. */
-  }
-  const facts = await trackFacts(userId);
-  await env.CACHE.put(key, JSON.stringify(facts), { expirationTtl: 7 * 24 * 60 * 60 }).catch(() => {});
-  return facts;
+  return byLibrary('facts:v2', userId, () => trackFacts(userId));
 }
 
 // ---------------------------------------------------------------------------
@@ -693,9 +676,8 @@ export interface ArtistBreakdown {
   findings: Finding[];
 }
 
-export async function artistBreakdown(userId: string, artistId: string): Promise<ArtistBreakdown | null> {
-  const facts = await trackFacts(userId, { artistId });
-  if (facts.length < 3) return null;
+/** The whole library's average, artists ranked by average, and how spread an artist's scores usually are. */
+async function libraryRanks(userId: string): Promise<{ libraryAverage: number; ranking: { artist_id: string; average: number; n: number }[]; typicalSpread: number }> {
   const [library, ranks] = await env.DB.batch([
     env.DB.prepare('SELECT avg(quality_score) AS average, count(*) AS n FROM v_recording_score WHERE user_id = ?').bind(userId),
     env.DB.prepare(
@@ -716,6 +698,13 @@ export async function artistBreakdown(userId: string, artistId: string): Promise
   const perArtist = new Map<string, number[]>();
   for (const r of spreads.results) perArtist.set(r.artist_id, [...(perArtist.get(r.artist_id) ?? []), r.score]);
   const typicalSpread = mean([...perArtist.values()].filter((s) => s.length >= 4).map(sd));
+  return { libraryAverage, ranking, typicalSpread };
+}
+
+export async function artistBreakdown(userId: string, artistId: string): Promise<ArtistBreakdown | null> {
+  const facts = await trackFacts(userId, { artistId });
+  if (facts.length < 3) return null;
+  const { libraryAverage, ranking, typicalSpread } = await byLibrary('artist-ranks:v1', userId, () => libraryRanks(userId));
 
   const scores = facts.map((f) => f.score);
   const sorted = [...facts].sort((a, b) => b.score - a.score);

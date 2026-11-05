@@ -23,7 +23,11 @@ async function cached<T>(key: string, load: () => Promise<T | null>): Promise<T 
   }
   const value = await load();
   // A miss is cached too, for a day, so an unknown artist isn't asked about on every view.
-  await env.CACHE.put(key, JSON.stringify({ value }), { expirationTtl: value ? TTL : 24 * 60 * 60 }).catch(() => {});
+  try {
+    await env.CACHE.put(key, JSON.stringify({ value }), { expirationTtl: value ? TTL : 24 * 60 * 60 });
+  } catch {
+    /* Uncached is only slower. */
+  }
   return value;
 }
 
