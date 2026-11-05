@@ -171,52 +171,72 @@ export async function findAnomalies(): Promise<Finding[]> {
   });
 }
 
+/** Statements of at most this many ids or findings, so each stays well inside D1's limits. */
+const WRITE_CHUNK = 200;
+
 /**
  * Raises what the rules find, skipping anything already judged, and closes
- * open anomalies that no longer fire. One transaction.
+ * open anomalies that no longer fire.
+ *
+ * The comparison happens here rather than in SQL: the existing anomalies
+ * and judged pairs are read once, and only what changed is written. Done
+ * in SQL it was a scan per finding (about 8 million rows for a library of
+ * a few thousand albums), which D1 refuses as overload. It runs after
+ * every import, so it has to stay linear.
  */
 export async function detectAnomalies(): Promise<{ open: number; raised: number; cleared: number }> {
-  const findings = (await findAnomalies()).map((f) => ({ ...f, id: crypto.randomUUID() }));
-  const openIds = async () =>
-    new Set(
-      (await env.DB.prepare(`SELECT id FROM anomaly WHERE status = 'open'`).all<{ id: string }>()).results.map((r) => r.id),
-    );
-  const before = await openIds();
-
-  const found = `SELECT json_extract(value, '$.id') AS id,
-                        json_extract(value, '$.kind') AS kind,
-                        json_extract(value, '$.entity_type') AS entity_type,
-                        json_extract(value, '$.entity_a') AS entity_a,
-                        json_extract(value, '$.entity_b') AS entity_b
-                 FROM json_each(?1)`;
-  await env.DB.batch([
-    // OR IGNORE: one already open is left as it is (anomaly_open_once).
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO anomaly (id, kind, entity_type, entity_a, entity_b)
-       SELECT f.id, f.kind, f.entity_type, f.entity_a, f.entity_b
-       FROM (${found}) f
-       WHERE NOT EXISTS (SELECT 1 FROM confirmed_distinct d
-                         WHERE d.entity_type = f.entity_type AND d.id_a = f.entity_a AND d.id_b = f.entity_b)
-         AND NOT EXISTS (SELECT 1 FROM anomaly x
-                         WHERE x.kind = f.kind AND x.entity_a = f.entity_a
-                           AND coalesce(x.entity_b, '') = coalesce(f.entity_b, '')
-                           AND x.status = 'dismissed')`,
-    ).bind(JSON.stringify(findings)),
-    env.DB.prepare(
-      `UPDATE anomaly SET status = 'resolved', resolution = 'cleared'
-       WHERE status = 'open'
-         AND NOT EXISTS (SELECT 1 FROM (${found}) f
-                         WHERE f.kind = anomaly.kind AND f.entity_a = anomaly.entity_a
-                           AND coalesce(f.entity_b, '') = coalesce(anomaly.entity_b, ''))`,
-    ).bind(JSON.stringify(findings)),
+  const findings = await findAnomalies();
+  const [existing, distinct] = await env.DB.batch([
+    env.DB.prepare(`SELECT id, kind, entity_a, entity_b, status FROM anomaly WHERE status IN ('open', 'dismissed')`),
+    env.DB.prepare(`SELECT entity_type, id_a, id_b FROM confirmed_distinct`),
   ]);
+  const key = (kind: string, a: string, b: string | null) => `${kind}\u0000${a}\u0000${b ?? ''}`;
+  const open = new Map<string, string>();
+  const dismissed = new Set<string>();
+  for (const row of (existing?.results ?? []) as Array<{ id: string; kind: string; entity_a: string; entity_b: string | null; status: string }>) {
+    if (row.status === 'open') open.set(key(row.kind, row.entity_a, row.entity_b), row.id);
+    else dismissed.add(key(row.kind, row.entity_a, row.entity_b));
+  }
+  const judged = new Set(
+    ((distinct?.results ?? []) as Array<{ entity_type: string; id_a: string; id_b: string }>).map((d) => `${d.entity_type}\u0000${d.id_a}\u0000${d.id_b}`),
+  );
 
-  const after = await openIds();
-  return {
-    open: after.size,
-    raised: [...after].filter((id) => !before.has(id)).length,
-    cleared: [...before].filter((id) => !after.has(id)).length,
-  };
+  const firing = new Set<string>();
+  const raise: Array<Finding & { id: string }> = [];
+  for (const f of findings) {
+    const k = key(f.kind, f.entity_a, f.entity_b);
+    firing.add(k);
+    if (open.has(k) || dismissed.has(k)) continue;
+    if (f.entity_b !== null && judged.has(`${f.entity_type}\u0000${f.entity_a}\u0000${f.entity_b}`)) continue;
+    raise.push({ ...f, id: crypto.randomUUID() });
+  }
+  const clear = [...open].filter(([k]) => !firing.has(k)).map(([, id]) => id);
+
+  const statements: D1PreparedStatement[] = [];
+  for (let i = 0; i < raise.length; i += WRITE_CHUNK) {
+    statements.push(
+      env.DB.prepare(
+        // OR IGNORE: anomaly_open_once still guards against a run alongside this one.
+        `INSERT OR IGNORE INTO anomaly (id, kind, entity_type, entity_a, entity_b)
+         SELECT json_extract(value, '$.id'), json_extract(value, '$.kind'), json_extract(value, '$.entity_type'),
+                json_extract(value, '$.entity_a'), json_extract(value, '$.entity_b')
+         FROM json_each(?1)`,
+      ).bind(JSON.stringify(raise.slice(i, i + WRITE_CHUNK))),
+    );
+  }
+  for (let i = 0; i < clear.length; i += WRITE_CHUNK) {
+    statements.push(
+      env.DB.prepare(
+        `UPDATE anomaly SET status = 'resolved', resolution = 'cleared'
+         WHERE status = 'open' AND id IN (SELECT value FROM json_each(?1))`,
+      ).bind(JSON.stringify(clear.slice(i, i + WRITE_CHUNK))),
+    );
+  }
+  if (statements.length > 0) await env.DB.batch(statements);
+
+  const now = await env.DB.prepare(`SELECT count(*) AS n FROM anomaly WHERE status = 'open'`).first<{ n: number }>();
+  const opened = now?.n ?? 0;
+  return { open: opened, raised: opened - (open.size - clear.length), cleared: clear.length };
 }
 
 export interface Anomaly extends Finding {
