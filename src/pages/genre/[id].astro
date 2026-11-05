@@ -12,7 +12,8 @@ import AlbumCard from '../../components/AlbumCard.astro';
 import ResultList from '../../components/ResultList.astro';
 import { hueOf } from '../../lib/art/playlist';
 import { ownerId } from '../../lib/auth/user';
-import { genreAlbums, genreDetail, genreTopTracks } from '../../lib/pages';
+import { genreAlbums, genreArtists, genreDetail, genreTopTracks } from '../../lib/pages';
+import Score from '../../components/Score.astro';
 import { encodeDefinition } from '../../lib/query/builder';
 import { hydrateTracks } from '../../lib/query/run';
 
@@ -23,7 +24,11 @@ if (!genre) return Astro.rewrite('/404');
 
 const user = Astro.locals.user;
 const viewerId = user?.id ?? (await ownerId());
-const [albums, trackIds] = await Promise.all([genreAlbums(id, viewerId, 18, deep), genreTopTracks(id, viewerId, 10, deep)]);
+const [albums, trackIds, artists] = await Promise.all([
+  genreAlbums(id, viewerId, 18, deep),
+  genreTopTracks(id, viewerId, 10, deep),
+  genreArtists(id, viewerId, 8, deep),
+]);
 const [tracks, genreFacts] = await Promise.all([hydrateTracks(trackIds, viewerId), viewerId && !deep ? trackFacts(viewerId, { genreId: id }) : Promise.resolve([])]);
 // What stands out within the genre: who makes your favourite of it, which era, and so on.
 const genreFindings = discover(genreFacts, { genreId: id, limit: 6 }).filter((f) => f.kind !== 'habit');
@@ -122,6 +127,28 @@ const list = (items: string[]) =>
     }
 
     {
+      artists.length > 1 && (
+        <section aria-labelledby="artists-heading">
+          <h2 id="artists-heading">Artists</h2>
+          <ol role="list" class="artists">
+            {artists.map((a) => (
+              <li>
+                <span class="avatar" style={`--h: ${hueOf(a.name)}`} aria-hidden="true">
+                  {a.image_key ? <img src={`/${a.image_key}`} alt="" width="80" height="80" loading="lazy" decoding="async" /> : a.name.slice(0, 1).toUpperCase()}
+                </span>
+                <span class="who">
+                  <a href={`/artist/${a.id}`}>{a.name}</a>
+                  <span class="muted small tabular">{a.rated} rated</span>
+                </span>
+                <Score quality={a.average} size="s" />
+              </li>
+            ))}
+          </ol>
+        </section>
+      )
+    }
+
+    {
       genreFindings.length > 0 && (
         <section aria-labelledby="standout-heading">
           <h2 id="standout-heading">What stands out</h2>
@@ -204,6 +231,10 @@ const list = (items: string[]) =>
     font-weight: 600;
   }
 
+  .small {
+    font-size: var(--step--1);
+  }
+
   .muted {
     color: var(--text-muted);
   }
@@ -254,6 +285,83 @@ const list = (items: string[]) =>
     margin-bottom: var(--space-4);
     font-size: var(--step-2);
     letter-spacing: -0.02em;
+  }
+
+  /* Rows, several across when there is room: picture, name over count, the score on the name's line. */
+  .artists {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+    gap: 0 var(--space-6);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .artists li {
+    position: relative;
+    display: grid;
+    grid-template-columns: 2.75rem minmax(0, 1fr) auto;
+    grid-template-areas:
+      'pic name score'
+      'pic count count';
+    align-items: baseline;
+    gap: 0 var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .artists li > :global(:last-child) {
+    grid-area: score;
+  }
+
+  .avatar {
+    grid-area: pic;
+    align-self: center;
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    aspect-ratio: 1;
+    overflow: hidden;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 25%, oklch(0.78 0.09 var(--h)), oklch(0.5 0.1 var(--h)));
+    color: oklch(0.98 0.02 var(--h));
+    font-weight: 800;
+  }
+
+  .avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  /* Name and count take their own places in the row's grid. */
+  .who {
+    display: contents;
+  }
+
+  .who .muted {
+    grid-area: count;
+  }
+
+  .who a {
+    grid-area: name;
+    min-width: 0;
+    overflow: hidden;
+    font-weight: 700;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The whole row is the link. */
+  .who a::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+  }
+
+  .artists li:hover .who a {
+    text-decoration: underline;
   }
 
   .grid {
