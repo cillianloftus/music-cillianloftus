@@ -130,6 +130,8 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
                   label: d.key,
                   value: Math.round(d.average),
                   detail: `average ${Math.round(d.average)} across ${plural(d.count, 'album')}`,
+                  // Coloured by score, as every other score chart here.
+                  colour: `oklch(0.66 0.15 ${scoreHue(d.average)})`,
                 }))}
               />
             </section>
@@ -224,9 +226,6 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
                   colour: `oklch(0.66 0.15 ${scoreHue(b.average)})`,
                 }))}
               />
-              <p class="muted small-note">
-                Correlation {deep.ageLink ? (Math.round(deep.ageLink.r * 100) / 100).toFixed(2) : 'n/a'}. Solo artists with a known birthday, at the year each track came out.
-              </p>
             </section>
           )}
 
@@ -391,8 +390,4 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
     font-weight: 800;
   }
 
-  .small-note {
-    margin-top: var(--space-2);
-    font-size: var(--step--1);
-  }
 </style>
