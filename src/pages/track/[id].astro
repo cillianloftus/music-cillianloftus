@@ -351,9 +351,11 @@ function ordinalOf(n: number): string {
     }
   }
 
+  /* Phones: full width, as on album pages; wide screens: a little smaller than an album's. */
   .art {
     display: block;
-    width: min(16rem, 60vw);
+    width: 100%;
+    max-width: 24rem;
     border-radius: var(--radius-m);
     box-shadow:
       0 2px 4px rgb(0 0 0 / 0.3),
@@ -798,5 +800,11 @@ function ordinalOf(n: number): string {
 
   .standing a:hover {
     text-decoration: underline;
+  }
+
+  @media (min-width: 48rem) {
+    .art {
+      width: 16rem;
+    }
   }
 </style>

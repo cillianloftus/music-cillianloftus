@@ -191,8 +191,10 @@ const rateHref = entry ? `/edit/rate/${entry.entity_type}/${entry.entity_id}?ret
     color: var(--text-subtle);
   }
 
+  /* Phones: full width, as on album pages. Wide: the 20rem column. */
   .art {
-    width: min(20rem, 70vw);
+    width: 100%;
+    max-width: 24rem;
     border-radius: var(--radius-m);
     box-shadow:
       0 2px 4px rgb(0 0 0 / 0.3),
