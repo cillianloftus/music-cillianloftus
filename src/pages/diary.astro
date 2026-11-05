@@ -41,9 +41,12 @@ for (const r of ratings) {
               {name.split(' ')[0]} <span class="year">{name.split(' ')[1]}</span>
             </h2>
             <ol role="list" class="entries">
-              {entries.map((r) => (
+              {entries.map((r, i) => (
                 <li class:list={[{ noted: r.impact_note }]}>
-                  <time datetime={r.rated_at}>{day.format(new Date(r.rated_at))}</time>
+                  {/* The date once per day, as a diary would; the slot keeps its width either way. */}
+                  <time datetime={r.rated_at} class:list={[{ again: i > 0 && day.format(new Date(entries[i - 1]!.rated_at)) === day.format(new Date(r.rated_at)) }]}>
+                    {day.format(new Date(r.rated_at))}
+                  </time>
                   <span class="art">
                     <CoverArt artKey={r.art_key} title={r.album_title ?? r.title} sizes="4rem" />
                   </span>
@@ -173,5 +176,10 @@ for (const r of ratings) {
     .art {
       width: 3.25rem;
     }
+  }
+
+  /* A repeat of the day above: left out for everyone; the slot keeps its width. */
+  time.again {
+    visibility: hidden;
   }
 </style>

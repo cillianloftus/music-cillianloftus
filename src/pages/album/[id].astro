@@ -768,7 +768,9 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   .track {
     display: grid;
     grid-template-columns: 1.75rem minmax(0, 1fr) auto auto;
-    align-items: center;
+    /* Number, length and score sit on the title's first line, so a row
+       with a featured artist beneath reads the same as one without. */
+    align-items: baseline;
     column-gap: var(--space-3);
     min-height: 3.5rem;
     padding-block: var(--space-2);
@@ -811,6 +813,8 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   .rate {
     display: inline-grid;
     place-items: center;
+    /* Centred on the score's text, not stood on its baseline. */
+    vertical-align: middle;
     width: var(--target);
     height: var(--target);
     border-radius: 999px;

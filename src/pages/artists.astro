@@ -7,7 +7,6 @@ import Base from '../layouts/Base.astro';
 import PageHeader from '../components/PageHeader.astro';
 import CoverArt from '../components/CoverArt.astro';
 import { hueOf } from '../lib/art/playlist';
-import { KIND_LABELS } from '../lib/artists';
 import { ownerId } from '../lib/auth/user';
 import { scoreTone } from '../lib/format';
 import { initial, roster, type RosterArtist, type RosterSort } from '../lib/roster';
@@ -37,10 +36,8 @@ const SORTS: [RosterSort, string][] = [
   ['recent', 'Newest added'],
   ['name', 'A–Z'],
 ];
-const meta = (a: RosterArtist) =>
-  [a.kind ? (KIND_LABELS as Record<string, string>)[a.kind] ?? null : null, a.releases ? `${a.releases} ${a.releases === 1 ? 'release' : 'releases'}` : null]
-    .filter(Boolean)
-    .join(' · ');
+// Person or group stays behind the scenes; how much of theirs is here is what helps.
+const meta = (a: RosterArtist) => (a.releases ? `${a.releases} ${a.releases === 1 ? 'release' : 'releases'}` : '');
 ---
 
 <Base title="Artists" description={`All ${artists.length} artists in the catalogue.`}>

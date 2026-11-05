@@ -639,7 +639,7 @@ function gutFindings(facts: TrackFact[], opts: Options, tally: Tally): Finding[]
 }
 
 /** The track that doesn't fit its album: far below or above the rest of it. */
-function oddOnes(facts: TrackFact[], tally: Tally): Finding[] {
+function oddOnes(facts: TrackFact[], tally: Tally, opts: Options = {}): Finding[] {
   const byAlbum = new Map<string, TrackFact[]>();
   for (const f of facts) if (f.albumId && !f.extra) byAlbum.set(f.albumId, [...(byAlbum.get(f.albumId) ?? []), f]);
   const out: Finding[] = [];
@@ -658,9 +658,10 @@ function oddOnes(facts: TrackFact[], tally: Tally): Finding[] {
         key: `odd:${f.id}`,
         kind: 'odd',
         headline:
+          // On the album's own page, its name goes without saying.
           diff < 0
-            ? `“${f.title}” is the one you’d skip on ${f.albumTitle}`
-            : `“${f.title}” towers over the rest of ${f.albumTitle}`,
+            ? `“${f.title}” is the one you’d skip${opts.albumId ? '' : ` on ${f.albumTitle}`}`
+            : `“${f.title}” towers over the rest${opts.albumId ? ' of the album' : ` of ${f.albumTitle}`}`,
         detail: `${round(f.score)}, against ${round(mean(rest))} for the other ${rest.length} tracks.`,
         strength: Math.min(Math.abs(z), 6),
         tracks: tracks.length,
@@ -723,7 +724,7 @@ function consistency(facts: TrackFact[]): Finding[] {
 export function discover(facts: TrackFact[], opts: Options = {}): Finding[] {
   if (facts.length < 6) return [];
   const tally: Tally = { tests: 0 };
-  const tested = [...groupFindings(facts, opts, tally), ...trendFindings(facts, opts, tally), ...gutFindings(facts, opts, tally), ...oddOnes(facts, tally)];
+  const tested = [...groupFindings(facts, opts, tally), ...trendFindings(facts, opts, tally), ...gutFindings(facts, opts, tally), ...oddOnes(facts, tally, opts)];
   // Of everything tested, only what survives the false-discovery correction.
   const keep = discoveries(
     tested.map((f) => f.p!),
