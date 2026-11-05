@@ -21,7 +21,7 @@ const {
   returnTo,
   current = null,
   legend = 'Gut score',
-  hint = 'First instinct, out of 10. One tap saves it.',
+  hint,
 } = Astro.props;
 const scores = Array.from({ length: 11 }, (_, n) => n);
 ---
@@ -33,7 +33,7 @@ const scores = Array.from({ length: 11 }, (_, n) => n);
   <fieldset>
     <legend>
       <span class="legend-title">{legend}</span>
-      <span class="hint">{hint}</span>
+      {hint && <span class="hint">{hint}</span>}
     </legend>
     <div class="scale">
       {

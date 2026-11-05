@@ -26,6 +26,8 @@ interface Item {
   credits: import('../lib/catalogue').CreditPart[];
   artKey: string | null;
   meta: string;
+  /** Album, Single, EP…; Track for a recording. */
+  kind: string;
   spotifyUrl: string;
   detailHref: string;
 }
@@ -42,6 +44,7 @@ if (entry?.entity_type === 'release_group') {
       credits: album.credits,
       artKey: album.art_key,
       meta: [typeLabel(album.type), yearOf(album.first_release_date)].filter(Boolean).join(' · '),
+      kind: typeLabel(album.type),
       spotifyUrl: spotifyLink('album', spotify?.spotify_id ?? null, `${album.credits[0]?.name ?? ''} ${album.title}`),
       detailHref: `/album/${album.id}`,
     };
@@ -54,6 +57,7 @@ if (entry?.entity_type === 'release_group') {
       credits: track.credits,
       artKey: track.art_key,
       meta: ['Track', track.album_title].filter(Boolean).join(' · '),
+      kind: 'Track',
       spotifyUrl: spotifyLink('track', track.spotify_id, `${track.credits[0]?.name ?? ''} ${track.title}`),
       detailHref: track.album_id ? `/album/${track.album_id}` : '/',
     };
@@ -81,6 +85,8 @@ function reasonText(e: QueueEntry): string {
 }
 
 const isAlbum = entry?.entity_type === 'release_group';
+// "Rate the single", "Rate the EP", "Rate the track": what it is, not always "album".
+const noun = !item ? '' : isAlbum ? (item.kind === 'EP' ? 'EP' : item.kind.toLowerCase()) : 'track';
 const rateHref = entry ? `/edit/rate/${entry.entity_type}/${entry.entity_id}?return_to=/queue` : '';
 ---
 
@@ -120,8 +126,8 @@ const rateHref = entry ? `/edit/rate/${entry.entity_type}/${entry.entity_id}?ret
             entityType={entry.entity_type}
             entityId={entry.entity_id}
             returnTo="/queue"
-            legend={isAlbum ? 'Rate the album' : 'Rate the track'}
-            hint={entry.reason.kind === 'examine' ? 'A new gut score, or open the full breakdown below.' : 'One tap saves it and moves on.'}
+            legend={`Rate the ${noun}`}
+            hint={entry.reason.kind === 'examine' ? 'A new gut score, or the full breakdown.' : undefined}
           />
 
           <div class="actions">
@@ -134,7 +140,11 @@ const rateHref = entry ? `/edit/rate/${entry.entity_type}/${entry.entity_id}?ret
               data-entity-type={entry.entity_type}
               data-entity-id={entry.entity_id}
             >
-              Open in Spotify<span class="visually-hidden"> (opens in a new tab)</span>
+              <svg class="spotify" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M7.5 10c3-1 6.3-.7 9 .8M8.2 13.2c2.4-.7 5-.5 7.2.6M8.8 16.2c1.8-.4 3.6-.3 5.3.4" />
+              </svg>
+              Listen<span class="visually-hidden"> on Spotify (opens in a new tab)</span>
             </a>
             <a class="button" href={rateHref}>Full breakdown</a>
             <form method="post" action="/api/write/queue/skip">
@@ -230,5 +240,56 @@ const rateHref = entry ? `/edit/rate/${entry.entity_type}/${entry.entity_id}?ret
 
   .muted {
     color: var(--text-muted);
+  }
+
+  /* Wide: the cover beside the words, as on album and track pages. */
+  @media (min-width: 56rem) {
+    .page {
+      --content-max: 64rem;
+    }
+
+    .item {
+      grid-template-columns: 20rem minmax(0, 1fr);
+      grid-template-areas:
+        'progress progress'
+        'art header'
+        'art scale'
+        'art actions';
+      align-content: start;
+      column-gap: var(--space-7);
+    }
+
+    .progress {
+      grid-area: progress;
+    }
+
+    .art {
+      grid-area: art;
+      align-self: start;
+    }
+
+    .item > header {
+      grid-area: header;
+      align-self: end;
+    }
+
+    /* The rating scale (GutScale's form). */
+    .item > :global(form[action='/api/write/rating']) {
+      grid-area: scale;
+    }
+
+    .actions {
+      grid-area: actions;
+      align-self: start;
+    }
+  }
+
+  .actions .spotify {
+    width: 1.1rem;
+    height: 1.1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
   }
 </style>
