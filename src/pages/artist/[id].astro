@@ -976,6 +976,11 @@ const facts = [
       grid-template-columns: minmax(0, 1fr) 20rem;
       align-items: start;
     }
+
+    /* As deep as the credits panel's padding: the two headings line up. */
+    .pair > section:not(.credits-panel) {
+      padding-top: calc(var(--space-5) + 1px);
+    }
   }
 
   .credits-panel {
@@ -985,8 +990,8 @@ const facts = [
     background: var(--surface-1);
   }
 
+  /* The same size as the headings beside it, so the two line up. */
   .credits-panel h2 {
-    font-size: var(--step-1);
     margin-bottom: var(--space-3);
   }
 

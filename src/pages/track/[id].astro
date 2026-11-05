@@ -299,7 +299,6 @@ function ordinalOf(n: number): string {
         <details class="history-box">
           <summary>
             <h2 id="history-heading">Rated {history.length} times</h2>
-            <span class="muted small">See how it moved</span>
           </summary>
           <ol role="list" class="history">
             {history.map((r) => (
@@ -652,6 +651,12 @@ function ordinalOf(n: number): string {
       grid-template-columns: minmax(0, 1fr) 22rem;
       align-items: start;
     }
+
+    /* Starts as deep as the credits panel's padding, so its first heading
+       lines up with the panel's. */
+    .main-col {
+      padding-top: calc(var(--space-5) + 1px);
+    }
   }
 
   .main-col {
@@ -667,9 +672,9 @@ function ordinalOf(n: number): string {
     background: var(--surface-1);
   }
 
+  /* The same size as the headings beside it, so the two line up. */
   .credits-panel h2 {
     margin-bottom: var(--space-3);
-    font-size: var(--step-1);
   }
 
   .credits-panel dl {

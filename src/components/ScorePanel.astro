@@ -41,9 +41,12 @@ const axes: readonly (readonly [string, number | 'n/a' | null])[] = trackAxes.le
       ['Ambition', rating.ambition],
     ] as const).filter(([, v]) => v != null)
   : [];
+// Nothing to show beside the number: the panel hugs it rather than frame
+// an empty space.
+const bare = coverage === null && axes.length === 0 && !best && !(rating && rating.gut_score != null);
 ---
 
-<section class:list={['panel', { rateable: rateHref }]} aria-label="Score">
+<section class:list={['panel', { rateable: rateHref, bare }]} aria-label="Score">
   {
     /* The whole panel is the way to (re)rate: a link stretched over it, with
        any links inside lifted above it so they still work on their own. */
@@ -86,18 +89,14 @@ const axes: readonly (readonly [string, number | 'n/a' | null])[] = trackAxes.le
             </span>
             <span class="visually-hidden">Score {score} out of 100</span>
           </p>
-          <p class="breakdown">
-            {impact > 0 ? (
-              <>
-                <span class="mark" aria-hidden="true">✦</span> Impact {impact} of 10
-              </>
-            ) : (
-              'out of 100'
-            )}
-          </p>
+          {impact > 0 && (
+            <p class="breakdown">
+              <span class="mark" aria-hidden="true">✦</span> Impact {impact} of 10
+            </p>
+          )}
         </div>
 
-        <div class="details">
+        {!bare && <div class="details">
           {coverage !== null && (
             <div class="meter">
               <p class="meter-label">
@@ -135,7 +134,7 @@ const axes: readonly (readonly [string, number | 'n/a' | null])[] = trackAxes.le
               <span class="tabular best-score">{Math.round(best.quality)}</span>
             </p>
           )}
-        </div>
+        </div>}
 
       </>
     )
@@ -154,6 +153,12 @@ const axes: readonly (readonly [string, number | 'n/a' | null])[] = trackAxes.le
     background: color-mix(in srgb, var(--surface-1) 72%, transparent);
     backdrop-filter: blur(12px);
     max-width: 36rem;
+  }
+
+  .panel.bare {
+    grid-template-columns: auto;
+    width: fit-content;
+    padding-inline: var(--space-5) var(--space-6);
   }
 
   .best {
