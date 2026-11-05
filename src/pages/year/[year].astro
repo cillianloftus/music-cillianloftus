@@ -1,0 +1,242 @@
+---
+/**
+ * A year in review, drawn from the ratings and plays alone (src/lib/year.ts).
+ * Public, like the ratings. Sections without anything to show are left out,
+ * so a quiet year is a short page rather than a page of empty boxes.
+ */
+import Base from '../../layouts/Base.astro';
+import AlbumCard from '../../components/AlbumCard.astro';
+import BarChart from '../../components/BarChart.astro';
+import Findings from '../../components/Findings.astro';
+import ResultList from '../../components/ResultList.astro';
+import Shelf from '../../components/Shelf.astro';
+import { ownerId } from '../../lib/auth/user';
+import { releaseGroupsByIds } from '../../lib/catalogue';
+import { hydrateTracks } from '../../lib/query/run';
+import { yearInReview } from '../../lib/year';
+
+const year = Number(Astro.params.year);
+const thisYear = new Date().getUTCFullYear();
+if (!Number.isInteger(year) || year < 1900 || year > thisYear) return Astro.rewrite('/404');
+
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+if (!viewerId) return Astro.rewrite('/404');
+const review = await yearInReview(viewerId, year);
+const [releases, discoveries] = await Promise.all([releaseGroupsByIds(review.releases, viewerId), hydrateTracks(review.discoveries, viewerId)]);
+// Keep the order the review chose (best first).
+const releaseOrder = new Map(review.releases.map((id, i) => [id, i]));
+releases.sort((a, b) => releaseOrder.get(a.id)! - releaseOrder.get(b.id)!);
+
+const n = (x: number, one: string, many = `${one}s`) => `${x.toLocaleString('en-GB')} ${x === 1 ? one : many}`;
+const monthName = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' });
+const busiest = [...review.months].sort((a, b) => b.count - a.count)[0];
+const older = review.years.filter((y) => y < year)[0];
+const newer = [...review.years].reverse().find((y) => y > year);
+const inProgress = year === thisYear;
+const stats = [
+  { label: 'tracks rated', value: review.rated },
+  { label: review.newArtists === 1 ? 'new artist' : 'new artists', value: review.newArtists },
+  ...(review.plays ? [{ label: 'plays', value: review.plays }] : []),
+  ...(review.average !== null ? [{ label: 'average score', value: Math.round(review.average) }] : []),
+];
+---
+
+<Base title={`${year} in review`} description={`${year} in music: ${n(review.rated, 'track')} rated, ${n(review.newArtists, 'new artist')}.`}>
+  <div class="wrap page">
+    <header>
+      <p class="eyebrow">{inProgress ? 'So far' : 'In review'}</p>
+      <h1>{year}</h1>
+      <nav class="years" aria-label="Other years">
+        {older && <a href={`/year/${older}`} rel="prev">← {older}</a>}
+        {newer && <a href={`/year/${newer}`} rel="next">{newer} →</a>}
+      </nav>
+    </header>
+
+    {
+      review.rated === 0 && releases.length === 0 ? (
+        <p class="muted">Nothing rated in {year}.</p>
+      ) : (
+        <>
+          <dl class="stats">
+            {stats.map((s) => (
+              <div>
+                <dd class="tabular">{s.value.toLocaleString('en-GB')}</dd>
+                <dt>{s.label}</dt>
+              </div>
+            ))}
+          </dl>
+
+          {review.findings.length > 0 && (
+            <section aria-labelledby="different-heading">
+              <h2 id="different-heading">What was different about {year}</h2>
+              <Findings findings={review.findings} />
+            </section>
+          )}
+
+          {releases.length > 0 && (
+            <section aria-labelledby="releases-heading">
+              <h2 id="releases-heading">Best of {year}’s releases</h2>
+              <Shelf label={`Best releases of ${year}`}>
+                <ol role="list">
+                  {releases.map((album) => (
+                    <li>
+                      <AlbumCard album={album} />
+                    </li>
+                  ))}
+                </ol>
+              </Shelf>
+            </section>
+          )}
+
+          {discoveries.length > 0 && (
+            <section aria-labelledby="discoveries-heading">
+              <h2 id="discoveries-heading">Loved first in {year}</h2>
+              <ResultList results={discoveries} />
+            </section>
+          )}
+
+          {review.found.length > 0 && (
+            <section aria-labelledby="found-heading">
+              <h2 id="found-heading">Artists you found</h2>
+              <ol class="found" role="list">
+                {review.found.map((a) => (
+                  <li>
+                    <a href={`/artist/${a.id}`}>{a.name}</a>
+                    <span class="muted small tabular">
+                      {Math.round(a.average)} across {n(a.tracks, 'track')}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+
+          {review.rated > 0 && (
+            <section aria-labelledby="months-heading">
+              <h2 id="months-heading">When</h2>
+              {busiest && busiest.count > 0 && (
+                <p class="muted lead">
+                  {monthName(busiest.month)} was the busiest month, with {n(busiest.count, 'track')} rated.
+                </p>
+              )}
+              <BarChart
+                title={`Tracks first rated each month of ${year}`}
+                valueLabel="Tracks"
+                bars={review.months.map((m) => ({ label: monthName(m.month), value: m.count, detail: n(m.count, 'track') }))}
+              />
+            </section>
+          )}
+        </>
+      )
+    }
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-7);
+  }
+
+  .page > :global(*) {
+    min-width: 0;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+    padding-top: var(--space-6);
+  }
+
+  h1 {
+    font-size: clamp(3.5rem, 2rem + 8vw, 8rem);
+    font-weight: 850;
+    letter-spacing: -0.05em;
+    line-height: 0.9;
+  }
+
+  .years {
+    display: flex;
+    gap: var(--space-5);
+    font-weight: 650;
+  }
+
+  .years a {
+    text-decoration: none;
+  }
+
+  .years a:hover {
+    text-decoration: underline;
+  }
+
+  h2 {
+    margin-bottom: var(--space-4);
+    font-size: var(--step-2);
+    letter-spacing: -0.02em;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  .lead {
+    margin-bottom: var(--space-3);
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+    gap: var(--space-4);
+    margin: 0;
+    padding: var(--space-5) 0;
+    border-block: 1px solid var(--border);
+  }
+
+  .stats div {
+    display: grid;
+  }
+
+  .stats dd {
+    margin: 0;
+    font-size: var(--step-4);
+    font-weight: 850;
+    letter-spacing: -0.04em;
+    line-height: 1;
+  }
+
+  .stats dt {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .found {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+    gap: var(--space-2) var(--space-5);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .found li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .found a {
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .found a:hover {
+    text-decoration: underline;
+  }
+</style>
