@@ -2,6 +2,8 @@ import { defineMiddleware } from 'astro:middleware';
 import { env } from 'cloudflare:workers';
 import { verifyAccessJwt, type AccessIdentity } from './lib/auth/access';
 import { userForEmail } from './lib/auth/user';
+import { currentStamp, forgetStamp, isCacheablePage, isKeepable, pageKey, PAGE_MAX_AGE } from './lib/page-cache';
+import { THEME_COOKIE } from './lib/theme';
 
 /** Paths behind the Access policy. Everything else is public. */
 function isProtected(pathname: string): boolean {
@@ -66,5 +68,43 @@ export const onRequest = defineMiddleware(async (context, next) => {
     });
   }
 
-  return next();
+  // A write moves the site's state: forget the remembered stamp so this
+  // isolate's next page is worked out afresh.
+  if (context.request.method !== 'GET' && context.request.method !== 'HEAD') {
+    const response = await next();
+    forgetStamp();
+    return response;
+  }
+
+  // Public pages come from the edge cache while the site is unchanged (see
+  // src/lib/page-cache.ts). Not in development, where the code changes.
+  if (import.meta.env.DEV || context.request.method !== 'GET' || !isCacheablePage(context.url.pathname)) return next();
+  const cache = (caches as unknown as { default: Cache }).default;
+  let key: Request;
+  try {
+    key = pageKey(context.url, await currentStamp(), context.locals.user?.id ?? null, context.cookies.get(THEME_COOKIE)?.value);
+    const hit = await cache.match(key);
+    if (hit) {
+      // The edge keeps it; the browser asks again each time, so a new rating shows at once.
+      const served = new Response(hit.body, hit);
+      served.headers.set('Cache-Control', 'private, no-cache');
+      return served;
+    }
+  } catch (error) {
+    console.warn('Page cache unavailable', error);
+    return next();
+  }
+
+  const response = await next();
+  if (!isKeepable(response)) return response;
+  const kept = new Response(response.body, response);
+  kept.headers.set('Cache-Control', `public, max-age=${PAGE_MAX_AGE}`);
+  const copy = kept.clone();
+  // The visitor gets the page as it streams; the copy is stored once it has.
+  const stored = cache.put(key, copy).catch((error) => console.warn('Page cache put failed', error));
+  const ctx = (context.locals as { cfContext?: { waitUntil(p: Promise<unknown>): void } }).cfContext;
+  if (ctx) ctx.waitUntil(stored);
+  // Browsers revalidate: the next visit asks again and the edge answers.
+  kept.headers.set('Cache-Control', 'private, no-cache');
+  return kept;
 });
