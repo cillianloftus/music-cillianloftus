@@ -111,3 +111,11 @@ export async function ratingMoments(userId: string | null): Promise<string[]> {
     .all<{ rated_at: string }>();
   return results.map((r) => r.rated_at);
 }
+
+/** When each rating in one calendar year was made (Dublin dates are near enough to UTC at the year's ends to take a day either side). */
+export async function ratingMomentsIn(userId: string | null, year: number): Promise<string[]> {
+  const { results } = await env.DB.prepare(`SELECT rated_at FROM rating WHERE user_id = ?1 AND rated_at >= ?2 AND rated_at < ?3`)
+    .bind(userId, `${year - 1}-12-31`, `${year + 1}-01-02`)
+    .all<{ rated_at: string }>();
+  return results.map((r) => r.rated_at);
+}

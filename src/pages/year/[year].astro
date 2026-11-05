@@ -6,10 +6,12 @@
  */
 import Base from '../../layouts/Base.astro';
 import AlbumCard from '../../components/AlbumCard.astro';
-import BarChart from '../../components/BarChart.astro';
 import Findings from '../../components/Findings.astro';
 import ResultList from '../../components/ResultList.astro';
 import Shelf from '../../components/Shelf.astro';
+import RatingCalendar from '../../components/RatingCalendar.astro';
+import { dublinDate } from '../../lib/calendar';
+import { ratingMomentsIn } from '../../lib/overview';
 import { ownerId } from '../../lib/auth/user';
 import { releaseGroupsByIds } from '../../lib/catalogue';
 import { hydrateTracks } from '../../lib/query/run';
@@ -22,14 +24,24 @@ if (!Number.isInteger(year) || year < 1900 || year > thisYear) return Astro.rewr
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
 if (!viewerId) return Astro.rewrite('/404');
 const review = await yearInReview(viewerId, year);
-const [releases, discoveries] = await Promise.all([releaseGroupsByIds(review.releases, viewerId), hydrateTracks(review.discoveries, viewerId)]);
+const [releases, discoveries, moments] = await Promise.all([
+  releaseGroupsByIds(review.releases, viewerId),
+  hydrateTracks(review.discoveries, viewerId),
+  ratingMomentsIn(viewerId, year),
+]);
 // Keep the order the review chose (best first).
 const releaseOrder = new Map(review.releases.map((id, i) => [id, i]));
 releases.sort((a, b) => releaseOrder.get(a.id)! - releaseOrder.get(b.id)!);
 
 const n = (x: number, one: string, many = `${one}s`) => `${x.toLocaleString('en-GB')} ${x === 1 ? one : many}`;
 const monthName = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' });
-const busiest = [...review.months].sort((a, b) => b.count - a.count)[0];
+// The busiest month by the same count the calendar shows: every rating, by its Dublin date.
+const byMonth = new Map<string, number>();
+for (const at of moments) {
+  const month = dublinDate(at).slice(0, 7);
+  if (month.startsWith(String(year))) byMonth.set(month, (byMonth.get(month) ?? 0) + 1);
+}
+const busiest = [...byMonth].map(([month, count]) => ({ month, count })).sort((a, b) => b.count - a.count)[0];
 const older = review.years.filter((y) => y < year)[0];
 const newer = [...review.years].reverse().find((y) => y > year);
 const inProgress = year === thisYear;
@@ -116,14 +128,10 @@ const stats = [
               <h2 id="months-heading">When</h2>
               {busiest && busiest.count > 0 && (
                 <p class="muted lead">
-                  {monthName(busiest.month)} was the busiest month, with {n(busiest.count, 'track')} rated.
+                  {monthName(busiest.month)} was the busiest month, with {n(busiest.count, 'rating')}.
                 </p>
               )}
-              <BarChart
-                title={`Tracks first rated each month of ${year}`}
-                valueLabel="Tracks"
-                bars={review.months.map((m) => ({ label: monthName(m.month), value: m.count, detail: n(m.count, 'track') }))}
-              />
+              <RatingCalendar ratedAt={moments} today={dublinDate(new Date())} from={`${year}-01-01`} to={`${year}-12-31`} />
             </section>
           )}
         </>

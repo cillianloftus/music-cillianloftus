@@ -82,16 +82,28 @@ export function levelsFor(counts: number[]): number[] {
   return starts;
 }
 
-/** The year to `today` (a Dublin date) from rating moments: 53 weeks, the last one ending on Sunday. */
-export function calendarOf(ratedAt: string[], today: string, weeks = 53): Calendar {
+/**
+ * A calendar of rating days from rating moments. By default the year to
+ * `today` (a Dublin date): 53 weeks, the last ending on Sunday. With
+ * `from` and `to`, exactly those dates (a calendar year on its own page),
+ * in whole weeks; days after `today` are left undrawn.
+ */
+export function calendarOf(ratedAt: string[], today: string, range: { from?: string; to?: string } = {}): Calendar {
   const counts = new Map<string, number>();
   for (const at of ratedAt) {
     const d = dublinDate(at);
     counts.set(d, (counts.get(d) ?? 0) + 1);
   }
-  const lastSunday = shift(today, 6 - weekday(today));
-  const first = shift(lastSunday, -(weeks * 7 - 1));
-  const inRange = [...counts].filter(([d]) => d >= first && d <= today).map(([, c]) => c);
+  const end = range.to ?? today;
+  const lastSunday = shift(end, 6 - weekday(end));
+  const first = range.from ? shift(range.from, -weekday(range.from)) : shift(lastSunday, -(53 * 7 - 1));
+  // Whole weeks from the first Monday through the last Sunday.
+  const weeks = Math.round((Date.parse(`${lastSunday}T12:00:00Z`) - Date.parse(`${first}T12:00:00Z`) + 86_400_000) / (7 * 86_400_000));
+  // Counted: the dates asked for (or the whole grid), up to today.
+  const lo = range.from ?? first;
+  const hi = range.to && range.to < today ? range.to : today;
+  const counted = (d: string) => d >= lo && d <= hi;
+  const inRange = [...counts].filter(([d]) => counted(d)).map(([, c]) => c);
   const levels = levelsFor(inRange);
   const level = (c: number) => (c === 0 ? 0 : (levels.filter((start) => c >= start).length as 1 | 2 | 3 | 4));
 
@@ -103,13 +115,13 @@ export function calendarOf(ratedAt: string[], today: string, weeks = 53): Calend
     for (let d = 0; d < 7; d++) {
       const date = shift(first, w * 7 + d);
       const count = counts.get(date) ?? 0;
-      week.push({ date, count, level: level(count), future: date > today });
+      week.push({ date, count: counted(date) ? count : 0, level: counted(date) ? level(count) : 0, future: date > today || !counted(date) });
       // A month's label sits over the week its first day falls in.
       if (date.endsWith('-01') && date <= today) months.push({ week: w, label: monthName.format(new Date(`${date}T12:00:00Z`)) });
     }
     grid.push(week);
   }
-  const runs = runsOf([...counts.keys()].filter((d) => d >= first && d <= today), today);
+  const runs = runsOf([...counts.keys()].filter(counted), today);
   return {
     weeks: grid,
     months,

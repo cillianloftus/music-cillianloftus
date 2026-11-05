@@ -66,3 +66,26 @@ describe('runsOf', () => {
     expect(runsOf(['2025-12-31', '2026-01-01'], '2026-01-01').longest).toBe(2);
   });
 });
+
+describe('calendarOf for a calendar year', () => {
+  const moments = ['2025-12-30T10:00:00Z', '2025-03-04T10:00:00Z', '2025-03-04T11:00:00Z', '2026-01-02T10:00:00Z'];
+  const year = calendarOf(moments, '2026-11-05', { from: '2025-01-01', to: '2025-12-31' });
+
+  it('runs from the week of 1 January to the week of 31 December', () => {
+    expect(year.weeks[0]!.some((d) => d.date === '2025-01-01')).toBe(true);
+    expect(year.weeks.at(-1)!.some((d) => d.date === '2025-12-31')).toBe(true);
+    expect(year.weeks.length).toBeGreaterThanOrEqual(53);
+  });
+
+  it('counts only that year, and leaves the days outside it undrawn', () => {
+    expect(year.total).toBe(3);
+    const firstWeek = year.weeks[0]!;
+    expect(firstWeek.filter((d) => d.date < '2025-01-01').every((d) => d.future)).toBe(true);
+  });
+
+  it('leaves the rest of the current year undrawn', () => {
+    const now = calendarOf(moments, '2026-11-05', { from: '2026-01-01', to: '2026-12-31' });
+    expect(now.weeks.flat().find((d) => d.date === '2026-12-01')!.future).toBe(true);
+    expect(now.total).toBe(1);
+  });
+});

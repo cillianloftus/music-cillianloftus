@@ -13,10 +13,13 @@ interface Props {
   ratedAt: string[];
   /** Today, as a Dublin date. */
   today: string;
+  /** A fixed span, such as a calendar year; the last 53 weeks when left out. */
+  from?: string;
+  to?: string;
 }
 
-const { ratedAt, today } = Astro.props;
-const cal = calendarOf(ratedAt, today);
+const { ratedAt, today, from, to } = Astro.props;
+const cal = calendarOf(ratedAt, today, { from, to });
 const CELL = 11;
 const STEP = 13;
 const LEFT = 26;
@@ -35,7 +38,7 @@ const keyWords = ['None', ...cal.levels.map((start, i) => (i === 3 ? `${start} +
 
 <figure class="calendar">
   <div class="scroller" data-calendar>
-    <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} role="group" aria-label={`Ratings each day over the last year: ${cal.total} on ${cal.days} days`}>
+    <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} role="group" aria-label={`Ratings each day${from ? '' : ' over the last year'}: ${cal.total} on ${cal.days} days`}>
       {
         cal.months.map((m) => (
           <text class="month" x={LEFT + m.week * STEP} y={10} aria-hidden="true">
