@@ -1,0 +1,222 @@
+---
+/**
+ * A year of rating at a glance: one square a day, a column a week, shaded
+ * by how much was rated, from the empty step of the surface to the full
+ * accent. Each day names itself on hover; the busy days are listed in a
+ * table beneath. On a narrow screen the year scrolls sideways, opened at
+ * today.
+ */
+import { calendarOf } from '../lib/calendar';
+
+interface Props {
+  /** Every rating's timestamp in the period. */
+  ratedAt: string[];
+  /** Today, as a Dublin date. */
+  today: string;
+}
+
+const { ratedAt, today } = Astro.props;
+const cal = calendarOf(ratedAt, today);
+const CELL = 11;
+const STEP = 13;
+const LEFT = 26;
+const TOP = 16;
+const width = LEFT + cal.weeks.length * STEP;
+const height = TOP + 7 * STEP;
+const long = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+const dayWords = (date: string) => long.format(new Date(`${date}T12:00:00Z`));
+const what = (count: number) => (count === 0 ? 'Nothing rated' : `${count} ${count === 1 ? 'rating' : 'ratings'}`);
+const busy = cal.weeks
+  .flat()
+  .filter((d) => d.count > 0)
+  .reverse();
+const keyWords = ['None', ...cal.levels.map((start, i) => (i === 3 ? `${start} +` : start === cal.levels[i + 1]! - 1 ? `${start}` : `${start}–${cal.levels[i + 1]! - 1}`))];
+---
+
+<figure class="calendar">
+  <div class="scroller" data-calendar>
+    <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} role="group" aria-label={`Ratings each day over the last year: ${cal.total} on ${cal.days} days`}>
+      {
+        cal.months.map((m) => (
+          <text class="month" x={LEFT + m.week * STEP} y={10} aria-hidden="true">
+            {m.label}
+          </text>
+        ))
+      }
+      {
+        ['Mon', 'Wed', 'Fri'].map((name, i) => (
+          <text class="weekday" x={0} y={TOP + (i * 2) * STEP + CELL - 2} aria-hidden="true">
+            {name}
+          </text>
+        ))
+      }
+      {
+        cal.weeks.map((week, w) =>
+          week.map(
+            (d, i) =>
+              !d.future && (
+                <rect class={`day l${d.level}`} x={LEFT + w * STEP} y={TOP + i * STEP} width={CELL} height={CELL} rx="2">
+                  <title>{`${dayWords(d.date)}: ${what(d.count)}`}</title>
+                </rect>
+              ),
+          ),
+        )
+      }
+    </svg>
+  </div>
+  <figcaption>
+    <span class="tabular">{cal.total.toLocaleString('en-GB')} {cal.total === 1 ? 'rating' : 'ratings'} on {cal.days} {cal.days === 1 ? 'day' : 'days'}</span>
+    <span class="key" aria-hidden="true">
+      Less
+      {keyWords.map((words, level) => <span class={`swatch l${level}`} title={words} />)}
+      More
+    </span>
+  </figcaption>
+  {
+    busy.length > 0 && (
+      <details class="table">
+        <summary>Show as a table</summary>
+        <table>
+          <caption class="visually-hidden">Days with ratings, newest first</caption>
+          <thead>
+            <tr><th scope="col">Day</th><th scope="col">Ratings</th></tr>
+          </thead>
+          <tbody>
+            {busy.map((d) => (
+              <tr>
+                <th scope="row"><time datetime={d.date}>{dayWords(d.date)}</time></th>
+                <td class="tabular">{d.count}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
+    )
+  }
+</figure>
+
+<script>
+  // Open at today: on a narrow screen the year scrolls, and the recent end is what matters.
+  for (const el of document.querySelectorAll<HTMLElement>('[data-calendar]')) el.scrollLeft = el.scrollWidth;
+</script>
+
+<style>
+  /* As wide as the year and no wider, so the key ends where the grid does. */
+  .calendar {
+    display: grid;
+    gap: var(--space-2);
+    width: fit-content;
+    max-width: 100%;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .scroller {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  svg {
+    display: block;
+    font-family: var(--font-sans);
+  }
+
+  .month,
+  .weekday {
+    fill: var(--text-subtle);
+    font-size: 10px;
+  }
+
+  /* One hue, light to strong: the accent mixed into the empty step. */
+  .l0 {
+    fill: var(--surface-2);
+    background: var(--surface-2);
+  }
+
+  .l1 {
+    fill: color-mix(in oklab, var(--accent) 32%, var(--surface-2));
+    background: color-mix(in oklab, var(--accent) 32%, var(--surface-2));
+  }
+
+  .l2 {
+    fill: color-mix(in oklab, var(--accent) 55%, var(--surface-2));
+    background: color-mix(in oklab, var(--accent) 55%, var(--surface-2));
+  }
+
+  .l3 {
+    fill: color-mix(in oklab, var(--accent) 78%, var(--surface-2));
+    background: color-mix(in oklab, var(--accent) 78%, var(--surface-2));
+  }
+
+  .l4 {
+    fill: var(--accent);
+    background: var(--accent);
+  }
+
+  .day:hover {
+    stroke: var(--text);
+    stroke-width: 1.5;
+  }
+
+  figcaption {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-4);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .key {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .key .swatch:first-of-type {
+    margin-left: var(--space-1);
+  }
+
+  .key .swatch:last-of-type {
+    margin-right: var(--space-1);
+  }
+
+  .swatch {
+    width: 11px;
+    height: 11px;
+    border-radius: 2px;
+  }
+
+  .table summary {
+    width: fit-content;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    cursor: pointer;
+  }
+
+  table {
+    width: 100%;
+    max-width: 24rem;
+    margin-top: var(--space-2);
+    border-collapse: collapse;
+    font-size: var(--step--1);
+  }
+
+  th,
+  td {
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    font-weight: 400;
+  }
+
+  thead th {
+    color: var(--text-muted);
+  }
+
+  td {
+    text-align: right;
+  }
+</style>

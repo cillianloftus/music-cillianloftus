@@ -12,10 +12,14 @@ import CoverArt from '../components/CoverArt.astro';
 import CreditLine from '../components/CreditLine.astro';
 import Score from '../components/Score.astro';
 import { ownerId } from '../lib/auth/user';
-import { recentRatings, type RecentRating } from '../lib/overview';
+import RatingCalendar from '../components/RatingCalendar.astro';
+import { dublinDate } from '../lib/calendar';
+import { byLibrary } from '../lib/library-cache';
+import { ratingMoments, recentRatings, type RecentRating } from '../lib/overview';
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const ratings = await recentRatings(viewerId, 400);
+// Kept per library state: a new rating moves the stamp, so the diary is never behind.
+const [ratings, moments] = await byLibrary('diary:v1', viewerId, () => Promise.all([recentRatings(viewerId, 400), ratingMoments(viewerId)]));
 
 const month = new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: 'Europe/Dublin' });
 const day = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' });
@@ -30,6 +34,7 @@ for (const r of ratings) {
   <div class="wrap page">
     <Backdrop artKey={ratings[0]?.art_key} height="28rem" />
     <PageHeader title="Diary" />
+    {moments.length > 0 && <RatingCalendar ratedAt={moments} today={dublinDate(new Date())} />}
 
     {
       ratings.length === 0 ? (

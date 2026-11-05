@@ -101,3 +101,13 @@ export async function recentRatings(userId: string | null, limit = 8): Promise<R
     credits: (r.entity_type === 'release_group' ? albumLines : trackLines).get(r.entity_id) ?? [],
   }));
 }
+
+/** When each rating in the last year was made (every rating, re-ratings too), for the diary's calendar. */
+export async function ratingMoments(userId: string | null): Promise<string[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT rated_at FROM rating WHERE user_id = ?1 AND rated_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-380 days')`,
+  )
+    .bind(userId)
+    .all<{ rated_at: string }>();
+  return results.map((r) => r.rated_at);
+}
