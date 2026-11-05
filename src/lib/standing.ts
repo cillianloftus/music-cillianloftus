@@ -5,7 +5,9 @@
  * none rather than a list of unremarkable ranks.
  */
 
+import { env } from 'cloudflare:workers';
 import type { TrackFact } from './discover';
+import { byLibrary } from './library-cache';
 
 export interface Standing {
   text: string;
@@ -95,4 +97,63 @@ export function standing(facts: TrackFact[], id: string): Standing[] {
     out.push({ text: `Your gut said ${Math.round(me.gut)}; thinking it through made it ${Math.round(me.score)}` });
   }
   return out.slice(0, 4);
+}
+
+export interface AlbumScore {
+  id: string;
+  score: number;
+  type: string;
+  year: string | null;
+  artists: string[];
+  artistNames: string[];
+}
+
+/** Every scored release for a user, cached by library state. */
+export async function albumScores(userId: string): Promise<AlbumScore[]> {
+  return byLibrary('album-scores:v1', userId, async () => {
+    const { results } = await env.DB.prepare(
+      `SELECT s.release_group_id AS id, s.quality_score AS score, g.type, substr(g.first_release_date, 1, 4) AS year,
+              (SELECT json_group_array(c.artist_id) FROM artist_credit c WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary') AS artists,
+              (SELECT json_group_array(a.name) FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+               WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary') AS names
+       FROM v_release_score s JOIN release_group g ON g.id = s.release_group_id
+       WHERE s.user_id = ? AND s.quality_score IS NOT NULL`,
+    )
+      .bind(userId)
+      .all<{ id: string; score: number; type: string; year: string | null; artists: string; names: string }>();
+    return results.map((r) => ({ ...r, artists: JSON.parse(r.artists) as string[], artistNames: JSON.parse(r.names) as string[] }));
+  });
+}
+
+/** Where an album stands: among everything, its artist's releases, its year. */
+export function albumStanding(albums: AlbumScore[], id: string): Standing[] {
+  const me = albums.find((a) => a.id === id);
+  if (!me) return [];
+  const out: Standing[] = [];
+  const kind = me.type === 'ep' ? 'EP' : me.type === 'single' ? 'single' : me.type === 'mixtape' ? 'mixtape' : 'album';
+  // Like for like: albums and mixtapes together, EPs, singles.
+  const sameKind = albums.filter((a) => (['album', 'mixtape'].includes(me.type) ? ['album', 'mixtape'].includes(a.type) : a.type === me.type));
+
+  if (sameKind.length >= 5) {
+    const { above, level } = placing(me.score, sameKind.map((a) => a.score));
+    const words = rankWords(above, level, 5);
+    if (words) out.push({ text: `Your ${words} ${kind}, of ${sameKind.length}` });
+  }
+  me.artists.forEach((artistId, i) => {
+    if (i > 1) return;
+    const theirs = sameKind.filter((a) => a.artists.includes(artistId));
+    if (theirs.length < 3) return;
+    const { above, level } = placing(me.score, theirs.map((a) => a.score));
+    const words = rankWords(above, level, 2);
+    if (words) out.push({ text: `Your ${words} ${me.artistNames[i]} ${kind}, of ${theirs.length}`, href: `/artist/${artistId}` });
+    else if (above === theirs.length - 1 && level === 0) out.push({ text: `Your least favourite ${me.artistNames[i]} ${kind}`, href: `/artist/${artistId}` });
+  });
+  if (me.year) {
+    const sameYear = sameKind.filter((a) => a.year === me.year);
+    if (sameYear.length >= 3) {
+      const { above, level } = placing(me.score, sameYear.map((a) => a.score));
+      if (above === 0 && level === 0) out.push({ text: `Your favourite ${kind} of ${me.year}`, href: `/year/${me.year}` });
+    }
+  }
+  return out.slice(0, 3);
 }

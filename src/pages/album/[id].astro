@@ -2,6 +2,7 @@
 import Base from '../../layouts/Base.astro';
 import Findings from '../../components/Findings.astro';
 import { discover, trackFacts } from '../../lib/discover';
+import { albumScores, albumStanding } from '../../lib/standing';
 import CoverArt from '../../components/CoverArt.astro';
 import CreditLine from '../../components/CreditLine.astro';
 import Backdrop from '../../components/Backdrop.astro';
@@ -80,6 +81,7 @@ const [tracks, standardTracks, genres, people, albumFacts] = await Promise.all([
   viewerId ? trackFacts(viewerId, { albumId: album.id }) : Promise.resolve([]),
 ]);
 // What stands out on this album: found in its tracks' ratings, not chosen.
+const albumLines = viewerId && album.quality_score !== null ? albumStanding(await albumScores(viewerId), album.id) : [];
 const albumFindings = discover(albumFacts, { albumId: album.id, limit: 4, minGroup: 2 }).filter((f) => f.kind !== 'habit');
 
 // Tracks on this edition but not the standard one: bonus tracks, which do
@@ -214,6 +216,15 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
       </div>
 
       <div class="more">
+        {
+          albumLines.length > 0 && (
+            <ul class="standing" role="list" aria-label="Where it stands">
+              {albumLines.map((s) => (
+                <li>{s.href ? <a href={s.href}>{s.text}</a> : s.text}</li>
+              ))}
+            </ul>
+          )
+        }
         <p class="actions">
           <a class="button" href={listenHref} target="_blank" rel="noopener">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1215,5 +1226,34 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
 
   .links a:hover {
     border-color: var(--accent);
+  }
+
+  /* Where it stands: a few quiet lines, each marked like a ranked score. */
+  .standing {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0 0 var(--space-4);
+    padding: 0;
+    list-style: none;
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .standing li {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .standing li::before {
+    content: '✦';
+    color: var(--accent);
+  }
+
+  .standing a {
+    text-decoration: none;
+  }
+
+  .standing a:hover {
+    text-decoration: underline;
   }
 </style>
