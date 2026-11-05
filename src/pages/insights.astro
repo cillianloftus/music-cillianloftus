@@ -15,11 +15,19 @@ import { discover, libraryFacts } from '../lib/discover';
 import Findings from '../components/Findings.astro';
 
 import { byLibrary } from '../lib/library-cache';
+import { changedMinds } from '../lib/minds';
+import { scoreTone } from '../lib/format';
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
 // Kept per library state: every chart here reads the whole library.
-const [data, deep, facts] = viewerId
-  ? await Promise.all([byLibrary('insights:v1', viewerId, () => insights(viewerId)), byLibrary('insights-deeper:v1', viewerId, () => deeperInsights(viewerId)), libraryFacts(viewerId)])
-  : [null, null, []];
+const [data, deep, facts, minds] = viewerId
+  ? await Promise.all([
+      byLibrary('insights:v1', viewerId, () => insights(viewerId)),
+      byLibrary('insights-deeper:v1', viewerId, () => deeperInsights(viewerId)),
+      libraryFacts(viewerId),
+      byLibrary('minds:v1', viewerId, () => changedMinds(viewerId)),
+    ])
+  : [null, null, [], []];
+const since = new Intl.DateTimeFormat('en-GB', { month: 'short', year: 'numeric', timeZone: 'Europe/Dublin' });
 // Whatever stands out in the ratings right now, found rather than chosen.
 const findings = discover(facts, { limit: 18 });
 const h = data?.headline;
@@ -107,6 +115,32 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             <h2 id="patterns-heading">What stands out</h2>
             {findings.length > 0 ? <Findings findings={findings} show={9} /> : <p>Nothing stands out yet.</p>}
           </section>
+
+          {minds.length > 0 && (
+            <section aria-labelledby="minds-heading">
+              <h2 id="minds-heading">Changed your mind</h2>
+              <ol role="list" class="minds">
+                {minds.map((m) => {
+                  const up = m.now > m.was;
+                  return (
+                    <li>
+                      <a href={m.entity_type === 'recording' ? `/track/${m.entity_id}` : `/album/${m.entity_id}`}>{m.title}</a>
+                      <span class="muted small tabular">
+                        from {Math.round(m.was)} in {since.format(new Date(m.first_at))}
+                      </span>
+                      <span class:list={['tabular', 'now', scoreTone(Math.round(m.now)).className]} style={scoreTone(Math.round(m.now)).style}>
+                        {Math.round(m.now)}
+                      </span>
+                      <span class="delta tabular">
+                        {up ? '+' : '−'}
+                        {Math.abs(Math.round(m.now - m.was))}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          )}
 
           <section aria-labelledby="spread-heading">
             <h2 id="spread-heading">How scores spread</h2>
@@ -286,6 +320,65 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
 </Base>
 
 <style>
+  /* One row each: the title, when it was first scored and at what, the
+     score now, and the move, the numbers in columns that line up. */
+  .minds {
+    display: grid;
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .minds li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 2.5ch 4ch;
+    align-items: baseline;
+    gap: 0 var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .minds a {
+    overflow: hidden;
+    font-weight: 700;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .minds a:hover {
+    text-decoration: underline;
+  }
+
+  .minds .now {
+    font-weight: 750;
+    text-align: right;
+  }
+
+  /* The sign says which way; the colour stays quiet. */
+  .delta {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-align: right;
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  /* On a phone the when-and-what drops under the title. */
+  @media (max-width: 30rem) {
+    .minds li {
+      grid-template-columns: minmax(0, 1fr) 2.5ch 4ch;
+    }
+
+    .minds li .muted {
+      grid-row: 2;
+      grid-column: 1;
+    }
+  }
+
   .page {
     display: grid;
     gap: var(--space-7);
