@@ -7,6 +7,7 @@
  * Missing sources are skipped; nothing here is required for an artist.
  */
 
+import { looksBlank } from './image-size';
 import { credentials } from './connections';
 import { geniusToken } from './genius';
 import { fanartFor } from './sources/fanart';
@@ -287,7 +288,10 @@ export async function fetchArtistImages(artistId: string): Promise<number> {
     if (held) continue;
     const response = await fetch(c.url, { headers: { 'User-Agent': USER_AGENT } });
     if (!response.ok) continue;
-    await env.ASSET_STORE.put(key, await response.arrayBuffer(), {
+    const bytes = await response.arrayBuffer();
+    // A black square or a stock silhouette standing in for a photo is worse than none.
+    if (looksBlank(new Uint8Array(bytes))) continue;
+    await env.ASSET_STORE.put(key, bytes, {
       httpMetadata: { contentType: response.headers.get('content-type') ?? 'image/jpeg' },
     });
     await env.DB.prepare(
