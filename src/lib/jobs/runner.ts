@@ -18,7 +18,7 @@ import { planFromMusicBrainz } from '../import/musicbrainz';
 import { writePlan } from '../import/write';
 import { pushDefinition } from '../spotify/push';
 import { runBackup } from '../backup/store';
-import { claimNext, complete, fail, type JobPayloads, type JobRow } from './queue';
+import { claimNext, complete, fail, requeue, type JobPayloads, type JobRow } from './queue';
 
 /**
  * The album's own artists, looked up straight away (who they are, other
@@ -110,10 +110,21 @@ const handlers: Partial<Record<JobRow['kind'], (job: JobRow) => Promise<void>>> 
   backup,
 };
 
+/** Workers cap the requests one invocation may make; this is the error when it runs out. */
+export function isSubrequestLimit(error: unknown): boolean {
+  return /too many subrequests/i.test(error instanceof Error ? error.message : String(error));
+}
+
 /**
  * Works through queued jobs until the queue is empty or the time budget is
  * spent. Jobs that fail are recorded with their error and left for a retry;
  * they never stop the jobs behind them.
+ *
+ * The one exception is running out of requests. Every job in an invocation
+ * shares one allowance, so a job that runs out after others have spent
+ * some is not at fault: it goes back to the front of the queue and this run
+ * stops, so the next starts it with the whole allowance. Only a job that
+ * runs out on a fresh allowance is too big, and fails.
  */
 export async function runJobs({ budgetMs }: { budgetMs: number }): Promise<number> {
   const deadline = Date.now() + budgetMs;
@@ -128,6 +139,11 @@ export async function runJobs({ budgetMs }: { budgetMs: number }): Promise<numbe
       if (!handler) throw new Error(`No handler for job kind "${job.kind}" yet.`);
       await handler(job);
     } catch (error) {
+      if (processed > 0 && isSubrequestLimit(error)) {
+        console.warn(`Job ${job.id} ran out of requests after ${processed} others; it goes first next run`);
+        await requeue(job.id);
+        break;
+      }
       console.error(`Job ${job.id} (${job.kind}) failed`, error);
       await fail(job.id, error);
     }

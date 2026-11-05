@@ -121,6 +121,14 @@ export async function fail(id: string, error: unknown): Promise<void> {
     .run();
 }
 
+/**
+ * Back to queued, keeping its place: the queue goes by created_at, so a job
+ * that was running when it had to stop is the next one claimed.
+ */
+export async function requeue(id: string): Promise<void> {
+  await env.DB.prepare(`UPDATE job SET status = 'queued', started_at = NULL, error = NULL WHERE id = ?`).bind(id).run();
+}
+
 /** Puts a failed job back in the queue. Partial work is kept: imports are idempotent. */
 /** Every failed job back in the queue. Returns how many. */
 export async function retryAllFailed(): Promise<number> {
