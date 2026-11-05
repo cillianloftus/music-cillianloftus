@@ -1,0 +1,241 @@
+---
+/**
+ * An artist's releases by when they came out and how they score: records
+ * as larger dots joined by a thin line, singles and EPs as small ones.
+ * Only the best and worst records are named on the chart; every dot names
+ * itself on hover and focus, and links to its release. The same releases
+ * are in a table beneath.
+ */
+import { arcOf, type ArcRelease } from '../lib/arc';
+import { scoreHue } from '../lib/format';
+
+interface Props {
+  releases: ArcRelease[];
+  /** Names the chart for screen readers. */
+  title: string;
+}
+
+const { releases, title } = Astro.props;
+const arc = arcOf(releases);
+const year = (date: string) => date.slice(0, 4);
+const fill = (score: number) => (score > 100 ? 'oklch(var(--score-l) 0.17 305)' : `oklch(var(--score-l) var(--score-c) ${scoreHue(score)})`);
+const typeWord: Record<string, string> = { album: 'Album', mixtape: 'Mixtape', ep: 'EP', single: 'Single' };
+const describe = (p: ArcRelease) => `${p.title}, ${typeWord[p.type] ?? 'Release'} ${year(p.date)}: ${Math.round(p.score)}`;
+const byDate = [...arc.points].sort((a, b) => a.date.localeCompare(b.date));
+---
+
+<figure class="arc">
+  <svg viewBox={`0 0 ${arc.width} ${arc.height}`} role="group" aria-label={title}>
+    {
+      arc.yTicks.map((t) => (
+        <g class="grid" aria-hidden="true">
+          <line x1={arc.plot.left} x2={arc.plot.right} y1={t.y} y2={t.y} />
+          <text x={arc.plot.left - 8} y={t.y} text-anchor="end" dominant-baseline="central">
+            {t.value}
+          </text>
+        </g>
+      ))
+    }
+    {
+      arc.xTicks.map((t) => (
+        <text class="year" x={t.x} y={arc.height - 6} text-anchor="middle" aria-hidden="true">
+          {t.year}
+        </text>
+      ))
+    }
+    {arc.path && <path class="line" d={arc.path} aria-hidden="true" />}
+    {/* Labels before the dots: where one can't avoid a dot, the dot stays on top. */}
+    {
+      arc.points.map(
+        (p) =>
+          p.labelAt && (
+            <text class="label" x={p.labelAt.x} y={p.labelAt.y} text-anchor={p.labelAt.anchor} aria-hidden="true">
+              {p.labelAt.text}
+            </text>
+          ),
+      )
+    }
+    {
+      arc.points.map((p) => (
+        <a href={`/album/${p.id}`} class:list={['dot', { major: p.major }]} aria-label={describe(p)}>
+          <title>{describe(p)}</title>
+          <circle class="hit" cx={p.x} cy={p.y} r="10" />
+          <circle class="mark" cx={p.x} cy={p.y} r={p.major ? 5.5 : 3.5} style={`fill: ${fill(p.score)}`} />
+        </a>
+      ))
+    }
+  </svg>
+  {
+    arc.mixed && (
+      <figcaption class="key" aria-hidden="true">
+        <span><i class="big" />Albums</span>
+        <span><i class="small" />Singles and EPs</span>
+      </figcaption>
+    )
+  }
+  <details class="table">
+    <summary>Show as a table</summary>
+    <table>
+      <caption class="visually-hidden">{title}</caption>
+      <thead>
+        <tr><th scope="col">Year</th><th scope="col">Release</th><th scope="col">Score</th></tr>
+      </thead>
+      <tbody>
+        {
+          byDate.map((p) => (
+            <tr>
+              <td class="tabular">{year(p.date)}</td>
+              <th scope="row"><a href={`/album/${p.id}`}>{p.title}</a> <span class="muted">{typeWord[p.type] ?? ''}</span></th>
+              <td class="tabular">{Math.round(p.score)}</td>
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </details>
+</figure>
+
+<style>
+  /* Drawn on a narrow canvas and capped, so its text stays 10–15px from a
+     phone to a wide screen. */
+  .arc {
+    display: grid;
+    gap: var(--space-2);
+    max-width: 36rem;
+    margin: 0;
+  }
+
+  svg {
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    font-family: var(--font-sans);
+  }
+
+  .grid line {
+    stroke: var(--border);
+    stroke-width: 1;
+  }
+
+  .grid text,
+  .year {
+    fill: var(--text-subtle);
+    font-size: 11.5px;
+  }
+
+  .line {
+    fill: none;
+    stroke: var(--text-subtle);
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    opacity: 0.45;
+  }
+
+  .hit {
+    fill: transparent;
+  }
+
+  /* A ring in the page colour keeps overlapping dots apart. */
+  .mark {
+    stroke: var(--bg);
+    stroke-width: 2;
+    transition: r 0.15s;
+  }
+
+  .dot:hover .mark,
+  .dot:focus-visible .mark {
+    r: 7.5;
+    stroke: var(--text);
+  }
+
+  .dot:not(.major):hover .mark,
+  .dot:not(.major):focus-visible .mark {
+    r: 5.5;
+  }
+
+  .dot:focus-visible {
+    outline: none;
+  }
+
+  /* A halo in the page colour, so the line can pass behind a label legibly. */
+  .label {
+    paint-order: stroke;
+    stroke: var(--bg);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+    fill: var(--text-muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    pointer-events: none;
+  }
+
+  .key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-4);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .key span {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .key i {
+    border-radius: 50%;
+    background: var(--text-subtle);
+  }
+
+  .key .big {
+    width: 12px;
+    height: 12px;
+  }
+
+  .key .small {
+    width: 8px;
+    height: 8px;
+  }
+
+  .table summary {
+    width: fit-content;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    cursor: pointer;
+  }
+
+  table {
+    width: 100%;
+    margin-top: var(--space-2);
+    border-collapse: collapse;
+    font-size: var(--step--1);
+  }
+
+  th,
+  td {
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    font-weight: 400;
+  }
+
+  thead th {
+    color: var(--text-muted);
+  }
+
+  td:last-child {
+    text-align: right;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mark {
+      transition: none;
+    }
+  }
+</style>

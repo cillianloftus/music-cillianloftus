@@ -18,6 +18,8 @@ import { artistImages } from '../../lib/artist-images';
 import { artistBreakdown } from '../../lib/discover';
 import { kinOf } from '../../lib/kin';
 import Findings from '../../components/Findings.astro';
+import CareerArc from '../../components/CareerArc.astro';
+import { hasArc, type ArcRelease } from '../../lib/arc';
 import { ageOf, artistAbout, artistGenres, lifeWords } from '../../lib/artists';
 import { groupCredits } from '../../lib/credits';
 import { formatPartialDate, yearOf } from '../../lib/dates';
@@ -155,6 +157,11 @@ const links = [
   ...(about.mbid ? [{ href: `https://musicbrainz.org/artist/${about.mbid}`, label: 'MusicBrainz', icon: 'musicbrainz' }] : []),
   ...(about.discogs_id ? [{ href: `https://www.discogs.com/artist/${about.discogs_id}`, label: 'Discogs', icon: 'discogs' }] : []),
 ];
+// Their own records and singles with a score, by when they came out.
+const arcReleases: ArcRelease[] = albums
+  .filter((g) => ['album', 'mixtape', 'ep', 'single'].includes(g.type) && g.quality_score != null && g.first_release_date)
+  .map((g) => ({ id: g.id, title: g.title, type: g.type, date: g.first_release_date!, score: g.quality_score! }));
+const showArc = hasArc(arcReleases);
 // Album bars start a little below the lowest average, so close scores still differ visibly.
 const albumFloor = breakdown?.albums.length ? Math.max(0, Math.min(...breakdown.albums.map((x) => x.average)) - 15) : 0;
 const albumShare = (avg: number) => Math.max(6, Math.round(((avg - albumFloor) / Math.max(1, 100 - albumFloor)) * 100));
@@ -445,6 +452,12 @@ const facts = [
               </div>
             )}
           </dl>
+          {showArc && (
+            <>
+              <h3>Over the years</h3>
+              <CareerArc releases={arcReleases} title={`${artist.name}'s releases by year and score`} />
+            </>
+          )}
           {breakdown.albums.length > 1 && (
             <>
               <h3>Their releases, best first</h3>

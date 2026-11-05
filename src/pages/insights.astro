@@ -14,8 +14,12 @@ import { deeperInsights, favourite, type Band } from '../lib/insights-deeper';
 import { discover, libraryFacts } from '../lib/discover';
 import Findings from '../components/Findings.astro';
 
+import { byLibrary } from '../lib/library-cache';
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const [data, deep, facts] = viewerId ? await Promise.all([insights(viewerId), deeperInsights(viewerId), libraryFacts(viewerId)]) : [null, null, []];
+// Kept per library state: every chart here reads the whole library.
+const [data, deep, facts] = viewerId
+  ? await Promise.all([byLibrary('insights:v1', viewerId, () => insights(viewerId)), byLibrary('insights-deeper:v1', viewerId, () => deeperInsights(viewerId)), libraryFacts(viewerId)])
+  : [null, null, []];
 // Whatever stands out in the ratings right now, found rather than chosen.
 const findings = discover(facts, { limit: 18 });
 const h = data?.headline;
