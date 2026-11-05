@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { findRelease, formatWords } from './discogs';
+import { fanartFor } from './fanart';
 import { artistInfo, LastfmError, scrobblesBetween, userInfo } from './lastfm';
 import { listensBefore } from './listenbrainz';
 import { liveSummary } from './setlistfm';
@@ -133,5 +134,27 @@ describe('Discogs', () => {
     const hit = await findRelease('token', { artist: 'Xavier', title: 'Album A', barcode: null }, fetcher);
     expect(hit?.id).toBe(2);
     expect(formatWords(hit?.format)).toBe('Vinyl, LP, Album');
+  });
+});
+
+describe('fanart.tv', () => {
+  it('puts the best-liked portraits first, over https', async () => {
+    const fetcher = (async (url: string) => {
+      expect(url).toContain('/music/mbid-1?api_key=key');
+      return answer({
+        artistthumb: [
+          { url: 'http://assets.fanart.tv/a.jpg', likes: '1' },
+          { url: 'https://assets.fanart.tv/b.jpg', likes: '9' },
+        ],
+      });
+    }) as unknown as typeof fetch;
+    const art = await fanartFor('key', 'mbid-1', fetcher);
+    expect(art?.portraits.map((p) => p.url)).toEqual(['https://assets.fanart.tv/b.jpg', 'https://assets.fanart.tv/a.jpg']);
+    expect(art?.backgrounds).toEqual([]);
+  });
+
+  it('is null for an artist it has nothing for, and says when the key is wrong', async () => {
+    expect(await fanartFor('key', 'x', (async () => answer({}, 404)) as unknown as typeof fetch)).toBeNull();
+    await expect(fanartFor('bad', 'x', (async () => answer({}, 401)) as unknown as typeof fetch)).rejects.toThrow(/did not accept/);
   });
 });

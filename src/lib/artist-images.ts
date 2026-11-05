@@ -7,7 +7,9 @@
  * Missing sources are skipped; nothing here is required for an artist.
  */
 
+import { credentials } from './connections';
 import { geniusToken } from './genius';
+import { fanartFor } from './sources/fanart';
 import { normaliseName } from './text';
 import { env } from 'cloudflare:workers';
 import { ownerId } from './auth/user';
@@ -20,7 +22,7 @@ const MAX_IMAGES = 7;
 
 interface Candidate {
   url: string;
-  source: 'wikimedia' | 'spotify' | 'deezer' | 'genius';
+  source: 'wikimedia' | 'spotify' | 'deezer' | 'genius' | 'fanart';
   source_url: string | null;
   credit: string | null;
   licence: string | null;
@@ -163,6 +165,25 @@ async function geniusCandidate(name: string): Promise<Candidate | null> {
   return { url: artist.image_url, source: 'genius', source_url: artist.url ?? null, credit: 'Genius', licence: null, width: null, height: null };
 }
 
+/**
+ * fanart.tv's best-liked portraits (square, 1000px), by MusicBrainz id. Needs
+ * its key; without one, nothing.
+ */
+async function fanartCandidates(mbid: string): Promise<Candidate[]> {
+  const creds = await credentials('fanarttv');
+  if (!creds) return [];
+  const art = await fanartFor(creds.api_key!, mbid);
+  return (art?.portraits ?? []).slice(0, 2).map((p) => ({
+    url: p.url,
+    source: 'fanart' as const,
+    source_url: art!.page,
+    credit: 'fanart.tv',
+    licence: null,
+    width: 1000,
+    height: 1000,
+  }));
+}
+
 /** A stable key per source picture, so fetching again adds nothing twice. */
 async function keyFor(artistId: string, url: string): Promise<string> {
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(url));
@@ -193,7 +214,8 @@ export async function rankArtistImages(artistId: string): Promise<void> {
     .bind(artistId)
     .first<{ value_json: string }>();
   const placed = order ? (JSON.parse(order.value_json) as string[]) : [];
-  const weight: Record<string, number> = { manual: 5, spotify: 4, deezer: 3.5, genius: 2.5, wikimedia: 1 };
+  // fanart.tv's are picked by people for exactly this: first among the found.
+  const weight: Record<string, number> = { manual: 5, fanart: 4.5, spotify: 4, deezer: 3.5, genius: 2.5, wikimedia: 1 };
   const score = (r: (typeof results)[number]) => {
     const side = Math.min(r.width ?? 640, r.height ?? r.width ?? 640);
     return (r.key === first ? 100 : 0) + (weight[r.source] ?? 0) + Math.min(side, 1500) / 750 - (side < 400 ? 3 : 0);
@@ -238,12 +260,13 @@ export async function setFirstImage(userId: string, artistId: string, key: strin
 
 /** Finds and stores pictures for one artist. Returns how many are new. */
 export async function fetchArtistImages(artistId: string): Promise<number> {
-  const row = await env.DB.prepare(`SELECT name, wikidata_id, spotify_id FROM artist WHERE id = ?`)
+  const row = await env.DB.prepare(`SELECT name, mbid, wikidata_id, spotify_id FROM artist WHERE id = ?`)
     .bind(artistId)
-    .first<{ name: string; wikidata_id: string | null; spotify_id: string | null }>();
+    .first<{ name: string; mbid: string | null; wikidata_id: string | null; spotify_id: string | null }>();
   if (!row) return 0;
 
   const candidates: Candidate[] = [];
+  if (row.mbid) candidates.push(...(await fanartCandidates(row.mbid).catch(() => [])));
   if (row.spotify_id) {
     const spotify = await spotifyCandidate(row.spotify_id).catch(() => null);
     if (spotify) candidates.push(spotify);
@@ -281,7 +304,7 @@ export async function fetchArtistImages(artistId: string): Promise<number> {
 
 export interface ArtistImage {
   key: string;
-  source: 'wikimedia' | 'spotify' | 'deezer' | 'genius' | 'manual';
+  source: 'wikimedia' | 'spotify' | 'deezer' | 'genius' | 'fanart' | 'manual';
   source_url: string | null;
   credit: string | null;
   licence: string | null;

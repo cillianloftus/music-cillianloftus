@@ -9,7 +9,7 @@
 
 import { env } from 'cloudflare:workers';
 
-export type ServiceId = 'lastfm' | 'listenbrainz' | 'discogs' | 'setlistfm' | 'genius';
+export type ServiceId = 'lastfm' | 'listenbrainz' | 'discogs' | 'setlistfm' | 'fanarttv' | 'genius';
 
 export interface Field {
   key: string;
@@ -74,6 +74,14 @@ export const SERVICES: Service[] = [
     keyUrl: 'https://www.setlist.fm/settings/api',
     steps: 'Apply for an API key (non-commercial, personal use); it arrives straight away.',
     fields: [{ key: 'api_key', label: 'API key', secret: true, env: 'SETLISTFM_API_KEY', pattern: /^[A-Za-z0-9-]{20,64}$/ }],
+  },
+  {
+    id: 'fanarttv',
+    name: 'fanart.tv',
+    gives: 'Curated, high-resolution artist photos, matched by MusicBrainz id so it is always the right person.',
+    keyUrl: 'https://fanart.tv/get-an-api-key/',
+    steps: 'Sign in, then on your profile choose API and copy the personal API key.',
+    fields: [{ key: 'api_key', label: 'Personal API key', secret: true, env: 'FANARTTV_API_KEY', pattern: /^[0-9a-f]{32}$/i, hint: '32 letters and digits' }],
   },
   {
     id: 'genius',

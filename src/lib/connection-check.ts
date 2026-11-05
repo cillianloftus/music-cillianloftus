@@ -8,6 +8,7 @@ import { identity } from './sources/discogs';
 import { checkKey as lastfmKey, userInfo } from './sources/lastfm';
 import { listenCount, validateToken } from './sources/listenbrainz';
 import { checkKey as setlistKey } from './sources/setlistfm';
+import { checkKey as fanartKey } from './sources/fanart';
 
 const API_GENIUS = 'https://api.genius.com';
 
@@ -34,6 +35,9 @@ async function attempt(id: ServiceId, c: Record<string, string>): Promise<string
       return `Connected as ${await identity(c.token!)}`;
     case 'setlistfm':
       await setlistKey(c.api_key!);
+      return 'Key works';
+    case 'fanarttv':
+      await fanartKey(c.api_key!);
       return 'Key works';
     case 'genius': {
       const res = await fetch(`${API_GENIUS}/search?q=radiohead`, { headers: { authorization: `Bearer ${c.token}` } });

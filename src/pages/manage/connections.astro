@@ -24,7 +24,7 @@ const waiting = services.filter((s) => !s.complete).length;
 const flashFor = Astro.url.searchParams.get('service');
 const ok = Astro.url.searchParams.get('ok');
 const error = Astro.url.searchParams.get('error');
-const ICON: Record<string, string> = { lastfm: 'lastfm', listenbrainz: 'L', discogs: 'discogs', setlistfm: 'S', genius: 'genius' };
+const ICON: Record<string, string> = { lastfm: 'lastfm', listenbrainz: 'L', discogs: 'discogs', setlistfm: 'S', fanarttv: 'F', genius: 'genius' };
 // Password managers took these for logins; they are not.
 const quiet = { autocomplete: 'off', spellcheck: false, 'data-1p-ignore': '', 'data-lpignore': 'true', 'data-bwignore': '', 'data-form-type': 'other' };
 ---
