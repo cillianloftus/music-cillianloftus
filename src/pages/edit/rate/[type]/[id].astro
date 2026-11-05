@@ -1,6 +1,7 @@
 ---
 import { env } from 'cloudflare:workers';
 import Base from '../../../../layouts/Base.astro';
+import { typeLabel } from '../../../../lib/format';
 import AxisSlider from '../../../../components/AxisSlider.astro';
 import Backdrop from '../../../../components/Backdrop.astro';
 import CoverArt from '../../../../components/CoverArt.astro';
@@ -26,6 +27,8 @@ interface Subject {
   album_id: string | null;
   album_title: string | null;
   art_key: string | null;
+  /** Album, single, EP…; absent for a track. */
+  type?: string | null;
 }
 
 // The thing being rated, with album context for a recording.
@@ -44,7 +47,7 @@ const subject =
         .bind(id)
         .first<Subject>()
     : await env.DB.prepare(
-        `SELECT g.title, g.id AS album_id, NULL AS album_title, r.art_key
+        `SELECT g.title, g.id AS album_id, NULL AS album_title, r.art_key, g.type
          FROM release_group g
          LEFT JOIN v_release_group_canonical c ON c.release_group_id = g.id
          LEFT JOIN release r ON r.id = c.release_id
@@ -94,7 +97,7 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
         <CoverArt artKey={subject.art_key} title={subject.album_title ?? subject.title} sizes="5rem" />
       </div>
       <div>
-        <p class="eyebrow">{entityType === 'recording' ? 'Rate track' : 'Rate album'}</p>
+        <p class="eyebrow">{entityType === 'recording' ? 'Rate track' : `Rate ${subject.type ? (typeLabel(subject.type) === 'EP' ? 'EP' : typeLabel(subject.type).toLowerCase()) : 'album'}`}</p>
         <h1>{subject.title}</h1>
         <p class="muted">
           <CreditLine credits={credits} link={false} />
