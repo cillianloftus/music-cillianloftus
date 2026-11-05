@@ -10,7 +10,7 @@ import { env } from 'cloudflare:workers';
 import { enqueue } from './jobs/queue';
 
 export async function refreshAlbum(albumId: string): Promise<string[]> {
-  const album = await env.DB.prepare(`SELECT spotify_id FROM release_group WHERE id = ?`).bind(albumId).first<{ spotify_id: string | null }>();
+  const album = await env.DB.prepare(`SELECT title, spotify_id FROM release_group WHERE id = ?`).bind(albumId).first<{ title: string; spotify_id: string | null }>();
   if (!album) return [];
   const { results } = await env.DB.prepare(`SELECT mbid FROM release WHERE release_group_id = ? AND mbid IS NOT NULL`)
     .bind(albumId)
@@ -28,10 +28,10 @@ export async function refreshAlbum(albumId: string): Promise<string[]> {
 
   const jobs: string[] = [];
   for (const { mbid } of results) {
-    jobs.push(await enqueue('import_release', { source: 'musicbrainz', target: { entity: 'release', mbid } }));
+    jobs.push(await enqueue('import_release', { source: 'musicbrainz', target: { entity: 'release', mbid }, label: album.title }));
   }
   if (album.spotify_id) {
-    jobs.push(await enqueue('import_release', { source: 'spotify', target: { kind: 'album', id: album.spotify_id } }));
+    jobs.push(await enqueue('import_release', { source: 'spotify', target: { kind: 'album', id: album.spotify_id }, label: album.title }));
   }
   return jobs;
 }

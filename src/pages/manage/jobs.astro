@@ -97,6 +97,8 @@ function describe(job: JobRow): Shown {
         hasArt: true,
       };
     }
+    // Not landed yet: its name when it was known at queueing, else where it comes from.
+    if (payload.label) return { title: payload.label, detail: source, href: null, artKey: null, hasArt: true };
     const id = String(t?.id ?? t?.mbid ?? '').slice(0, 8);
     return { title: source, detail: id ? `${id}…` : '', href: null, artKey: null, hasArt: true };
   } catch {

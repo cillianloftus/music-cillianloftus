@@ -76,7 +76,7 @@ export async function queueDiscography(
     .sort((a, b) => (a['first-release-date'] ?? '').localeCompare(b['first-release-date'] ?? ''));
   const ids = await enqueueMany(
     'import_release',
-    fresh.map((g) => ({ source: 'musicbrainz' as const, target: { entity: 'release-group' as const, mbid: g.id } })),
+    fresh.map((g) => ({ source: 'musicbrainz' as const, target: { entity: 'release-group' as const, mbid: g.id }, label: g.title })),
   );
   const queued = fresh.map((g, i) => ({ id: ids[i]!, title: g.title }));
   return { queued, skipped: groups.length - queued.length, found: groups.length };
