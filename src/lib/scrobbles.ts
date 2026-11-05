@@ -20,6 +20,9 @@ import { scrobblesBetween, type Scrobble } from './sources/lastfm';
 import { listensBefore } from './sources/listenbrainz';
 import { normaliseName, normaliseTitle } from './text';
 
+/** How far back a late scrobble can land. */
+const LATE_SECONDS = 14 * 24 * 60 * 60;
+
 export type ScrobbleSource = Extract<ServiceId, 'lastfm' | 'listenbrainz'>;
 
 /** Where a sync has got to. Everything at or before `through` is in; `pending` is a walk under way. */
@@ -155,6 +158,10 @@ export async function syncScrobbles(source: ScrobbleSource, { budgetMs, fetchPag
   const now = Math.floor(Date.now() / 1000);
   const walk = cursor.pending ?? { to: now, before: now + 1 };
   const index = await catalogueIndex();
+  // Scrobbles can arrive late (Last.fm takes ones up to two weeks old, from
+  // phones that were offline), so each sync looks back that far again.
+  // Plays already held are skipped, so the overlap costs nothing.
+  const after = cursor.through > 0 ? cursor.through - LATE_SECONDS : 0;
 
   try {
     for (;;) {
@@ -163,7 +170,7 @@ export async function syncScrobbles(source: ScrobbleSource, { budgetMs, fetchPag
         await recordSync(source, JSON.stringify({ through: cursor.through, pending: walk } satisfies Cursor));
         return report;
       }
-      const batch = (await page({ after: cursor.through, before: walk.before })).filter((s) => s.at > cursor.through && s.at < walk.before);
+      const batch = (await page({ after, before: walk.before })).filter((s) => s.at > after && s.at < walk.before);
       if (batch.length === 0) break;
       report.fetched += batch.length;
       const { matched, added } = await store(userId, source, index, batch);

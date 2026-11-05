@@ -46,7 +46,8 @@ export async function findRelease(
 ): Promise<DiscogsHit | null> {
   const matches = (hit: DiscogsHit) => {
     const [artist, ...rest] = hit.title.split(' - ');
-    return normaliseName(artist ?? '').replace(/\s*\(\d+\)$/, '') === normaliseName(query.artist) && normaliseTitle(rest.join(' - ')) === normaliseTitle(query.title);
+    // Discogs tells same-named artists apart as "Name (2)": drop that before comparing.
+    return normaliseName((artist ?? '').replace(/\s*\(\d+\)$/, '')) === normaliseName(query.artist) && normaliseTitle(rest.join(' - ')) === normaliseTitle(query.title);
   };
   if (query.barcode) {
     const byCode = await get<{ results: DiscogsHit[] }>(token, `/database/search?type=release&barcode=${encodeURIComponent(query.barcode)}`, fetcher);
