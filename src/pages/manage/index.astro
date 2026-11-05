@@ -5,6 +5,7 @@
  */
 import { env } from 'cloudflare:workers';
 import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
 import { connection } from '../../lib/spotify/client';
 import { waitingCount } from '../../lib/connections';
 
@@ -46,6 +47,8 @@ const ICONS = {
   weights: 'M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4',
   jobs: 'M4 6h16M4 12h10M4 18h6M17 15l2 2 3-4',
   connections: 'M9 15l6-6M10 6l1.5-1.5a4.2 4.2 0 0 1 6 6L16 12M8 12l-1.5 1.5a4.2 4.2 0 0 0 6 6L14 18',
+  roles: 'M12 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM5 20c1.2-3.6 3.8-5.5 7-5.5s5.8 1.9 7 5.5',
+  refresh: 'M20 12a8 8 0 1 1-2.4-5.7M20 4v5h-5',
   backups: 'M5 7c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3zm0 0v10c0 1.7 3.1 3 7 3s7-1.3 7-3V7M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3',
 };
 
@@ -53,11 +56,11 @@ const groups: { heading: string; items: Item[] }[] = [
   {
     heading: 'Add music',
     items: [
-      { href: '/manage/import', title: 'Import', text: 'From MusicBrainz or Spotify, a folder of files, or by hand.', icon: ICONS.import },
+      { href: '/manage/import', title: 'Import', text: 'MusicBrainz, Spotify, a folder or by hand.', icon: ICONS.import },
       {
         href: '/manage/files',
         title: 'Files',
-        text: 'Audio you own, by where it lives. Check a folder for damaged rips.',
+        text: 'Audio you own, and checks for damaged rips.',
         icon: ICONS.files,
         status: counts?.files ? { text: n(counts.files, 'file'), tone: 'quiet' } : null,
       },
@@ -70,14 +73,14 @@ const groups: { heading: string; items: Item[] }[] = [
       {
         href: '/manage/history',
         title: 'Listening history',
-        text: 'Spotify plays, and what you rate against what you play.',
+        text: 'What you play against what you rate.',
         icon: ICONS.history,
         status: counts?.plays ? { text: n(counts.plays, 'play'), tone: 'quiet' } : null,
       },
       {
         href: '/manage/spotify',
         title: 'Spotify',
-        text: 'The connection playlists are pushed through.',
+        text: 'Where playlists are pushed.',
         icon: ICONS.spotify,
         status: spotify ? { text: 'Connected', tone: 'quiet' } : { text: 'Not connected', tone: 'attention' },
       },
@@ -89,23 +92,23 @@ const groups: { heading: string; items: Item[] }[] = [
       {
         href: '/manage/review',
         title: 'Review',
-        text: 'Duplicates, missing art and loose ends the nightly checks found.',
+        text: 'Duplicates and loose ends.',
         icon: ICONS.review,
         status: counts?.review ? { text: `${counts.review} to look at`, tone: 'attention' } : { text: 'All clear', tone: 'quiet' },
       },
-      { href: '/manage/genres', title: 'Genre tree', text: 'Place genres beneath each other, with help from Wikidata.', icon: ICONS.genres },
-      { href: '/manage/weights', title: 'Weights', text: 'How scores are worked out. Re-rank the library live.', icon: ICONS.weights },
-      { href: '/manage/roles', title: 'Credit roles', text: 'Which credits matter most, shown first everywhere. Rename or regroup the rest.', icon: ICONS.genres },
+      { href: '/manage/genres', title: 'Genre tree', text: 'Which genre sits under which.', icon: ICONS.genres },
+      { href: '/manage/weights', title: 'Weights', text: 'How scores are worked out.', icon: ICONS.weights },
+      { href: '/manage/roles', title: 'Credit roles', text: 'Which credits come first.', icon: ICONS.roles },
     ],
   },
   {
     heading: 'System',
     items: [
-      { href: '/manage/refresh', title: 'Refresh everything', text: 'Look the whole library up again at every source. Once in a blue moon.', icon: ICONS.jobs },
+      { href: '/manage/refresh', title: 'Refresh everything', text: 'Look the whole library up again.', icon: ICONS.refresh },
       {
         href: '/manage/jobs',
         title: 'Jobs',
-        text: 'Imports, pushes and backups, with errors and retries.',
+        text: 'Imports, pushes and backups.',
         icon: ICONS.jobs,
         status: counts?.failed
           ? { text: `${counts.failed} failed`, tone: 'attention' }
@@ -116,11 +119,11 @@ const groups: { heading: string; items: Item[] }[] = [
       {
         href: '/manage/connections',
         title: 'Connections',
-        text: 'Keys for Last.fm, ListenBrainz, Discogs, setlist.fm and Genius. Paste one and it works.',
+        text: 'Keys for outside services.',
         icon: ICONS.connections,
         status: waiting ? { text: `${waiting} waiting for a key`, tone: 'attention' } : { text: 'All connected', tone: 'quiet' },
       },
-      { href: '/manage/backups', title: 'Backups', text: 'Daily copies of every table, and how to restore one.', icon: ICONS.backups },
+      { href: '/manage/backups', title: 'Backups', text: 'Daily copies, and restoring one.', icon: ICONS.backups },
     ],
   },
 ];
@@ -128,10 +131,9 @@ const groups: { heading: string; items: Item[] }[] = [
 
 <Base title="Manage">
   <div class="wrap page">
-    <header>
-      <h1>Manage</h1>
-      <p class="muted">Signed in as {user.email}.</p>
-    </header>
+    <PageHeader title="Manage">
+      <span class="muted small">{user.email}</span>
+    </PageHeader>
 
     {
       groups.map((group) => (
@@ -168,17 +170,6 @@ const groups: { heading: string; items: Item[] }[] = [
     display: grid;
     gap: var(--space-6);
     --content-max: 60rem;
-  }
-
-  header {
-    display: grid;
-    gap: var(--space-1);
-  }
-
-  h1 {
-    font-size: clamp(2.2rem, 1.6rem + 2.4vw, 3.25rem);
-    font-weight: 850;
-    letter-spacing: -0.035em;
   }
 
   h2 {
@@ -289,5 +280,9 @@ const groups: { heading: string; items: Item[] }[] = [
   .status[data-tone='attention'] {
     background: color-mix(in srgb, var(--accent) 20%, transparent);
     color: var(--accent);
+  }
+
+  .small {
+    font-size: var(--step--1);
   }
 </style>
