@@ -93,8 +93,66 @@ const ident = (name: string) => `"${name.replaceAll('"', '""')}"`;
 
 const ROWS_PER_INSERT = 100;
 
+/** A table's keys, read from the target schema. */
+export interface TableKeys {
+  primaryKey: string[];
+  /** Columns that may hold NULL. */
+  nullable: string[];
+  foreignKeys: Array<{ parent: string; columns: string[] }>;
+}
+export type SchemaKeys = Map<string, TableKeys>;
+
+/**
+ * Reads every table's keys through a SQLite query function (node:sqlite in
+ * the restore script and tests), so this module stays dependency-free.
+ */
+export function readKeys(all: (sql: string, ...params: string[]) => unknown[]): SchemaKeys {
+  const keys: SchemaKeys = new Map();
+  const tables = all(`SELECT name FROM sqlite_master WHERE type = 'table'`) as Array<{ name: string }>;
+  for (const { name } of tables) {
+    const info = all(`SELECT name, pk, "notnull" AS required FROM pragma_table_info(?)`, name) as Array<{ name: string; pk: number; required: number }>;
+    const fks = all(`SELECT id, "table" AS parent, "from" AS col FROM pragma_foreign_key_list(?)`, name) as Array<{ id: number; parent: string; col: string }>;
+    const byId = new Map<number, { parent: string; columns: string[] }>();
+    for (const fk of fks) {
+      const entry = byId.get(fk.id) ?? { parent: fk.parent, columns: [] };
+      entry.columns.push(fk.col);
+      byId.set(fk.id, entry);
+    }
+    keys.set(name, {
+      primaryKey: info.filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk).map((c) => c.name),
+      nullable: info.filter((c) => !c.required && c.pk === 0).map((c) => c.name),
+      foreignKeys: [...byId.values()],
+    });
+  }
+  return keys;
+}
+
+/**
+ * Columns that point forward in restore order (at a table restored later,
+ * or at their own table) and can be left empty: a part loads them as NULL
+ * and fills them in once what they point at is in, so no row ever refers
+ * to one that is not there yet. D1 does not reliably hold deferred foreign
+ * keys open across a file, so a part must not need them.
+ */
+function forwardColumns(order: string[], keys: SchemaKeys): Map<string, string[]> {
+  const forward = new Map<string, string[]>();
+  order.forEach((table, i) => {
+    const k = keys.get(table);
+    if (!k) return;
+    for (const fk of k.foreignKeys) {
+      if (order.indexOf(fk.parent) < i) continue;
+      // Of a composite key, the columns that are not the row's own identity.
+      const cols = fk.columns.filter((c) => !k.primaryKey.includes(c));
+      if (cols.length > 0 && cols.every((c) => k.nullable.includes(c))) {
+        forward.set(table, [...new Set([...(forward.get(table) ?? []), ...cols])]);
+      }
+    }
+  });
+  return forward;
+}
+
 /** The restore as statements: the emptiness guard, then each table's rows in restore order. */
-function restoreStatements(backup: Backup, verbFor: (table: string) => string) {
+function restoreStatements(backup: Backup, verbFor: (table: string) => string, keys?: SchemaKeys) {
   if (backup.format !== BACKUP_FORMAT || backup.version !== BACKUP_VERSION) {
     throw new Error(`Not a version ${BACKUP_VERSION} ${BACKUP_FORMAT} file.`);
   }
@@ -108,19 +166,45 @@ function restoreStatements(backup: Backup, verbFor: (table: string) => string) {
   ];
   const inserts: string[] = [];
   const tableOf: string[] = [];
+  const forward = keys ? forwardColumns(backup.restore_order, keys) : new Map<string, string[]>();
+  // UPDATEs that fill a forward column, waiting on the table they point at.
+  const waiting = new Map<string, string[]>();
 
   for (const table of backup.restore_order) {
     const dump = backup.tables[table];
-    if (!dump || dump.rows.length === 0) continue;
-    const columns = dump.columns.map(ident).join(', ');
-    for (let i = 0; i < dump.rows.length; i += ROWS_PER_INSERT) {
-      const values = dump.rows
-        .slice(i, i + ROWS_PER_INSERT)
-        .map((row) => `(${row.map(literal).join(', ')})`)
-        .join(',\n  ');
-      inserts.push(`${verbFor(table)} INTO ${ident(table)} (${columns}) VALUES\n  ${values};`);
+    if (dump && dump.rows.length > 0) {
+      const columns = dump.columns.map(ident).join(', ');
+      const later = new Set((forward.get(table) ?? []).map((c) => dump.columns.indexOf(c)).filter((i) => i >= 0));
+      for (let i = 0; i < dump.rows.length; i += ROWS_PER_INSERT) {
+        const values = dump.rows
+          .slice(i, i + ROWS_PER_INSERT)
+          .map((row) => `(${row.map((v, c) => (later.has(c) ? 'NULL' : literal(v))).join(', ')})`)
+          .join(',\n  ');
+        inserts.push(`${verbFor(table)} INTO ${ident(table)} (${columns}) VALUES\n  ${values};`);
+        tableOf.push(table);
+      }
+      if (later.size > 0) {
+        const pk = keys!.get(table)!.primaryKey;
+        for (const fk of keys!.get(table)!.foreignKeys) {
+          const cols = fk.columns.filter((c) => (forward.get(table) ?? []).includes(c));
+          if (cols.length === 0) continue;
+          for (const row of dump.rows) {
+            const at = (c: string) => row[dump.columns.indexOf(c)];
+            if (cols.every((c) => at(c) === null || at(c) === undefined)) continue;
+            const set = cols.map((c) => `${ident(c)} = ${literal(at(c))}`).join(', ');
+            const where = pk.map((c) => `${ident(c)} = ${literal(at(c))}`).join(' AND ');
+            const list = waiting.get(fk.parent) ?? [];
+            list.push(`UPDATE ${ident(table)} SET ${set} WHERE ${where};`);
+            waiting.set(fk.parent, list);
+          }
+        }
+      }
+    }
+    for (const update of waiting.get(table) ?? []) {
+      inserts.push(update);
       tableOf.push(table);
     }
+    waiting.delete(table);
   }
   return { header, inserts, tableOf };
 }
@@ -137,68 +221,27 @@ export function backupToSql(backup: Backup): string {
 }
 
 /**
- * Spans of `order` that must restore in one transaction: from the first to
- * the last table of each foreign-key cycle (work <-> recording), and any
- * table that points at itself (genre parents). Foreign keys are only
- * deferred to the end of a transaction, so a row and what it points at
- * must commit together.
- */
-export function unbreakable(order: string[], foreignKeys: Map<string, string[]>): Array<[number, number]> {
-  const reaches = (from: string, to: string) => {
-    const seen = new Set<string>();
-    const stack = [...(foreignKeys.get(from) ?? [])];
-    while (stack.length > 0) {
-      const t = stack.pop()!;
-      if (t === to) return true;
-      if (seen.has(t)) continue;
-      seen.add(t);
-      stack.push(...(foreignKeys.get(t) ?? []));
-    }
-    return false;
-  };
-  const spans: Array<[number, number]> = [];
-  order.forEach((table, i) => {
-    if (reaches(table, table)) {
-      const group = order.map((t, j) => (t === table || (reaches(table, t) && reaches(t, table)) ? j : -1)).filter((j) => j >= 0);
-      spans.push([Math.min(i, ...group), Math.max(i, ...group)]);
-    }
-  });
-  return spans;
-}
-
-/**
  * The same restore cut into parts of about `maxBytes`, for a remote
  * database over a connection that may drop. Each part is its own
- * transaction and safe to send twice: rows go in with INSERT OR IGNORE, so a
- * part that landed before its answer was lost changes nothing the second
- * time. The emptiness guard is the first part on its own (it writes
- * nothing). Tables stay in restore order, so each part's parents are
- * already committed, and tables that point at each other or themselves
- * (see `unbreakable`) are never split, so a part can exceed `maxBytes`.
+ * transaction and safe to send twice: rows go in with INSERT OR IGNORE and
+ * forward references are filled by UPDATE, so a part that landed before its
+ * answer was lost changes nothing the second time. The emptiness guard is
+ * the first part on its own (it writes nothing). Tables go in restore
+ * order and forward references are loaded empty then filled in (see
+ * `forwardColumns`), so every part stands on what is already committed.
  */
-export function backupToSqlParts(backup: Backup, foreignKeys: Map<string, string[]>, maxBytes = 1_500_000): string[] {
-  const { header, inserts, tableOf } = restoreStatements(backup, (t) => (SEEDED.has(t) ? 'INSERT OR REPLACE' : 'INSERT OR IGNORE'));
-  const order = backup.restore_order;
-  const spans = unbreakable(order, foreignKeys);
-  // A break may come before a statement unless it and the one before sit in one span.
-  const joined = (a: string, b: string) =>
-    spans.some(([lo, hi]) => {
-      const i = order.indexOf(a);
-      const j = order.indexOf(b);
-      return i >= lo && i <= hi && j >= lo && j <= hi;
-    });
-
+export function backupToSqlParts(backup: Backup, keys: SchemaKeys, maxBytes = 1_500_000): string[] {
+  const { header, inserts } = restoreStatements(backup, (t) => (SEEDED.has(t) ? 'INSERT OR REPLACE' : 'INSERT OR IGNORE'), keys);
   const parts = [header.join('\n') + '\n'];
   const start = 'PRAGMA defer_foreign_keys = ON;\n';
   let current = start;
-  inserts.forEach((statement, k) => {
-    const canBreak = k === 0 || !joined(tableOf[k - 1]!, tableOf[k]!);
-    if (canBreak && current !== start && current.length + statement.length > maxBytes) {
+  for (const statement of inserts) {
+    if (current !== start && current.length + statement.length > maxBytes) {
       parts.push(current);
       current = start;
     }
     current += statement + '\n';
-  });
+  }
   if (current !== start) parts.push(current);
   return parts;
 }

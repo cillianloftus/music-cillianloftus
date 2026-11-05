@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { gunzipSync } from 'node:zlib';
-import { backupToSql, backupToSqlParts, summarise, type Backup } from '../src/lib/backup/format.ts';
+import { backupToSql, backupToSqlParts, readKeys, summarise, type Backup } from '../src/lib/backup/format.ts';
 
 const DATABASE = 'music-db';
 
@@ -97,17 +97,14 @@ if (!remote) {
   process.exit(0);
 }
 
-/** Which tables point at which, read from the migrations in a scratch in-memory database. */
-function foreignKeys(): Map<string, string[]> {
+/** The schema's keys, read from the migrations in a scratch in-memory database. */
+function schemaKeys() {
   const db = new DatabaseSync(':memory:');
   for (const m of localMigrations) db.exec(readFileSync(join('migrations', m), 'utf8'));
-  const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>;
-  return new Map(
-    tables.map(({ name }) => [name, (db.prepare('SELECT "table" AS t FROM pragma_foreign_key_list(?)').all(name) as Array<{ t: string }>).map((r) => r.t)]),
-  );
+  return readKeys((sql, ...params) => db.prepare(sql).all(...params));
 }
 
-const parts = backupToSqlParts(backup, foreignKeys());
+const parts = backupToSqlParts(backup, schemaKeys());
 // When resuming, the emptiness guard (part 1) would refuse; everything after it is safe to resend.
 const first = resume ? 1 : 0;
 const waits = [5, 15, 30, 60, 120];
@@ -124,7 +121,7 @@ for (let i = first; i < parts.length; i++) {
     }
     const why = `${result.stdout}\n${result.stderr}`;
     // A refusal from the database will not change on a retry; only the connection might.
-    const connection = /fetch failed|connectivity|ECONNRESET|ETIMEDOUT|socket|network|timed? ?out|5\d\d/i.test(why);
+    const connection = /fetch failed|connectivity|ECONNRESET|ETIMEDOUT|socket hang up|network/i.test(why);
     if (!connection || attempt >= waits.length) {
       console.log('failed');
       console.error(why.trim());

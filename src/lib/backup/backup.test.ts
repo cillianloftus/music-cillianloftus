@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../../test/d1';
 import { insert, migratedDb, seedLibrary } from '../../test/db';
 import { dumpDatabase } from './dump';
-import { backupToSql, backupToSqlParts, restoreOrder, summarise, type Backup } from './format';
+import { backupToSql, backupToSqlParts, readKeys, restoreOrder, summarise, type Backup } from './format';
 
 let source: DatabaseSync;
 
@@ -28,11 +28,8 @@ function tableRows(db: DatabaseSync, table: string) {
   return db.prepare(`SELECT * FROM "${table}" ORDER BY rowid`).all();
 }
 
-function foreignKeysOf(db: DatabaseSync) {
-  const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>;
-  return new Map(
-    tables.map(({ name }) => [name, (db.prepare('SELECT "table" AS t FROM pragma_foreign_key_list(?)').all(name) as Array<{ t: string }>).map((r) => r.t)]),
-  );
+function keysOf(db: DatabaseSync) {
+  return readKeys((sql, ...params) => db.prepare(sql).all(...params));
 }
 
 /** As D1 runs a file: one transaction, rolled back whole if anything fails. */
@@ -86,13 +83,15 @@ describe('backup and restore', () => {
 
   it('restores the same in parts, even when every part is sent twice', async () => {
     const backup = await dumpDatabase();
-    const parts = backupToSqlParts(JSON.parse(JSON.stringify(backup)), foreignKeysOf(source), 2_000);
+    const parts = backupToSqlParts(JSON.parse(JSON.stringify(backup)), keysOf(source), 2_000);
     expect(parts.length).toBeGreaterThan(3);
     const target = migratedDb();
     // Each part is its own transaction, as each wrangler call is; a lost answer means sending it again.
+    // Foreign keys checked at once, not deferred, as D1 does across a file: no part may point ahead.
     for (const part of parts) {
-      inTransaction(target, part);
-      inTransaction(target, part);
+      const strict = part.replaceAll('PRAGMA defer_foreign_keys = ON;', '');
+      inTransaction(target, strict);
+      inTransaction(target, strict);
     }
     for (const table of Object.keys(backup.tables)) {
       expect(tableRows(target, table), table).toEqual(tableRows(source, table));
@@ -103,7 +102,7 @@ describe('backup and restore', () => {
     const backup = await dumpDatabase();
     const target = migratedDb();
     insert(target, 'artist', [{ id: 'unrelated', name: 'Someone', sort_name: 'Someone', source: 'manual' }]);
-    expect(() => inTransaction(target, backupToSqlParts(backup, foreignKeysOf(source))[0]!)).toThrow(/CHECK constraint failed: n = 0/);
+    expect(() => inTransaction(target, backupToSqlParts(backup, keysOf(source))[0]!)).toThrow(/CHECK constraint failed: n = 0/);
   });
 
   it('rejects files that are not backups', () => {
