@@ -26,7 +26,7 @@ const {
 const scores = Array.from({ length: 11 }, (_, n) => n);
 ---
 
-<form method="post" action="/api/write/rating">
+<form method="post" action="/api/write/rating" data-gut-scale>
   <input type="hidden" name="entity_type" value={entityType} />
   <input type="hidden" name="entity_id" value={entityId} />
   <input type="hidden" name="return_to" value={returnTo} />
@@ -38,7 +38,7 @@ const scores = Array.from({ length: 11 }, (_, n) => n);
     <div class="scale">
       {
         scores.map((n) => (
-          <button type="submit" name="gut_score" value={n} class:list={['step', { current: current === n }]}>
+          <button type="submit" name="gut_score" value={n} class:list={['step', { current: current === n }]} aria-keyshortcuts={String(n)} title={`Type ${n}`}>
             {n}
             {current === n && <span class="visually-hidden"> (current)</span>}
           </button>
@@ -47,6 +47,48 @@ const scores = Array.from({ length: 11 }, (_, n) => n);
     </div>
   </fieldset>
 </form>
+
+<script>
+  // Typing the score presses its button: "7" saves a 7. A "1" waits a
+  // moment for a "0" to make 10. Not while typing in a field, and only
+  // when the page has one scale, so a keystroke can't land on the wrong one.
+  const scales = document.querySelectorAll<HTMLFormElement>('[data-gut-scale]');
+  if (scales.length === 1) {
+    const scale = scales[0]!;
+    let pending: ReturnType<typeof setTimeout> | undefined;
+    let sent = false;
+    // One score per page: keys after it are ignored while it saves.
+    const press = (n: number) => {
+      const button = scale.querySelector<HTMLButtonElement>(`button[value="${n}"]`);
+      if (!button || sent) return;
+      sent = true;
+      button.classList.add('pressed');
+      scale.requestSubmit(button);
+    };
+    document.addEventListener('keydown', (event) => {
+      if (!/^[0-9]$/.test(event.key) || event.ctrlKey || event.metaKey || event.altKey) return;
+      if ((event.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable]')) return;
+      event.preventDefault();
+      if (sent) return;
+      if (pending) {
+        // "1" then "0" is 10; "1" then anything else is the 1 it was.
+        clearTimeout(pending);
+        pending = undefined;
+        press(event.key === '0' ? 10 : 1);
+        return;
+      }
+      if (event.key === '1') {
+        scale.querySelector('button[value="1"]')?.classList.add('pressed');
+        pending = setTimeout(() => {
+          pending = undefined;
+          press(1);
+        }, 600);
+      } else {
+        press(Number(event.key));
+      }
+    });
+  }
+</script>
 
 <style>
   fieldset {
@@ -106,7 +148,8 @@ const scores = Array.from({ length: 11 }, (_, n) => n);
     transform: scale(0.96);
   }
 
-  .step.current {
+  .step.current,
+  .step.pressed {
     background: var(--accent);
     border-color: var(--accent);
     color: var(--accent-ink);
