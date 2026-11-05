@@ -65,7 +65,12 @@ const keyWords = ['None', ...cal.levels.map((start, i) => (i === 3 ? `${start} +
     </svg>
   </div>
   <figcaption>
-    <span class="tabular">{cal.total.toLocaleString('en-GB')} {cal.total === 1 ? 'rating' : 'ratings'} on {cal.days} {cal.days === 1 ? 'day' : 'days'}</span>
+    <span class="tabular">
+      {cal.total.toLocaleString('en-GB')} {cal.total === 1 ? 'rating' : 'ratings'} on {cal.days} {cal.days === 1 ? 'day' : 'days'}
+      {cal.longestRun >= 2 && ` · longest run ${cal.longestRun} days`}
+      {cal.currentRun >= 2 && cal.currentRun < cal.longestRun && `, ${cal.currentRun} now`}
+      {cal.currentRun >= 2 && cal.currentRun === cal.longestRun && ', still going'}
+    </span>
     <span class="key" aria-hidden="true">
       Less
       {keyWords.map((words, level) => <span class={`swatch l${level}`} title={words} />)}

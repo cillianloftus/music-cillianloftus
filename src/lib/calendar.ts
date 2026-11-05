@@ -22,6 +22,29 @@ export interface Calendar {
   levels: number[];
   total: number;
   days: number;
+  /** The most days in a row with something rated, and the run up to today (or yesterday). */
+  longestRun: number;
+  currentRun: number;
+}
+
+/** Runs of consecutive days in a set of dates: the longest, and the one reaching today or yesterday. */
+export function runsOf(dates: string[], today: string): { longest: number; current: number } {
+  const days = new Set(dates);
+  let longest = 0;
+  for (const d of days) {
+    if (days.has(shift(d, -1))) continue; // not the start of a run
+    let n = 1;
+    while (days.has(shift(d, n))) n++;
+    longest = Math.max(longest, n);
+  }
+  // A run still counts as current until a whole day passes without a rating.
+  let end = days.has(today) ? today : days.has(shift(today, -1)) ? shift(today, -1) : null;
+  let current = 0;
+  while (end && days.has(end)) {
+    current++;
+    end = shift(end, -1);
+  }
+  return { longest, current };
 }
 
 const ZONE = 'Europe/Dublin';
@@ -86,5 +109,14 @@ export function calendarOf(ratedAt: string[], today: string, weeks = 53): Calend
     }
     grid.push(week);
   }
-  return { weeks: grid, months, levels, total: inRange.reduce((a, b) => a + b, 0), days: inRange.length };
+  const runs = runsOf([...counts.keys()].filter((d) => d >= first && d <= today), today);
+  return {
+    weeks: grid,
+    months,
+    levels,
+    total: inRange.reduce((a, b) => a + b, 0),
+    days: inRange.length,
+    longestRun: runs.longest,
+    currentRun: runs.current,
+  };
 }

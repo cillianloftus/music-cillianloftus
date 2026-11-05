@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calendarOf, dublinDate, levelsFor } from './calendar';
+import { calendarOf, dublinDate, levelsFor, runsOf } from './calendar';
 
 describe('dublinDate', () => {
   it('uses Dublin time, so a late summer rating stays on its evening', () => {
@@ -48,5 +48,21 @@ describe('calendarOf', () => {
   it('labels each month over the week its first day is in', () => {
     const nov = cal.months.find((m) => m.label === 'Nov')!;
     expect(cal.weeks[nov.week]!.some((d) => d.date === '2026-11-01')).toBe(true);
+  });
+});
+
+describe('runsOf', () => {
+  it('finds the longest run of days in a row', () => {
+    expect(runsOf(['2026-10-01', '2026-10-02', '2026-10-03', '2026-10-10', '2026-10-11'], '2026-11-05')).toEqual({ longest: 3, current: 0 });
+  });
+
+  it('counts a run as current through yesterday, so the day is not lost before rating', () => {
+    expect(runsOf(['2026-11-03', '2026-11-04'], '2026-11-05')).toEqual({ longest: 2, current: 2 });
+    expect(runsOf(['2026-11-04', '2026-11-05'], '2026-11-05')).toEqual({ longest: 2, current: 2 });
+    expect(runsOf(['2026-11-02', '2026-11-03'], '2026-11-05').current).toBe(0);
+  });
+
+  it('crosses month and year ends', () => {
+    expect(runsOf(['2025-12-31', '2026-01-01'], '2026-01-01').longest).toBe(2);
   });
 });
