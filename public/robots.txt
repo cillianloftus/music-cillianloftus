@@ -1,0 +1,12 @@
+# Albums, artists, genres and the main pages are welcome. Track pages
+# (thousands of them), search and the query builder are left out: each
+# visit reads the database, and D1 caps reads per day.
+User-agent: *
+Disallow: /track/
+Disallow: /search
+Disallow: /query
+Disallow: /api/
+Disallow: /manage
+Disallow: /edit/
+Disallow: /queue
+Crawl-delay: 10
