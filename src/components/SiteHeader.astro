@@ -153,8 +153,19 @@ const next = theme === 'dark' ? 'light' : 'dark';
     background: var(--bg);
   }
 
+  /* The frosting sits on a layer behind the header, never on the header:
+     a backdrop-filter makes its element the containing block for fixed
+     children, which would pin the phone tab bar inside the header. */
   @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
     .site-header {
+      background: none;
+    }
+
+    .site-header::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: -1;
       background: color-mix(in srgb, var(--bg) 72%, transparent);
       -webkit-backdrop-filter: blur(14px) saturate(1.4);
       backdrop-filter: blur(14px) saturate(1.4);
@@ -164,8 +175,10 @@ const next = theme === 'dark' ? 'light' : 'dark';
   @media (prefers-reduced-transparency: reduce) {
     .site-header {
       background: var(--bg);
-      -webkit-backdrop-filter: none;
-      backdrop-filter: none;
+    }
+
+    .site-header::before {
+      display: none;
     }
   }
 
