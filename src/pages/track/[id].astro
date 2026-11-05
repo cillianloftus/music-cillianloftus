@@ -15,7 +15,8 @@ import { ownerId } from '../../lib/auth/user';
 import { genresFor, redirectFor } from '../../lib/catalogue';
 import { yearOf } from '../../lib/dates';
 import { describeDuration, formatDuration, roleLabel } from '../../lib/format';
-import { playCounts } from '../../lib/history';
+import { playCounts, trackListening } from '../../lib/history';
+import BarChart from '../../components/BarChart.astro';
 import { otherVersions, trackAppearances, trackCredits, trackDetail } from '../../lib/pages';
 import { ratingHistory } from '../../lib/ratings';
 import { spotifyLink } from '../../lib/spotify/links';
@@ -69,6 +70,15 @@ const links = [
 const listenHref = spotifyLink('track', track.spotify_id, `${track.credits[0]?.name ?? ''} ${track.title}`);
 const rateHref = `/edit/rate/recording/${id}?return_to=${encodeURIComponent(`/track/${id}`)}`;
 const playCount = plays.get(id) ?? 0;
+const listening = user && playCount > 0 ? await trackListening(user.id, id) : null;
+const monthName = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' });
+const dayName = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Dublin' });
+const SOURCE: Record<string, string> = { spotify_export: 'Spotify', lastfm: 'Last.fm', listenbrainz: 'ListenBrainz', manual: 'by hand' };
+function ordinalOf(n: number): string {
+  const rem = n % 100;
+  const suffix = rem >= 11 && rem <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th';
+  return `${n}${suffix}`;
+}
 ---
 
 <Base
@@ -154,6 +164,23 @@ const playCount = plays.get(id) ?? 0;
 
     <div class="below">
       <div class="main-col">
+    {
+      listening && listening.months.length > 1 && (
+        <section aria-labelledby="listening-heading">
+          <h2 id="listening-heading">Listening</h2>
+          <p class="muted">
+            {listening.total.toLocaleString('en-GB')} {listening.total === 1 ? 'play' : 'plays'}, your {listening.rank === 1 ? 'most played' : `${ordinalOf(listening.rank)} most played`} of {listening.of.toLocaleString('en-GB')}.
+            First on {dayName(listening.first)}, last on {dayName(listening.last)}. From {listening.sources.map((s) => SOURCE[s] ?? s).join(' and ')}.
+          </p>
+          <BarChart
+            title="Plays by month"
+            valueLabel="Plays"
+            labelEvery={Math.max(1, Math.ceil(listening.months.length / 8))}
+            bars={listening.months.map((m) => ({ label: monthName(m.month), value: m.count, detail: `${m.count} ${m.count === 1 ? 'play' : 'plays'}` }))}
+          />
+        </section>
+      )
+    }
     {
       appearances.length > 0 && (
         <section aria-labelledby="on-heading">

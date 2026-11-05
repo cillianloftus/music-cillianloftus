@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
 import { artistTopTracks } from './catalogue';
+import { fillPlayMonths, trackListening } from './history';
 import { credentials, forget, saveCredentials, stateOf } from './connections';
 import { artistBreakdown, trackFacts } from './discover';
 import { artistNames, parseCursor, syncScrobbles } from './scrobbles';
@@ -169,5 +170,25 @@ describe('track facts', () => {
     const b = await artistBreakdown('u-owner', 'art-x');
     expect(b).toMatchObject({ rated: 6, best: { id: 'a4' }, worst: { id: 'a3' }, rank: { position: 1, of: 1 } });
     // Yolanda has one rated track: too few to be ranked against.
+  });
+});
+
+describe('a track’s listening', () => {
+  it('fills the quiet months and ranks it among everything played', async () => {
+    const play = (id: string, recording_id: string, played_at: string) => ({ id, user_id: 'u-owner', recording_id, played_at, ms_played: 1, source: 'lastfm' });
+    insert(db, 'play', [play('1', 'a1', '2026-01-05T00:00:00Z'), play('2', 'a1', '2026-03-05T00:00:00Z'), play('3', 'a2', '2026-01-01T00:00:00Z'), play('4', 'a2', '2026-01-02T00:00:00Z'), play('5', 'a2', '2026-01-03T00:00:00Z')]);
+    const l = await trackListening('u-owner', 'a1', new Date('2026-04-10T00:00:00Z'));
+    expect(l).toMatchObject({ total: 2, rank: 2, of: 2, sources: ['lastfm'] });
+    expect(l!.months).toEqual([
+      { month: '2026-01', count: 1 },
+      { month: '2026-02', count: 0 },
+      { month: '2026-03', count: 1 },
+      { month: '2026-04', count: 0 },
+    ]);
+    expect(await trackListening('u-owner', 'b1')).toBeNull();
+  });
+
+  it('crosses a year end', () => {
+    expect(fillPlayMonths([{ month: '2025-12', count: 1 }, { month: '2026-01', count: 2 }]).map((m) => m.month)).toEqual(['2025-12', '2026-01']);
   });
 });

@@ -210,3 +210,71 @@ export async function playCounts(userId: string, recordingIds: string[]): Promis
     .all<{ recording_id: string; plays: number }>();
   return new Map(results.map((r) => [r.recording_id, r.plays]));
 }
+
+export interface TrackListening {
+  total: number;
+  first: string;
+  last: string;
+  /** Among every recording played: 1 is the most played. */
+  rank: number;
+  of: number;
+  /** Plays per month from the first play to now, zero where none. */
+  months: { month: string; count: number }[];
+  /** Where the plays came from: spotify_export, lastfm, listenbrainz. */
+  sources: string[];
+}
+
+/** How one track has been listened to, for its page. Null before any play. */
+export async function trackListening(userId: string, recordingId: string, now = new Date()): Promise<TrackListening | null> {
+  const [summary, months, ranks] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT count(*) AS total, min(played_at) AS first, max(played_at) AS last, json_group_array(DISTINCT source) AS sources
+       FROM play WHERE user_id = ? AND recording_id = ?`,
+    ).bind(userId, recordingId),
+    env.DB.prepare(
+      `SELECT substr(played_at, 1, 7) AS month, count(*) AS count FROM play
+       WHERE user_id = ? AND recording_id = ? GROUP BY month ORDER BY month`,
+    ).bind(userId, recordingId),
+    env.DB.prepare(
+      `WITH counts AS (SELECT recording_id, count(*) AS n FROM play WHERE user_id = ?1 GROUP BY recording_id)
+       SELECT (SELECT count(*) FROM counts c WHERE c.n > (SELECT n FROM counts WHERE recording_id = ?2)) + 1 AS rank,
+              (SELECT count(*) FROM counts) AS of`,
+    ).bind(userId, recordingId),
+  ]);
+  const s = summary!.results[0] as { total: number; first: string | null; last: string | null; sources: string } | undefined;
+  if (!s?.total || !s.first || !s.last) return null;
+  const r = ranks!.results[0] as { rank: number; of: number };
+  const rows = months!.results as { month: string; count: number }[];
+  // Run the months on to now, so a track gone quiet shows the quiet.
+  const thisMonth = now.toISOString().slice(0, 7);
+  if (rows.at(-1)!.month < thisMonth) rows.push({ month: thisMonth, count: 0 });
+  return {
+    total: s.total,
+    first: s.first,
+    last: s.last,
+    rank: r.rank,
+    of: r.of,
+    months: fillPlayMonths(rows),
+    sources: (JSON.parse(s.sources) as string[]).filter(Boolean),
+  };
+}
+
+/** Every month between the first and last given, zero where there were no plays. */
+export function fillPlayMonths(rows: { month: string; count: number }[]): { month: string; count: number }[] {
+  if (rows.length === 0) return [];
+  const counts = new Map(rows.map((r) => [r.month, r.count]));
+  const out: { month: string; count: number }[] = [];
+  let [y, m] = rows[0]!.month.split('-').map(Number) as [number, number];
+  const last = rows.at(-1)!.month;
+  for (let guard = 0; guard < 600; guard++) {
+    const key = `${y}-${String(m).padStart(2, '0')}`;
+    out.push({ month: key, count: counts.get(key) ?? 0 });
+    if (key >= last) break;
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+  }
+  return out;
+}
