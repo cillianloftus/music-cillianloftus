@@ -110,7 +110,7 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
       />
     </div>
     <button class="button button--primary" type="submit">Add</button>
-    <span class="hint" id={`credit-hint-${entity}`}>An artist in the library, by name or another name they go by. Someone new is added as they are typed.</span>
+    <span class="hint" id={`credit-hint-${entity}`}>Anyone new is added as typed.</span>
   </form>
 
   {!artistsOnly && <details class="roles">

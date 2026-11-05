@@ -148,7 +148,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
         <div class="field">
           <div class="label-row"><label for="date">Released</label><Edited entity="release_group" id={id} field="first_release_date" edits={edits} /></div>
           <input class="input" id="date" name="date" value={date} placeholder="2019, 2019-08 or 2019-08-30" aria-describedby="date-hint" />
-          <span class="hint" id="date-hint">Only as precise as you know. Now: {formatPartialDate(album.first_release_date, album.date_precision) ?? 'unknown'}.</span>
+          <span class="hint" id="date-hint">Year, month or day. Now: {formatPartialDate(album.first_release_date, album.date_precision) ?? 'unknown'}.</span>
         </div>
         <div class="field">
           <div class="label-row"><label for="availability">Can it be bought?</label><Edited entity="release_group" id={id} field="availability" edits={edits} /></div>
@@ -181,12 +181,12 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
         <div class="field">
           <div class="label-row"><label for="label">Label</label>{standardEditionRow && <Edited entity="release" id={standardEditionRow.id} field="label" edits={editionEdits.get(standardEditionRow.id) ?? new Map()} />}</div>
           <input class="input" id="label" name="label" value={standardEditionRow?.label ?? ''} maxlength="200" placeholder="Self-released" aria-describedby="label-hint" {...IGNORE} />
-          <span class="hint" id="label-hint">The standard edition’s. Other editions keep their own, below.</span>
+          <span class="hint" id="label-hint">The standard edition’s.</span>
         </div>
         <div class="field">
           <div class="label-row"><label for="spotify">Spotify album</label><Edited entity="release_group" id={id} field="spotify_id" edits={edits} /></div>
           <input class="input" id="spotify" name="spotify" value={links?.spotify_id ? `https://open.spotify.com/album/${links.spotify_id}` : ''} inputmode="url" placeholder="Paste a Spotify album link" aria-describedby="spotify-hint" {...IGNORE} />
-          <span class="hint" id="spotify-hint">{links?.spotify_id ? 'Clear it to unlink.' : 'Not linked; found automatically when it can be.'}</span>
+          <span class="hint" id="spotify-hint">{links?.spotify_id ? 'Clear it to unlink.' : 'Found automatically when it can be.'}</span>
         </div>
       </div>
       <ChipInput
@@ -196,7 +196,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
         value={genresValue}
         options={allGenres.results.map((g) => g.name)}
         placeholder="Add a genre"
-        hint={`Saved as your own tags, which replace imported ones on this album.${manualGenres.results.length === 0 && otherGenres.results.length > 0 ? ' These are the imported ones now; saving makes them yours.' : ''}`}
+        hint="Saving makes these your own tags, over the imported ones."
       />
       <div class="buttons">
         <button class="button button--primary" type="submit">Save</button>
@@ -205,7 +205,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
     </form>
 
     <CreditEditor entity="release_group" id={id} credits={albumCredits} byHand={albumCreditsByHand} defaultRole="primary" heading="Album artists" artistsOnly>
-      <p class="hint">Who the album is by. Its writers, producers and the rest come from its tracks: credit them below, or on each track.</p>
+      <p class="hint">Writers, producers and the rest are credited on tracks, below.</p>
     </CreditEditor>
 
     <section aria-labelledby="editions-heading" class="card">
@@ -341,7 +341,6 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
           </form>
         )
       }
-      <p class="muted small">A track changed here counts as edited. Each track’s full credits are on its own page.</p>
     </section>
 
     <section aria-labelledby="new-edition-heading" class="card">
@@ -387,7 +386,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
         <div class="field">
           <label for="ne-tracklist">Or paste its tracklist</label>
           <textarea class="input" id="ne-tracklist" name="tracklist" rows="8" spellcheck="false" aria-describedby="ne-tracklist-hint"></textarea>
-          <span class="hint" id="ne-tracklist-hint">One track per line, styled as this edition styles them. Pasting a list replaces the copy above.</span>
+          <span class="hint" id="ne-tracklist-hint">One track per line, as this edition styles them.</span>
         </div>
         <div class="buttons">
           <button class="button button--primary" type="submit">Add edition</button>
@@ -413,10 +412,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
       siblings.results.length > 0 && (
         <section aria-labelledby="fold-heading" class="card">
           <h2 id="fold-heading">An edition of another album?</h2>
-          <p class="muted">
-            A deluxe, a “complete” version or a reissue imported as an album of its own. Folding it in makes its editions part of that album; this page then
-            leads there.
-          </p>
+          <p class="muted">A deluxe or reissue imported as its own album. Its editions join the other album.</p>
           <form method="post" action="/api/write/album/edit" class="inline">
             <input type="hidden" name="id" value={id} />
             <input type="hidden" name="intent" value="fold" />
