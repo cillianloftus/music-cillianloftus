@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import PageHeader from '../components/PageHeader.astro';
 import { listDefinitions } from '../lib/definitions';
 
 const definitions = await listDefinitions();
@@ -8,11 +9,9 @@ const user = Astro.locals.user;
 
 <Base title="Playlists" description="Playlists generated from saved queries over rated music.">
   <div class="wrap page">
-    <header>
-      <h1>Playlists</h1>
-      <p class="muted">Each one is a saved question, re-asked whenever ratings change.</p>
+    <PageHeader title="Playlists" count={definitions.length || null}>
       {user && <a class="button button--primary" href="/query">New playlist</a>}
-    </header>
+    </PageHeader>
 
     {
       definitions.length === 0 ? (
@@ -38,11 +37,6 @@ const user = Astro.locals.user;
     gap: var(--space-6);
   }
 
-  header {
-    display: grid;
-    gap: var(--space-3);
-    justify-items: start;
-  }
 
   .muted {
     color: var(--text-muted);
@@ -55,11 +49,6 @@ const user = Astro.locals.user;
     color: var(--text-muted);
   }
 
-  h1 {
-    font-size: clamp(2.2rem, 1.6rem + 2.4vw, 3.25rem);
-    font-weight: 850;
-    letter-spacing: -0.035em;
-  }
 
   .grid {
     display: grid;

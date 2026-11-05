@@ -4,6 +4,7 @@
  * ratings. Charts are drawn on the server; each has a table beneath.
  */
 import Base from '../layouts/Base.astro';
+import PageHeader from '../components/PageHeader.astro';
 import BarChart from '../components/BarChart.astro';
 import { hueOf } from '../lib/art/playlist';
 import { ownerId } from '../lib/auth/user';
@@ -61,10 +62,9 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
 
 <Base title="Insights" description="What the ratings say: how scores spread, which decades and genres score highest, and how gut and considered judgement differ.">
   <div class="wrap page">
-    <header>
-      <h1>Insights</h1>
-      <p><a href={`/year/${new Date().getUTCFullYear()}`}>{new Date().getUTCFullYear()} so far →</a></p>
-    </header>
+    <PageHeader title="Insights">
+      <a href={`/year/${new Date().getUTCFullYear()}`}>{new Date().getUTCFullYear()} so far →</a>
+    </PageHeader>
 
     {
       !data || h!.ratedTracks === 0 ? (
@@ -102,17 +102,11 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
 
           <section aria-labelledby="patterns-heading">
             <h2 id="patterns-heading">What stands out</h2>
-            <p class="muted lead">
-              {facts.length < 60
-                ? `Found in ${facts.length} rated ${facts.length === 1 ? 'track' : 'tracks'}. Hunches could still be chance; they firm up or fade as you rate more.`
-                : `Every producer, writer, genre, label, decade, guest and habit tested against the rest of ${facts.length.toLocaleString('en-GB')} rated tracks, allowing for how many were tested. Hunches could still be chance.`}
-            </p>
             {findings.length > 0 ? <Findings findings={findings} show={9} /> : <p>Nothing stands out yet.</p>}
           </section>
 
           <section aria-labelledby="spread-heading">
             <h2 id="spread-heading">How scores spread</h2>
-            <p class="muted lead">Tracks by score, in ten-point bands.</p>
             <BarChart
               title="Rated tracks by score band"
               valueLabel="Tracks"
@@ -128,7 +122,6 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
           {data.decades.length > 0 && (
             <section aria-labelledby="decades-heading">
               <h2 id="decades-heading">By decade</h2>
-              <p class="muted lead">Average album score by when it came out.</p>
               <BarChart
                 title="Average album score by decade of release" min={floorOf(data.decades.map((d) => d.average))}
                 valueLabel="Average score"
@@ -145,7 +138,6 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
           {data.families.length > 0 && (
             <section aria-labelledby="families-heading">
               <h2 id="families-heading">Genre families</h2>
-              <p class="muted lead">Average track score in each family, counting everything beneath it. Families with at least two rated tracks.</p>
               <BarChart
                 title="Average track score by genre family" min={floorOf(data.families.map((f) => f.average))}
                 orientation="horizontal"
@@ -259,7 +251,6 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
           {data.months.length > 1 && (
             <section aria-labelledby="months-heading">
               <h2 id="months-heading">When the rating happened</h2>
-              <p class="muted lead">Ratings made each month, including re-ratings.</p>
               <BarChart
                 title="Ratings made per month"
                 valueLabel="Ratings"

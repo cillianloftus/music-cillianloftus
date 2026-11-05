@@ -167,7 +167,6 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
       history.length > 0 && (
         <section aria-labelledby="history-heading" class="history">
           <h2 id="history-heading">History</h2>
-          <p class="muted">Every rating is kept. The newest is the one that counts.</p>
           <ol role="list">
             {history.map((row) => (
               <li>

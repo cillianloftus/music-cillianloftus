@@ -25,10 +25,7 @@ const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
   <div class="wrap page">
     <header>
       <h1>Files</h1>
-      <p class="muted">
-        Audio you own, catalogued by where it lives. Nothing here is uploaded or played; the site only keeps track.
-        <a href="/manage/import/files">Import a folder</a> to add more.
-      </p>
+      <p><a href="/manage/import/files">Import a folder</a></p>
     </header>
 
     {
@@ -43,9 +40,6 @@ const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
 
           <section class="verify" aria-labelledby="verify-heading" data-verify hidden>
             <h2 id="verify-heading">Check a folder</h2>
-            <p class="muted">
-              Choose a folder you imported before. Every file is fingerprinted again and compared with the catalogue.
-            </p>
             <div class="field">
               <label for="root">Where that folder lives</label>
               <input class="input" id="root" type="text" autocomplete="off" spellcheck="false" placeholder="D:\Music" />

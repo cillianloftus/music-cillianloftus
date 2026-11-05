@@ -4,6 +4,7 @@
  * rated, or how well), with a filter that narrows as you type.
  */
 import Base from '../layouts/Base.astro';
+import PageHeader from '../components/PageHeader.astro';
 import CoverArt from '../components/CoverArt.astro';
 import { hueOf } from '../lib/art/playlist';
 import { KIND_LABELS } from '../lib/artists';
@@ -44,11 +45,7 @@ const meta = (a: RosterArtist) =>
 
 <Base title="Artists" description={`All ${artists.length} artists in the catalogue.`}>
   <div class="wrap page">
-    <header class="head">
-      <p class="eyebrow">Library</p>
-      <h1>Artists</h1>
-      <p class="muted"><span class="tabular">{artists.length}</span> with music of their own here.</p>
-    </header>
+    <PageHeader title="Artists" count={artists.length} />
 
     <div class="tools">
       <nav aria-label="Order" class="sorts">
@@ -160,11 +157,6 @@ const meta = (a: RosterArtist) =>
     gap: var(--space-5);
   }
 
-  .head {
-    display: grid;
-    gap: var(--space-2);
-    padding-top: var(--space-6);
-  }
 
   .muted {
     color: var(--text-muted);

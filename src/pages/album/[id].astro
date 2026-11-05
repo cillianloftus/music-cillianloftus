@@ -144,7 +144,6 @@ const nextUnrated = (standardTracks.length ? standardTracks : tracks).find((t) =
 const similar = await similarAlbums(album.id, viewerId, 10);
 const albumArtistKey = album.credits.map((c) => c.artist_id).join();
 const totalMs = tracks.reduce((sum, t) => sum + (t.length_ms ?? 0), 0);
-const released = formatPartialDate(album.first_release_date, album.date_precision);
 
 const byRole = new Map<string, Contributor[]>();
 for (const person of people) {

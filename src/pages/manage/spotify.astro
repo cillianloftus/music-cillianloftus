@@ -27,10 +27,7 @@ const WARN_DAYS = 21;
   <div class="wrap page">
     <header>
       <h1>Spotify</h1>
-      <p class="muted">
-        Used to create and update playlists, nothing else. Development Mode authorisations last six
-        months; this page warns before that runs out.
-      </p>
+      <p class="muted">Authorisations last six months; this page warns before then.</p>
     </header>
 
     {error && <p class="notice notice--error" role="alert">{ERRORS[error] ?? `Spotify returned: ${error}`}</p>}
@@ -106,10 +103,7 @@ const WARN_DAYS = 21;
       configured && status && (
         <section class="card" aria-labelledby="link-heading">
           <h2 id="link-heading">Album links</h2>
-          <p class="muted">
-            Albums and their tracks are found on Spotify automatically each night and after every import, so “Listen on
-            Spotify” opens the album itself. Only exact matches are taken: same title, same artist, not a compilation.
-          </p>
+          <p class="muted">Found each night and after every import. Exact matches only.</p>
           <form method="post" action="/api/write/spotify/link">
             <button class="button" type="submit">Find albums on Spotify now</button>
           </form>

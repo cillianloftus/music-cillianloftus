@@ -6,6 +6,7 @@
  * most in ten years.
  */
 import Base from '../layouts/Base.astro';
+import PageHeader from '../components/PageHeader.astro';
 import Backdrop from '../components/Backdrop.astro';
 import CoverArt from '../components/CoverArt.astro';
 import CreditLine from '../components/CreditLine.astro';
@@ -23,19 +24,12 @@ for (const r of ratings) {
   const key = month.format(new Date(r.rated_at));
   months.set(key, [...(months.get(key) ?? []), r]);
 }
-const noted = ratings.filter((r) => r.impact_note).length;
 ---
 
 <Base title="Diary" description="Every album and track rated, newest first, with notes on where and when.">
   <div class="wrap page">
     <Backdrop artKey={ratings[0]?.art_key} height="28rem" />
-    <header>
-      <p class="eyebrow">Diary</p>
-      <h1>What I’ve been listening to</h1>
-      <p class="muted">
-        {ratings.length} {ratings.length === 1 ? 'thing' : 'things'} rated{noted > 0 && `, ${noted} with a note on why it mattered`}. Newest first.
-      </p>
-    </header>
+    <PageHeader title="Diary" />
 
     {
       ratings.length === 0 ? (
@@ -88,13 +82,6 @@ const noted = ratings.filter((r) => r.impact_note).length;
     padding-top: var(--space-5);
   }
 
-  h1 {
-    font-size: clamp(2.2rem, 1.4rem + 3.2vw, 4rem);
-    font-weight: 850;
-    letter-spacing: -0.035em;
-    line-height: 1;
-    text-wrap: balance;
-  }
 
   .muted {
     color: var(--text-muted);

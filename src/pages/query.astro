@@ -138,7 +138,6 @@ const saveHref = `/edit/definition/${saved ? saved.id : 'new'}?d=${encodeDefinit
   <div class="wrap page">
     <header>
       <h1>{saved ? saved.name : 'Build a playlist'}</h1>
-      <p class="muted">Say what you want, or build it with filters. Every change updates the results. Back undoes.</p>
     </header>
 
     <form class="ask" method="post" action="/api/query" data-ask>

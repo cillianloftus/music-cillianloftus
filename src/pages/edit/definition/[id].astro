@@ -101,12 +101,11 @@ try {
 <Base title={isNew ? 'New playlist' : `Edit ${existing!.name}`}>
   <div class="wrap page">
     <header>
-      <p><a class="back" href={existing ? `/playlist/${existing.id}` : '/playlists'}>← Back</a></p>
-      <h1>{isNew ? 'New playlist' : `Edit ${existing!.name}`}</h1>
-      <p class="muted">
-        A playlist is a saved query. Name it and save, or adjust the JSON directly. The
-        <a href={chipsHref}>filter-chip builder</a> edits the same query visually.
+      <p class="nav-links">
+        <a class="back" href={existing ? `/playlist/${existing.id}` : '/playlists'}>← Back</a>
+        <a href={chipsHref}>Edit with filters</a>
       </p>
+      <h1>{isNew ? 'New playlist' : `Edit ${existing!.name}`}</h1>
     </header>
 
     {
@@ -350,5 +349,12 @@ try {
   .field-label {
     display: block;
     color: var(--text-muted);
+  }
+
+  .nav-links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--space-3);
   }
 </style>

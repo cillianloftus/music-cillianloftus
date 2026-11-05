@@ -15,10 +15,9 @@ const id = Astro.params.id!;
 const artist = await getArtist(id);
 if (!artist) return Astro.rewrite('/404');
 
-const [about, row, overrides, allImages, names] = await Promise.all([
+const [about, row, allImages, names] = await Promise.all([
   artistAbout(id),
   env.DB.prepare(`SELECT sort_name FROM artist WHERE id = ?`).bind(id).first<{ sort_name: string }>(),
-  env.DB.prepare(`SELECT field FROM field_override WHERE entity_type = 'artist' AND entity_id = ?`).bind(id).all<{ field: string }>(),
   env.DB.prepare(`SELECT key, source, credit, hidden FROM artist_image WHERE artist_id = ? ORDER BY hidden, position`).bind(id).all<{
     key: string;
     source: string;
@@ -27,7 +26,6 @@ const [about, row, overrides, allImages, names] = await Promise.all([
   }>(),
   env.DB.prepare(`SELECT name FROM artist WHERE id <> ? ORDER BY sort_name`).bind(id).all<{ name: string }>(),
 ]);
-const edited = new Set(overrides.results.map((o) => o.field));
 const edits = await editsOf('artist', id);
 const params = Astro.url.searchParams;
 const links = [
@@ -96,7 +94,6 @@ const links = [
 
     <section aria-labelledby="names-heading" class="card">
       <h2 id="names-heading">Other names</h2>
-      <p class="muted">A credit under any of these finds {artist.name}, and searching for one finds them too.</p>
       {
         about.aliases.length > 0 && (
           <ul role="list" class="chips">
@@ -128,9 +125,6 @@ const links = [
 
     <section aria-labelledby="links-heading" class="card">
       <h2 id="links-heading">Linked artists</h2>
-      <p class="muted">
-        Members of a group, or another record for the same person kept apart on purpose (a real name credited separately).
-      </p>
       {
         links.length > 0 && (
           <ul role="list" class="chips">

@@ -76,10 +76,6 @@ const sourceLabel = (e: ReviewEntity) => (e.source === 'musicbrainz' ? 'MusicBra
   <div class="wrap page">
     <header class="intro">
       <h1>Review</h1>
-      <p class="muted">
-        Things that look wrong in the catalogue. The checks run every night and never change anything by themselves; each
-        item waits for your call.
-      </p>
       <form method="post" action="/api/write/review">
         <button class="button" type="submit" name="intent" value="detect">Check now</button>
       </form>

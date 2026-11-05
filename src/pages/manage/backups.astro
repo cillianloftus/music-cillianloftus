@@ -15,11 +15,7 @@ const size = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024
   <div class="wrap page">
     <header>
       <h1>Backups</h1>
-      <p class="muted">
-        Every table as JSON, daily at 04:00 UTC, kept in R2 (30 daily, plus the first of each month for a
-        year) and committed to a private GitHub repo when one is configured. Everything else here can be
-        refetched; the ratings cannot.
-      </p>
+      <p class="muted">Daily at 04:00 UTC: 30 days, then monthly for a year.</p>
     </header>
 
     <div class="actions">

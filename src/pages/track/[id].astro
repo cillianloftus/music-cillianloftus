@@ -224,7 +224,6 @@ function ordinalOf(n: number): string {
       versions.length > 0 && (
         <section aria-labelledby="versions-heading">
           <h2 id="versions-heading">Other versions</h2>
-          <p class="muted small lead">The same song{track.work_title && track.work_title !== track.title ? ` (“${track.work_title}”)` : ''}, recorded again: covers, live takes, remixes.</p>
           <ul role="list" class="rows">
             {versions.map((v) => (
               <li>
