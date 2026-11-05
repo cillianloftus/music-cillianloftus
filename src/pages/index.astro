@@ -21,24 +21,32 @@ import { libraryStats, recentRatings } from '../lib/overview';
 import { inProgress, lovedArtists, lovedGenres, playedNotRated, topByType, topTracks } from '../lib/home';
 import { encodeDefinition } from '../lib/query/builder';
 import { spotifyLink } from '../lib/spotify/links';
-import { ordinal, todayPicks, whenText, type Pick } from '../lib/today';
+import { ordinal, todayIn, todayPicks, whenText, type Pick } from '../lib/today';
+import { byLibrary } from '../lib/library-cache';
 import { artistLines } from '../lib/catalogue';
 import { hueOf } from '../lib/art/playlist';
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
 const isOwner = Boolean(Astro.locals.user);
-const [recent, top, ratings, stats, picks, topSingles, favourites, started, artistsLoved, genresLoved, unplayed, facts] = await Promise.all([
-  recentReleaseGroups(viewerId, 12),
-  topByType(viewerId, ['album', 'mixtape'], 10),
-  recentRatings(viewerId, 8),
-  libraryStats(viewerId),
-  todayPicks(viewerId, { includeUnrated: isOwner }),
-  topByType(viewerId, ['single', 'ep'], 10),
-  topTracks(viewerId, 12),
-  isOwner && viewerId ? inProgress(viewerId, 10) : Promise.resolve([]),
-  lovedArtists(viewerId, 12),
-  lovedGenres(viewerId, 12),
-  isOwner && viewerId ? playedNotRated(viewerId, 10) : Promise.resolve([]),
+// Everything here changes only when the library does (or, for the picks, the
+// day), so it is worked out once per change and kept: a dozen queries that
+// D1 runs one after another, about 0.7s, become one cache read.
+const [[recent, top, ratings, stats, picks, topSingles, favourites, started, artistsLoved, genresLoved, unplayed], facts] = await Promise.all([
+  byLibrary(`home:v1:${todayIn()}:${isOwner ? 'owner' : 'public'}`, viewerId, () =>
+    Promise.all([
+      recentReleaseGroups(viewerId, 12),
+      topByType(viewerId, ['album', 'mixtape'], 10),
+      recentRatings(viewerId, 8),
+      libraryStats(viewerId),
+      todayPicks(viewerId, { includeUnrated: isOwner }),
+      topByType(viewerId, ['single', 'ep'], 10),
+      topTracks(viewerId, 12),
+      isOwner && viewerId ? inProgress(viewerId, 10) : Promise.resolve([]),
+      lovedArtists(viewerId, 12),
+      lovedGenres(viewerId, 12),
+      isOwner && viewerId ? playedNotRated(viewerId, 10) : Promise.resolve([]),
+    ]),
+  ),
   viewerId ? libraryFacts(viewerId) : Promise.resolve([]),
 ]);
 

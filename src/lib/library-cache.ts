@@ -1,8 +1,8 @@
 /**
  * Caching for whole-library computations (every track's facts, artists'
  * likeness, rankings). The key carries a stamp of the library's state
- * (the latest rating, counts of ratings, plays, credits, genre tags and
- * artists), so any change anywhere makes a fresh key: nothing is ever
+ * (the latest rating, counts of ratings, plays, credits, genre tags,
+ * artists, covers and pictures), so any change anywhere makes a fresh key: nothing is ever
  * stale, and nothing needs clearing by hand.
  */
 
@@ -16,7 +16,10 @@ export async function libraryStamp(userId: string | null): Promise<string> {
             (SELECT count(*) FROM play WHERE user_id = ?1) AS plays,
             (SELECT count(*) FROM artist_credit) AS credits,
             (SELECT count(*) FROM genre_tag) AS genres,
-            (SELECT count(*) FROM artist) AS artists`,
+            (SELECT count(*) FROM artist) AS artists,
+            -- Pictures found later (a cover, an artist photo) change what pages show.
+            (SELECT count(*) FROM release WHERE art_key IS NOT NULL) AS covers,
+            (SELECT count(*) FROM artist_image WHERE hidden = 0) AS pictures`,
   )
     .bind(userId)
     .first<Record<string, string | number | null>>();

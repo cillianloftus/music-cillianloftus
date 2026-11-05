@@ -338,8 +338,10 @@ export async function artistGenres(artistId: string, limit = 6): Promise<ArtistG
        WHERE artist_id = ?1 AND entity_type = 'recording' AND role = 'primary'
      )
      SELECT g.id, g.name, count(DISTINCT vg.recording_id) AS tracks
-     FROM theirs t JOIN v_recording_genre vg ON vg.recording_id = t.recording_id
-     JOIN genre g ON g.id = vg.genre_id
+     FROM v_recording_genre vg JOIN genre g ON g.id = vg.genre_id
+     -- A WHERE … IN, not a join: SQLite pushes it into the grouped view, so
+     -- only this artist's tracks are grouped (35ms, not a second).
+     WHERE vg.recording_id IN (SELECT recording_id FROM theirs)
      GROUP BY g.id
      HAVING count(DISTINCT vg.recording_id) * 7 >= (SELECT count(*) FROM theirs)
      ORDER BY tracks DESC, g.name
