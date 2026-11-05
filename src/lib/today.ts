@@ -49,15 +49,19 @@ export function affinity(stats: { average: number | null; rated: number; release
   return liking * 1.5 + Math.log1p(stats.rated) * 1.2 + Math.log1p(stats.releases);
 }
 
-/** Per artist: average track score, rated tracks, releases here. */
+/**
+ * Per artist: average track score, rated tracks, releases here. Grouped in
+ * one pass each: as subqueries per artist it re-scored every rating for
+ * each of thousands of artists.
+ */
 const ARTIST_STATS = `
-  SELECT a.id,
-         (SELECT avg(s.quality_score) FROM artist_credit c JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
-          WHERE c.artist_id = a.id AND c.entity_type = 'recording' AND c.role = 'primary') AS average,
-         (SELECT count(*) FROM artist_credit c JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
-          WHERE c.artist_id = a.id AND c.entity_type = 'recording' AND c.role = 'primary') AS rated,
-         (SELECT count(*) FROM artist_credit c WHERE c.artist_id = a.id AND c.entity_type = 'release_group' AND c.role = 'primary') AS releases
-  FROM artist a`;
+  SELECT a.id, scored.average, coalesce(scored.rated, 0) AS rated, coalesce(own.releases, 0) AS releases
+  FROM artist a
+  LEFT JOIN (SELECT c.artist_id, avg(s.quality_score) AS average, count(*) AS rated
+             FROM artist_credit c JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
+             WHERE c.entity_type = 'recording' AND c.role = 'primary' GROUP BY c.artist_id) scored ON scored.artist_id = a.id
+  LEFT JOIN (SELECT artist_id, count(*) AS releases FROM artist_credit
+             WHERE entity_type = 'release_group' AND role = 'primary' GROUP BY artist_id) own ON own.artist_id = a.id`;
 
 /** Today's date in Dublin, as YYYY-MM-DD. */
 export function todayIn(now: Date = new Date(), zone = ZONE): string {

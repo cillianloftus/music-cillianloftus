@@ -43,12 +43,16 @@ export async function roster(viewerId: string | null, sort: RosterSort = 'score'
                JOIN release_group g ON g.id = c.entity_id
              WHERE c.artist_id = a.id AND c.entity_type = 'release_group' AND c.role = 'primary' AND r.art_key IS NOT NULL
              ORDER BY g.first_release_date DESC LIMIT 1) AS art_key,
-            (SELECT count(*) FROM artist_credit c WHERE c.artist_id = a.id AND c.entity_type = 'release_group' AND c.role = 'primary') AS releases,
-            (SELECT count(*) FROM artist_credit c JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
-             WHERE c.artist_id = a.id AND c.entity_type = 'recording' AND c.role = 'primary') AS rated,
-            (SELECT avg(s.quality_score) FROM artist_credit c JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
-             WHERE c.artist_id = a.id AND c.entity_type = 'recording' AND c.role = 'primary') AS average
+            coalesce(released.releases, 0) AS releases,
+            coalesce(scored.rated, 0) AS rated,
+            scored.average
      FROM artist a JOIN own ON own.artist_id = a.id
+     -- Grouped once, not a scoring subquery per artist (thousands of them).
+     LEFT JOIN (SELECT c.artist_id, avg(s.quality_score) AS average, count(*) AS rated
+                FROM artist_credit c JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
+                WHERE c.entity_type = 'recording' AND c.role = 'primary' GROUP BY c.artist_id) scored ON scored.artist_id = a.id
+     LEFT JOIN (SELECT artist_id, count(*) AS releases FROM artist_credit
+                WHERE entity_type = 'release_group' AND role = 'primary' GROUP BY artist_id) released ON released.artist_id = a.id
      ORDER BY ${order}`,
   )
     .bind(viewerId)

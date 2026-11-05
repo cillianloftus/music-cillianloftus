@@ -78,20 +78,28 @@ async function withCredits<T extends { id: string }>(rows: T[]): Promise<(T & { 
 /** The cover a track first came out under, then its album's. */
 const FIRST_ART = `coalesce((SELECT fa.art_key FROM v_recording_first_art fa WHERE fa.recording_id = r.id), x.art_key)`;
 
-/** Favourite tracks: one per song (versions of one work collapse), best first. */
+/**
+ * Favourite tracks: one per song (versions of one work collapse), best
+ * first. The first-release art is looked up for the tracks shown only:
+ * per rated track it cost seconds on a full library.
+ */
 export async function topTracks(userId: string | null, limit = 12): Promise<TrackCard[]> {
   const { results } = await env.DB.prepare(
-    `SELECT id, title, art_key, album_id, album_title, quality_score, personal_score FROM (
-       SELECT r.id, r.title, ${FIRST_ART} AS art_key, g.id AS album_id, g.title AS album_title,
-              s.quality_score, s.personal_score,
-              row_number() OVER (PARTITION BY coalesce(r.work_id, r.id) ORDER BY s.personal_score DESC) AS n
-       FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
-       LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
-       LEFT JOIN release_group g ON g.id = ra.release_group_id
-       LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
-       LEFT JOIN release x ON x.id = gc.release_id
-       WHERE s.user_id = ?1)
-     WHERE n = 1 ORDER BY personal_score DESC, quality_score DESC LIMIT ?2`,
+    `SELECT id, title, coalesce((SELECT fa.art_key FROM v_recording_first_art fa WHERE fa.recording_id = top.id), top.album_art) AS art_key,
+            album_id, album_title, quality_score, personal_score
+     FROM (
+       SELECT * FROM (
+         SELECT r.id, r.title, x.art_key AS album_art, g.id AS album_id, g.title AS album_title,
+                s.quality_score, s.personal_score,
+                row_number() OVER (PARTITION BY coalesce(r.work_id, r.id) ORDER BY s.personal_score DESC) AS n
+         FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
+         LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
+         LEFT JOIN release_group g ON g.id = ra.release_group_id
+         LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
+         LEFT JOIN release x ON x.id = gc.release_id
+         WHERE s.user_id = ?1)
+       WHERE n = 1 ORDER BY personal_score DESC, quality_score DESC LIMIT ?2) top
+     ORDER BY personal_score DESC, quality_score DESC`,
   )
     .bind(userId, limit)
     .all<Omit<TrackCard, 'credits'>>();
