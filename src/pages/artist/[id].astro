@@ -382,14 +382,20 @@ const facts = [
               <dt>Highest</dt>
               <dd>
                 <span class="tile-value tabular">{Math.round(breakdown.best.score)}</span>
-                <a href={`/track/${breakdown.best.id}`}>{breakdown.best.title}</a>
+                <span>
+                  <a href={`/track/${breakdown.best.id}`}>{breakdown.best.title}</a>
+                  {breakdown.best.level > 0 && <span class="also"> and {breakdown.best.level} more</span>}
+                </span>
               </dd>
             </div>
             <div>
               <dt>Lowest</dt>
               <dd>
                 <span class="tile-value tabular">{Math.round(breakdown.worst.score)}</span>
-                <a href={`/track/${breakdown.worst.id}`}>{breakdown.worst.title}</a>
+                <span>
+                  <a href={`/track/${breakdown.worst.id}`}>{breakdown.worst.title}</a>
+                  {breakdown.worst.level > 0 && <span class="also"> and {breakdown.worst.level} more</span>}
+                </span>
               </dd>
             </div>
             <div>

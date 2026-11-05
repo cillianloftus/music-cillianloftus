@@ -679,8 +679,9 @@ export interface ArtistBreakdown {
   rated: number;
   average: number;
   median: number;
-  best: { id: string; title: string; score: number };
-  worst: { id: string; title: string; score: number };
+  /** The top and bottom tracks, and how many others share each score. */
+  best: { id: string; title: string; score: number; level: number };
+  worst: { id: string; title: string; score: number; level: number };
   /** Standard deviation of their track scores, and how that compares. */
   spread: number;
   steadiness: 'steady' | 'typical' | 'uneven';
@@ -735,8 +736,8 @@ export async function artistBreakdown(userId: string, artistId: string): Promise
     rated: facts.length,
     average: mean(scores),
     median,
-    best: { id: sorted[0]!.id, title: sorted[0]!.title, score: sorted[0]!.score },
-    worst: { id: sorted.at(-1)!.id, title: sorted.at(-1)!.title, score: sorted.at(-1)!.score },
+    best: { id: sorted[0]!.id, title: sorted[0]!.title, score: sorted[0]!.score, level: scores.filter((s) => s === sorted[0]!.score).length - 1 },
+    worst: { id: sorted.at(-1)!.id, title: sorted.at(-1)!.title, score: sorted.at(-1)!.score, level: scores.filter((s) => s === sorted.at(-1)!.score).length - 1 },
     spread,
     steadiness: !typicalSpread ? 'typical' : spread < typicalSpread * 0.7 ? 'steady' : spread > typicalSpread * 1.3 ? 'uneven' : 'typical',
     versusLibrary: mean(scores) - libraryAverage,
