@@ -13,6 +13,10 @@ export default defineConfig({
     //   npx wrangler d1 migrations apply music-db --local --persist-to <dir>
     //   PERSIST_TO=<dir> npm run dev
     persistState: process.env.PERSIST_TO ? { path: process.env.PERSIST_TO } : true,
+    // The database and image store are production's in development too
+    // ("remote": true in wrangler.jsonc). A throwaway or offline run turns
+    // that off: PERSIST_TO=<dir> or LOCAL_DB=1.
+    remoteBindings: !process.env.PERSIST_TO && process.env.LOCAL_DB !== '1',
   }),
   // Spotify only accepts loopback redirect URIs as IP literals, so the dev
   // server listens on 127.0.0.1 (browsers still resolve localhost to it).
