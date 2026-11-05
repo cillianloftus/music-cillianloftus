@@ -17,7 +17,7 @@ const previous = Astro.url.searchParams.get('source') ?? '';
     <PageHeader title="Import" />
 
     <form method="post" action="/api/write/import" novalidate id="import-form" class="importer">
-      <label for="source" class="importer-label">Paste a MusicBrainz or Spotify link</label>
+      <label for="source" class="importer-label section-label">One release</label>
       <div class="bar">
         <svg class="bar-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
@@ -45,7 +45,7 @@ const previous = Astro.url.searchParams.get('source') ?? '';
         </button>
         <button class="bar-button bar-go" type="submit">Import</button>
       </div>
-      <p class="hint" id="source-hint">Albums, editions or tracks. Paste several links at once and each is queued.</p>
+      <p class="hint" id="source-hint">An album, edition or track link. Several at once are each queued.</p>
       {
         error && (
           <p class="error" id="source-error" role="alert">
@@ -232,14 +232,14 @@ const previous = Astro.url.searchParams.get('source') ?? '';
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
           <div>
             <a href="/manage/import/files">Import a folder</a>
-            <p>Have the files? Their tags are read on your device; only text is sent.</p>
+            <p>Tags read on your device.</p>
           </div>
         </li>
         <li>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" /></svg>
           <div>
             <a href="/manage/import/manual">Add by hand</a>
-            <p>In no database at all? Paste the tracklist.</p>
+            <p>Paste a tracklist.</p>
           </div>
         </li>
       </ul>
@@ -299,9 +299,6 @@ const previous = Astro.url.searchParams.get('source') ?? '';
     gap: var(--space-2);
   }
 
-  .importer-label {
-    font-weight: 700;
-  }
 
   /* One bar: link icon, the box, Paste, Import. Focus rings the whole bar. */
   .bar {
@@ -393,8 +390,8 @@ const previous = Astro.url.searchParams.get('source') ?? '';
     }
   }
 
+  /* On the same left edge as the label and the bar. */
   .hint {
-    padding-left: var(--space-4);
     color: var(--text-muted);
     font-size: var(--step--1);
   }
