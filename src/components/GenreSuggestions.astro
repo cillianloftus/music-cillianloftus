@@ -1,0 +1,288 @@
+---
+/**
+ * Parents MusicBrainz suggests for genres in the library, one row per
+ * genre, each a tap away: file it there, or turn the row down. Genres at
+ * the top level come first and stay open; further parents for genres
+ * already placed sit in a fold beneath. With JavaScript a choice is saved
+ * in place and the row goes; without it the form posts and the page comes
+ * back at the next row.
+ */
+import { clearPlacements, type GenreSuggestion, type ParentPick, type Relation } from '../lib/genre-suggest';
+
+interface Props {
+  suggestions: GenreSuggestion[];
+}
+
+const { suggestions } = Astro.props;
+const unplaced = suggestions.filter((s) => !s.placed);
+const placed = suggestions.filter((s) => s.placed);
+const clear = clearPlacements(suggestions);
+const next = new Map(suggestions.map((s, i) => [s.id, suggestions[i + 1]?.id ?? '']));
+
+const LABEL: Record<Relation, string> = { fusion: 'fusion of', sub: 'subgenre of', infl: 'influenced by' };
+const groups = (s: GenreSuggestion) =>
+  (['fusion', 'sub', 'infl'] as const)
+    .map((relation) => ({ relation, picks: s.picks.filter((p) => p.relation === relation) }))
+    .filter((g) => g.picks.length > 0);
+const tracks = (n: number) => (n === 1 ? '1 track' : `${n} tracks`);
+const pickLabel = (s: GenreSuggestion, p: ParentPick) =>
+  `${s.placed ? 'Also file' : 'File'} ${s.name} under ${p.name}${p.id ? '' : ', adding it as a genre'}`;
+---
+
+{
+  suggestions.length === 0 ? (
+    <p class="muted">Nothing to suggest: every genre MusicBrainz relates is already where it says, or turned down.</p>
+  ) : (
+    <div class="genre-suggest" data-genre-suggest>
+      {clear.length > 0 && (
+        <form method="post" action="/api/write/genre" class="file-all">
+          <input type="hidden" name="intent" value="file_all" />
+          {clear.map((c) => (
+            <input type="hidden" name="place" value={[c.id, ...c.parents.map((p) => p.name)].join('|')} />
+          ))}
+          <button class="button button--primary" type="submit">
+            File {clear.length === 1 ? 'the 1 clear-cut genre' : `all ${clear.length} clear-cut genres`}
+          </button>
+          <p class="muted">
+            Top-level genres with one plain answer: a single parent, or every part of a fusion. The rest want a choice.
+          </p>
+        </form>
+      )}
+
+      {[
+        { list: unplaced, heading: null },
+        { list: placed, heading: `Further parents for placed genres (${placed.length})` },
+      ].map(({ list, heading }) => {
+        const rows = (
+          <ul role="list" class="rows">
+            {list.map((s) => (
+              <li id={`s-${s.id}`} class="row" data-row>
+                <p class="who">
+                  <a href={`#genre-${s.id}`} class="name">{s.name}</a>
+                  <span class="muted count">{tracks(s.tracks)}</span>
+                </p>
+                <div class="picks">
+                  {s.fusion && (
+                    <form method="post" action="/api/write/genre">
+                      <input type="hidden" name="intent" value="file_under" />
+                      <input type="hidden" name="id" value={s.id} />
+                      <input type="hidden" name="next" value={next.get(s.id)} />
+                      {s.fusion.map((p) => <input type="hidden" name="parent" value={p.name} />)}
+                      <button class="button button--primary small" type="submit">
+                        {s.fusion.map((p) => p.name).join(' + ')}
+                        <span class="visually-hidden">: file {s.name} under each</span>
+                      </button>
+                    </form>
+                  )}
+                  {groups(s).map((g) => (
+                    <div class="group">
+                      <span class="muted relation">{LABEL[g.relation]}</span>
+                      {g.picks.map((p) => (
+                        <form method="post" action="/api/write/genre">
+                          <input type="hidden" name="intent" value="file_under" />
+                          <input type="hidden" name="id" value={s.id} />
+                          <input type="hidden" name="placed" value={s.placed ? '1' : '0'} />
+                          <input type="hidden" name="next" value={next.get(s.id)} />
+                          <input type="hidden" name="parent" value={p.name} />
+                          <button
+                            class:list={['button', 'small', { 'button--quiet': !p.id }]}
+                            type="submit"
+                            aria-label={pickLabel(s, p)}
+                            title={p.via ? `MusicBrainz says ${p.via}, which sits beneath ${p.name}` : undefined}
+                          >
+                            {p.id ? '' : '+ '}
+                            {p.name}
+                            {p.via && <span class="via">for {p.via}</span>}
+                          </button>
+                        </form>
+                      ))}
+                    </div>
+                  ))}
+                  <form method="post" action="/api/write/genre" class="dismiss">
+                    <input type="hidden" name="intent" value="dismiss" />
+                    <input type="hidden" name="id" value={s.id} />
+                    <input type="hidden" name="next" value={next.get(s.id)} />
+                    {s.picks.map((p) => <input type="hidden" name="parent" value={p.name} />)}
+                    <button class="text-button" type="submit" aria-label={`Turn down these suggestions for ${s.name}`}>
+                      Not these
+                    </button>
+                  </form>
+                </div>
+                <p class="error" role="alert" data-error hidden />
+              </li>
+            ))}
+          </ul>
+        );
+        return list.length === 0 ? null : heading ? (
+          <details class="more">
+            <summary>{heading}</summary>
+            {rows}
+          </details>
+        ) : (
+          rows
+        );
+      })}
+      <p class="muted hint">
+        From MusicBrainz’s genre relationships. A plus adds the genre to the library too; “for” names the genre MusicBrainz
+        gives when only one above it is here.
+      </p>
+    </div>
+  )
+}
+
+<script>
+  // Save a choice without leaving the list: the row goes, the next one moves up.
+  for (const box of document.querySelectorAll<HTMLElement>('[data-genre-suggest]')) {
+    box.addEventListener('submit', async (event) => {
+      const form = event.target as HTMLFormElement;
+      const row = form.closest<HTMLElement>('[data-row]');
+      if (!row) return;
+      event.preventDefault();
+      const error = row.querySelector<HTMLElement>('[data-error]');
+      for (const b of row.querySelectorAll('button')) b.disabled = true;
+      try {
+        const response = await fetch(form.action, { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } });
+        const result = (await response.json()) as { ok: boolean; error?: string };
+        if (!result.ok) throw new Error(result.error ?? 'That could not be saved.');
+        const following = row.nextElementSibling?.querySelector<HTMLElement>('button');
+        row.remove();
+        following?.focus({ preventScroll: true });
+      } catch (e) {
+        if (error) {
+          error.textContent = e instanceof Error ? e.message : 'That could not be saved.';
+          error.hidden = false;
+        }
+        for (const b of row.querySelectorAll('button')) b.disabled = false;
+      }
+    });
+  }
+</script>
+
+<style>
+  .genre-suggest {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .file-all {
+    display: grid;
+    justify-items: start;
+    gap: var(--space-2);
+  }
+
+  .file-all p {
+    margin: 0;
+    font-size: var(--step--1);
+  }
+
+  .rows {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* Name in one column, choices in the next, so rows line up however long the names. */
+  .row {
+    display: grid;
+    grid-template-columns: minmax(8rem, 13rem) minmax(0, 1fr);
+    align-items: baseline;
+    gap: var(--space-2) var(--space-4);
+    padding-block: var(--space-3);
+    border-top: 1px solid var(--border);
+  }
+
+  .who {
+    display: grid;
+    margin: 0;
+  }
+
+  .name {
+    color: inherit;
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .count {
+    font-size: var(--step--1);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .picks {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .relation {
+    font-size: var(--step--1);
+  }
+
+  .small {
+    padding: 0 var(--space-3);
+    font-size: var(--step--1);
+  }
+
+  .via {
+    margin-left: 0.4em;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+
+  .text-button {
+    min-height: var(--target);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--step--1);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 32%, transparent);
+    text-underline-offset: 0.22em;
+    cursor: pointer;
+  }
+
+  .error {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--danger);
+    font-size: var(--step--1);
+  }
+
+  .more summary {
+    padding-block: var(--space-3);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .hint {
+    margin: 0;
+    font-size: var(--step--1);
+  }
+
+  /* Phones: the name above its choices. */
+  @media (max-width: 39.99rem) {
+    .row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .who {
+      display: flex;
+      align-items: baseline;
+      gap: var(--space-2);
+    }
+  }
+</style>

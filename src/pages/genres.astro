@@ -1,21 +1,27 @@
 ---
 /**
- * The genre tree as a circle packing: each circle's area is the number of
- * tracks in that genre. Laid out on the server (d3-hierarchy) and sent as
+ * The genre tree, drawn as a tree (GenreTreeArt) or, with ?view=circles,
+ * as a circle packing: each circle's area is the number of tracks in that
+ * genre. Laid out on the server (d3-hierarchy) and sent as
  * plain SVG, so it renders without JavaScript and without layout shift.
  * The nested list below carries the same information as text.
  */
 import Base from '../layouts/Base.astro';
 import PageHeader from '../components/PageHeader.astro';
 import GenreList from '../components/GenreList.astro';
+import GenreTreeArt from '../components/GenreTreeArt.astro';
+import { growTree } from '../lib/genre-tree-art';
 import { hueOf } from '../lib/art/playlist';
 import { buildGenreTree, genreRows, packGenres } from '../lib/genres';
 
 const SIZE = 800;
-const tree = buildGenreTree(await genreRows());
-const circles = packGenres(tree, SIZE);
+const rows = await genreRows();
+const tree = buildGenreTree(rows);
+const view = Astro.url.searchParams.get('view') === 'circles' ? 'circles' : 'tree';
+const art = view === 'tree' ? growTree(rows) : null;
+const circles = view === 'circles' ? packGenres(tree, SIZE) : [];
 const largestLeaf = Math.max(1, ...circles.filter((c) => c.leaf).map((c) => c.value));
-const totalGenres = circles.filter((c) => !c.self).length;
+const totalGenres = art ? art.count : circles.filter((c) => !c.self).length;
 
 // A group's name goes along its top edge, but only where its children leave
 // that strip clear; otherwise it would sit on top of a child's label.
@@ -66,10 +72,20 @@ function leafLabel(name: string, r: number): { lines: string[]; size: number } |
 
 <Base title="Genres" description="Genres in the library, sized by how many tracks sit in each.">
   <div class="wrap page">
-    <PageHeader title="Genres" count={totalGenres} />
+    <PageHeader title="Genres" count={totalGenres}>
+      {view === 'tree' ? <a href="/genres?view=circles">As circles</a> : <a href="/genres">As a tree</a>}
+    </PageHeader>
 
     {
-      circles.length === 0 ? (
+      art ? (
+        <>
+          <GenreTreeArt art={art} />
+          <section aria-labelledby="list-heading" class="genre-list">
+            <h2 id="list-heading">All genres</h2>
+            <GenreList nodes={tree} />
+          </section>
+        </>
+      ) : circles.length === 0 ? (
         <p class="empty">No genres yet. Imports bring them in.</p>
       ) : (
         <>

@@ -3,14 +3,19 @@
  * The genre tree editor (ARCHITECTURE.md §3, "Genre"): where each genre
  * sits is a judgement, and this one is Cillian's. Wikidata's subclass
  * relations are offered as suggestions, never applied on their own.
+ * So are MusicBrainz's genre relationships, bundled with the site, for
+ * every genre.
  */
 import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import GenreEditTree, { type EditNode } from '../../components/GenreEditTree.astro';
+import GenreSuggestions from '../../components/GenreSuggestions.astro';
+import { dismissedSuggestions, mbRelations, suggestParents } from '../../lib/genre-suggest';
 import { genreKey, genreRows, GenreError, wikidataParents } from '../../lib/genres';
 
 const params = Astro.url.searchParams;
-const rows = await genreRows();
+const [rows, dismissed] = await Promise.all([genreRows(), dismissedSuggestions()]);
+const mbSuggestions = suggestParents(rows, mbRelations, dismissed);
 const byId = new Map(rows.map((r) => [r.id, r]));
 const nodes = new Map<string, EditNode>(
   rows.map((r) => [
@@ -59,6 +64,13 @@ if (suggestOpen) {
 }
 
 const done = params.get('done');
+const filed = Number(params.get('n') ?? 0);
+const DONE: Record<string, string> = {
+  created: 'Genre added.',
+  moved: 'Moved.',
+  dismissed: 'Turned down.',
+  filed: filed === 1 ? 'Filed 1 genre.' : `Filed ${filed} genres.`,
+};
 const error = params.get('error');
 const keep = suggestOpen ? [{ name: 'suggest', value: '1' }] : [];
 ---
@@ -66,16 +78,21 @@ const keep = suggestOpen ? [{ name: 'suggest', value: '1' }] : [];
 <Base title="Genre tree">
   <div class="wrap page">
     <PageHeader title="Genre tree">
-      <a href="/genres">As circles</a>
+      <a href="/genres">See the tree</a>
     </PageHeader>
 
-    {done && <p class="notice" role="status">{done === 'created' ? 'Genre added.' : 'Moved.'}</p>}
+    {done && DONE[done] && <p class="notice" role="status">{DONE[done]}</p>}
     {error && <p class="notice notice--error" role="alert">{error}</p>}
 
     <datalist id="genre-names">{rows.map((r) => <option value={r.name} />)}</datalist>
 
-    <section class="suggest" aria-labelledby="suggest-heading">
-      <h2 id="suggest-heading">Suggestions from Wikidata</h2>
+    <section aria-labelledby="suggest-heading">
+      <h2 id="suggest-heading">Where they might belong</h2>
+      <GenreSuggestions suggestions={mbSuggestions} />
+    </section>
+
+    <section class="suggest" aria-labelledby="wikidata-heading">
+      <h2 id="wikidata-heading">Suggestions from Wikidata</h2>
       {
         !suggestOpen ? (
           <p>
