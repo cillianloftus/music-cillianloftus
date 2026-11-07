@@ -111,6 +111,8 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     position: relative;
     isolation: isolate;
     padding-block: var(--space-5) var(--space-7);
+    /* Room for the job tray while it shows (set by JobTray). */
+    margin-bottom: var(--tray-clearance, 0px);
   }
 
   main:focus {

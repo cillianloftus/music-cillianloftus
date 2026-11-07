@@ -45,6 +45,13 @@
     timer: number | undefined;
 
     connectedCallback() {
+      // The page keeps clear of the tray, so whatever sits at its foot (the
+      // text-size slider on Manage, say) can still be scrolled into reach.
+      const tray = this.querySelector<HTMLElement>('.tray')!;
+      new ResizeObserver(() => {
+        const space = tray.hidden ? 0 : tray.offsetHeight;
+        document.documentElement.style.setProperty('--tray-clearance', `${space}px`);
+      }).observe(tray);
       try {
         this.items = JSON.parse(sessionStorage.getItem(KEY) ?? '[]') as Item[];
       } catch {
