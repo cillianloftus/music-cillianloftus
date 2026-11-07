@@ -14,8 +14,8 @@
 	"vars": {
 		// Cloudflare Access. The Worker verifies the Access JWT itself, so the
 		// workers.dev URL cannot be used to bypass the Access policy.
-		"ACCESS_TEAM_DOMAIN": "",
-		"ACCESS_AUD": ""
+		"ACCESS_TEAM_DOMAIN": "flat-cake-1c45.cloudflareaccess.com",
+		"ACCESS_AUD": "783c29ec68d2f0ca1f137dca9ee90dcf6aabde40a7b39680569224e74c54a57b"
 	},
 	"assets": {
 		"directory": "./dist",
