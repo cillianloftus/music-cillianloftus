@@ -77,6 +77,12 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
         },
         true,
       );
+
+      // Installable as an app (public/sw.js). Not in development, where a
+      // worker would outlive code changes.
+      if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      }
     </script>
   </body>
 </html>

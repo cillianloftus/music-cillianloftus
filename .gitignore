@@ -27,3 +27,4 @@ pnpm-debug.log*
 .idea/
 
 *.md
+scripts/.mb-genre-relations.progress.json

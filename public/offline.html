@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en-IE">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0e0e10" />
+    <title>Offline · music</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <style>
+      :root {
+        color-scheme: dark light;
+        --bg: #0e0e10;
+        --text: #f2f1ee;
+        --muted: #a3a19b;
+        --accent: #f0b35b;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f6f3ec;
+          --text: #1a1916;
+          --muted: #5f5c55;
+          --accent: #9a5b00;
+        }
+      }
+      body {
+        display: grid;
+        min-height: 100dvh;
+        margin: 0;
+        padding: 0 16px;
+        place-content: center start;
+        background: var(--bg);
+        color: var(--text);
+        font: 100%/1.5 system-ui, sans-serif;
+      }
+      main {
+        max-width: 30rem;
+        margin-inline: auto;
+      }
+      h1 {
+        margin: 0 0 0.5rem;
+        font-size: 1.6rem;
+      }
+      p {
+        margin: 0 0 1.5rem;
+        color: var(--muted);
+      }
+      button {
+        min-height: 44px;
+        padding: 0 1.25rem;
+        border: 1px solid var(--muted);
+        border-radius: 999px;
+        background: none;
+        color: var(--text);
+        font: inherit;
+        font-weight: 600;
+      }
+      button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Offline</h1>
+      <p>The library needs a connection. It will be here when you are back online.</p>
+      <button type="button" onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

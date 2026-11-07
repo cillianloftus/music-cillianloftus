@@ -1,0 +1,52 @@
+---
+/**
+ * When a page fails. It needs nothing from the database, so it still
+ * renders when that is what failed: usually D1's free daily allowance of
+ * rows read, which comes back at midnight UTC.
+ */
+import Base from '../layouts/Base.astro';
+import PageHeader from '../components/PageHeader.astro';
+
+interface Props {
+  error: unknown;
+}
+
+const message = String((Astro.props.error as Error | undefined)?.message ?? Astro.props.error ?? '');
+const overAllowance = /exceeded|limit|quota|rows read/i.test(message) && /D1|row/i.test(message);
+Astro.response.status = 500;
+Astro.response.headers.set('Cache-Control', 'no-store');
+---
+
+<Base title="Something went wrong">
+  <div class="wrap page">
+    <PageHeader title={overAllowance ? 'Resting until midnight' : 'Something went wrong'} />
+    <p class="muted">
+      {
+        overAllowance
+          ? 'The library has been read as much as today allows. It comes back at midnight UTC.'
+          : 'This page could not be put together just now. Trying again usually works.'
+      }
+    </p>
+    <p class="ways">
+      <a class="button" href={Astro.url.pathname}>Try again</a>
+      <a class="button button--quiet" href="/">Home</a>
+    </p>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-4);
+    justify-items: start;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .ways {
+    display: flex;
+    gap: var(--space-3);
+  }
+</style>
