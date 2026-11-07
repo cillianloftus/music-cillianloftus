@@ -50,7 +50,9 @@ export async function siteStamp(): Promise<string> {
             (SELECT max(rowid) || ':' || count(*) FROM holding) AS holdings,
             (SELECT group_concat(id) FROM weights WHERE active = 1) AS weights,
             -- Renames and moves in the genre tree; it is small.
-            (SELECT group_concat(id || '=' || name || '<' || coalesce(parent_id, ''), '|') FROM genre) AS genres`,
+            (SELECT group_concat(id || '=' || name || '<' || coalesce(parent_id, ''), '|') FROM genre) AS genres,
+            -- Further parents (0013) move genre pages as much as a primary one.
+            (SELECT group_concat(genre_id || '<' || parent_id, '|') FROM genre_extra_parent) AS alsoUnder`,
   ).first<Record<string, string | number | null>>();
   return fingerprint(Object.values(row ?? {}).join('\u0000'));
 }

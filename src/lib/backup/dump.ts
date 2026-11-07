@@ -14,13 +14,17 @@ async function dumpTable(table: string): Promise<TableDump> {
   const columns = info.map((c) => c.name);
 
   const rows: unknown[][] = [];
-  for (let offset = 0; ; offset += PAGE) {
+  // Paged from the last rowid seen, not by OFFSET: SQLite reads every row an
+  // offset skips, and D1 counts them, so a 58,000-row table cost 1.7 million
+  // rows read that way. This reads each row once.
+  for (let after = Number.MIN_SAFE_INTEGER; ; ) {
     // Table names come from sqlite_master, never from input.
-    const { results } = await env.DB.prepare(`SELECT * FROM "${table}" ORDER BY rowid LIMIT ? OFFSET ?`)
-      .bind(PAGE, offset)
+    const { results } = await env.DB.prepare(`SELECT rowid AS "__rowid", * FROM "${table}" WHERE rowid > ? ORDER BY rowid LIMIT ?`)
+      .bind(after, PAGE)
       .all<Record<string, unknown>>();
     rows.push(...results.map((row) => columns.map((c) => row[c] ?? null)));
     if (results.length < PAGE) break;
+    after = Number(results[results.length - 1].__rowid);
   }
   return { columns, rows };
 }

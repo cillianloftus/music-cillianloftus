@@ -61,6 +61,7 @@ describe('siteStamp', () => {
   const changes: Array<[string, () => void]> = [
     ['anyone’s rating', () => insert(db, 'rating', [{ id: 'n', user_id: 'u-friend', entity_type: 'recording', entity_id: 'a1', depth: 'gut', gut_score: 3, rated_at: '2026-02-01T00:00:00.000Z' }])],
     ['a genre renamed', () => db.exec(`UPDATE genre SET name = 'Indie pop' WHERE id = 'g-indie'`)],
+    ['a genre filed under a further parent', () => insert(db, 'genre_extra_parent', [{ genre_id: 'g-indie', parent_id: 'g-rock' }])],
     ['a new picture', () => {
       insert(db, 'artist_image', [{ id: 'i1', artist_id: 'art-x', key: 'art/artist/art-x/1.jpg', source: 'manual', position: 0 }]);
     }],

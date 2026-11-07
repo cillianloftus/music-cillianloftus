@@ -60,6 +60,13 @@ describe('backup and restore', () => {
     expect(summarise(backup).ratings).toBe(8);
   });
 
+  it('pages through a table longer than one read, missing nothing', async () => {
+    insert(source, 'genre', Array.from({ length: 2345 }, (_, i) => ({ id: `gx-${i}`, name: `genre ${i}`, parent_id: null })));
+    const backup = await dumpDatabase();
+    expect(backup.tables.genre.rows).toHaveLength(tableRows(source, 'genre').length);
+    expect(new Set(backup.tables.genre.rows.map((r) => r[0])).size).toBe(backup.tables.genre.rows.length);
+  });
+
   it('leaves out secrets and derived data', async () => {
     const backup = await dumpDatabase();
     expect(backup.tables.spotify_token).toBeUndefined();
