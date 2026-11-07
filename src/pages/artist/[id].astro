@@ -493,20 +493,48 @@ const facts = [
       ) : (
         shelves.map((shelf) => (
           <section aria-labelledby={`releases-${shelf.key}`}>
-            <h2 id={`releases-${shelf.key}`}>
-              {shelf.heading} <span class="count tabular">{shelf.items.length}</span>
-            </h2>
-            <ul class="grid" role="list">
-              {shelf.items.map((album) => (
-                <li>
-                  <AlbumCard album={album} />
-                </li>
-              ))}
-            </ul>
+            <details class="shelf" open data-shelf={shelf.key}>
+              <summary>
+                <h2 id={`releases-${shelf.key}`}>
+                  {shelf.heading} <span class="count tabular">{shelf.items.length}</span>
+                </h2>
+                <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </summary>
+              <ul class="grid" role="list">
+                {shelf.items.map((album) => (
+                  <li>
+                    <AlbumCard album={album} />
+                  </li>
+                ))}
+              </ul>
+            </details>
           </section>
         ))
       )
     }
+    {/* Inline, straight after the shelves: folded kinds close before they paint. */}
+    <script is:inline>
+      (() => {
+        const KEY = 'folded-shelves';
+        let folded = [];
+        try {
+          folded = JSON.parse(localStorage.getItem(KEY) || '[]');
+        } catch {}
+        for (const shelf of document.querySelectorAll('details[data-shelf]')) {
+          if (folded.includes(shelf.dataset.shelf)) shelf.open = false;
+          shelf.addEventListener('toggle', () => {
+            const kind = shelf.dataset.shelf;
+            folded = folded.filter((k) => k !== kind);
+            if (!shelf.open) folded.push(kind);
+            try {
+              localStorage.setItem(KEY, JSON.stringify(folded));
+            } catch {}
+          });
+        }
+      })();
+    </script>
 
     {
       collaborators.length > 0 && (
@@ -721,6 +749,53 @@ const facts = [
 </script>
 
 <style>
+  /* Release shelves fold away; which kinds are folded is remembered. */
+  .shelf > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    min-height: var(--target);
+    margin-bottom: var(--space-4);
+    list-style: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .shelf > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .shelf > summary h2 {
+    margin-bottom: 0;
+  }
+
+  .shelf:not([open]) > summary {
+    margin-bottom: 0;
+  }
+
+  .chevron {
+    flex: none;
+    width: 1.5rem;
+    height: 1.5rem;
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: rotate 0.2s ease;
+  }
+
+  .shelf:not([open]) .chevron {
+    rotate: -90deg;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chevron {
+      transition: none;
+    }
+  }
+
   h2 .count {
     margin-left: var(--space-1);
     color: var(--text-subtle);
