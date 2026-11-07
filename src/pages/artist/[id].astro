@@ -104,7 +104,15 @@ const identity = [
 // Names they go by. Search hints stay searchable but are often misspellings
 // ("Fleedwood Mac"), so they are shown only when they are a real name
 // MusicBrainz filed loosely: never for a group, and only alongside a legal name.
-const otherNames = about.aliases.filter((a) => a.kind !== 'search' || (about.kind === 'person' && about.aliases.some((b) => b.kind === 'legal')));
+const latin = (name: string) => /\p{Script=Latin}/u.test(name);
+const otherNames = about.aliases.filter(
+  (a) =>
+    (a.kind !== 'search' || (about.kind === 'person' && about.aliases.some((b) => b.kind === 'legal'))) &&
+    // Not a joint credit MusicBrainz files as an alias ("Kendrick Lamar, SZA"),
+    !/,|\s&\s|\sfeat\.?\s|\sx\s/i.test(a.name.replace(artist.name, '')) &&
+    // nor the name written in another script, which reads as noise in a list.
+    (latin(a.name) || !latin(artist.name)),
+);
 const firstImage = images[0];
 // "Photo: Name, CC BY-SA 4.0 · Wikimedia Commons", without saying the source twice.
 const captionOf = (img: (typeof images)[number]) =>
