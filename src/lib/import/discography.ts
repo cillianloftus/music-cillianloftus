@@ -7,6 +7,7 @@
 
 import { env } from 'cloudflare:workers';
 import { enqueueMany } from '../jobs/queue';
+import { removedMbids } from '../official';
 import { artistForSpotify, browseArtistReleaseGroups, searchArtists, type MbReleaseGroupSummary } from '../musicbrainz/client';
 import { normaliseName } from '../text';
 
@@ -71,8 +72,10 @@ export async function queueDiscography(
         .all<{ mbid: string }>()
     ).results.map((r) => r.mbid),
   );
+  // Albums Cillian removed stay removed.
+  const removed = await removedMbids(groups.map((g) => g.id));
   const fresh = groups
-    .filter((g) => !held.has(g.id))
+    .filter((g) => !held.has(g.id) && !removed.has(g.id))
     .sort((a, b) => (a['first-release-date'] ?? '').localeCompare(b['first-release-date'] ?? ''));
   const ids = await enqueueMany(
     'import_release',

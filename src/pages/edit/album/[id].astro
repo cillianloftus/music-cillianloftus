@@ -445,6 +445,25 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
       )
     }
 
+    <section aria-labelledby="remove-heading" class="card">
+      <h2 id="remove-heading">Not really theirs?</h2>
+      <p class="muted">
+        Takes it out of the library, with its tracks that are on nothing else. A copy is kept, and imports will not bring it back. Not
+        for rated or owned albums.
+      </p>
+      <form method="post" action="/api/write/unofficial" data-confirm={`Remove “${album.title}” from the library?`}>
+        <input type="hidden" name="id" value={id} />
+        <button class="button" type="submit" name="intent" value="remove_not_wanted">Remove from library</button>
+      </form>
+    </section>
+    <script>
+      for (const form of document.querySelectorAll<HTMLFormElement>('form[data-confirm]')) {
+        form.addEventListener('submit', (event) => {
+          if (!confirm(form.dataset.confirm!)) event.preventDefault();
+        });
+      }
+    </script>
+
     <script>
       // Resize in the browser to the stored widths, as JPEG, so any image
       // works and phones never download a full-size scan.

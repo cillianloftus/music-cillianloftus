@@ -18,10 +18,11 @@ const [counts, spotify] = await Promise.all([
             (SELECT count(*) FROM job WHERE status = 'failed') AS failed,
             (SELECT count(*) FROM job WHERE status IN ('queued', 'running')) AS running,
             (SELECT count(*) FROM file) AS files,
-            (SELECT count(*) FROM play WHERE user_id = ?1) AS plays`,
+            (SELECT count(*) FROM play WHERE user_id = ?1) AS plays,
+            (SELECT count(*) FROM release_group WHERE official = 0 AND keep_unofficial = 0) AS unofficial`,
   )
     .bind(user.id)
-    .first<{ review: number; failed: number; running: number; files: number; plays: number }>(),
+    .first<{ review: number; failed: number; running: number; files: number; plays: number; unofficial: number }>(),
   connection(user.id).catch(() => null),
 ]);
 const waiting = await waitingCount().catch(() => 0);
@@ -45,6 +46,7 @@ const ICONS = {
   history: 'M12 7v5l3 2M3 12a9 9 0 1 0 3-6.7M3 4v4h4',
   spotify: 'M6 10c4-1.5 8-1 12 1M7 13.5c3-1 6.5-.7 9.5.8M8 17c2.2-.6 4.6-.4 6.8.6',
   review: 'M9 12l2 2 4-4M12 3l8 4v5c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V7z',
+  unofficial: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM5.6 5.6l12.8 12.8',
   genres: 'M12 7a3 3 0 1 0 0-.1M6 20a3 3 0 1 0 0-.1M18 20a3 3 0 1 0 0-.1M12 7v4m0 0l-5 5m5-5l5 5',
   weights: 'M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4',
   jobs: 'M4 6h16M4 12h10M4 18h6M17 15l2 2 3-4',
@@ -97,6 +99,13 @@ const groups: { heading: string; items: Item[] }[] = [
         text: 'Duplicates and loose ends.',
         icon: ICONS.review,
         status: counts?.review ? { text: `${counts.review} to look at`, tone: 'attention' } : { text: 'All clear', tone: 'quiet' },
+      },
+      {
+        href: '/manage/unofficial',
+        title: 'Not official',
+        text: 'Bootlegs and fan-made releases.',
+        icon: ICONS.unofficial,
+        status: counts?.unofficial ? { text: `${counts.unofficial} to clear`, tone: 'attention' } : undefined,
       },
       { href: '/manage/genres', title: 'Genre tree', text: 'Which genre sits under which.', icon: ICONS.genres },
       { href: '/manage/weights', title: 'Weights', text: 'How scores are worked out.', icon: ICONS.weights },

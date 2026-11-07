@@ -1,0 +1,260 @@
+---
+/**
+ * Releases MusicBrainz does not count as official: bootlegs, fan-made
+ * "albums", unofficial mixtapes. Found by src/lib/official.ts, removed only
+ * from here. A removal keeps a snapshot of everything it took.
+ */
+import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import CoverArt from '../../components/CoverArt.astro';
+import { checkProgress, unofficialGroups } from '../../lib/official';
+
+const [groups, progress] = await Promise.all([unofficialGroups(), checkProgress()]);
+const free = groups.filter((g) => !g.blocked);
+const held = groups.filter((g) => g.blocked);
+const params = Astro.url.searchParams;
+const TYPES: Record<string, string> = {
+  album: 'Album',
+  ep: 'EP',
+  single: 'Single',
+  compilation: 'Compilation',
+  mixtape: 'Mixtape',
+  soundtrack: 'Soundtrack',
+  live: 'Live',
+};
+const done =
+  params.get('done') === 'batch'
+    ? `Removed ${params.get('removed')}.${Number(params.get('left')) > 0 ? ` ${params.get('left')} to go.` : ''}`
+    : params.get('done') === 'removed'
+      ? 'Removed.'
+      : params.get('done') === 'kept'
+        ? 'Kept.'
+        : null;
+const checking = progress.checked < progress.artists;
+---
+
+<Base title="Not official">
+  <div class="wrap page">
+    <PageHeader title="Not official" count={groups.length} />
+
+    {params.get('error') && <p class="notice notice--error" role="alert">{params.get('error')}</p>}
+    {done && <p class="notice" role="status">{done}</p>}
+
+    <p class="lede">
+      Bootlegs, fan-made albums and unofficial mixtapes: releases MusicBrainz lists but does not count as official.
+      {checking && <span class="muted"> Checked {progress.checked} of {progress.artists} artists so far; more appear as the check goes on.</span>}
+    </p>
+
+    {
+      free.length > 0 && (
+        <form method="post" action="/api/write/unofficial" class="all" data-remove-all>
+          <button class="button button--primary" type="submit" name="intent" value="remove_all">
+            Remove all {free.length}
+          </button>
+          <span class="muted small" data-all-status aria-live="polite">
+            Each is kept whole in a snapshot, and imports will not bring it back.
+          </span>
+        </form>
+      )
+    }
+
+    {
+      groups.length === 0 && (
+        <p class="muted">{checking ? 'Nothing found yet.' : 'Nothing unofficial in the library.'}</p>
+      )
+    }
+
+    {
+      free.length > 0 && (
+        <ul role="list" class="list" data-list>
+          {free.map((g) => (
+            <li class="row" id={`u-${g.id}`}>
+              <a class="art" href={`/album/${g.id}`} tabindex="-1" aria-hidden="true">
+                <CoverArt artKey={g.art_key} title={g.title} sizes="3rem" />
+              </a>
+              <div class="text">
+                <a class="title" href={`/album/${g.id}`}>{g.title}</a>
+                <span class="meta muted small">
+                  {[g.artist, TYPES[g.type] ?? g.type, g.first_release_date?.slice(0, 4)].filter(Boolean).join(' · ')}
+                </span>
+              </div>
+              <form method="post" action="/api/write/unofficial" class="actions" data-row>
+                <input type="hidden" name="id" value={g.id} />
+                <button class="button small button--quiet" type="submit" name="intent" value="keep">
+                  Keep
+                </button>
+                <button class="button small" type="submit" name="intent" value="remove">
+                  Remove
+                </button>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+
+    {
+      held.length > 0 && (
+        <section aria-labelledby="held-heading" class="held">
+          <h2 id="held-heading">Rated or owned ({held.length})</h2>
+          <p class="muted small">These stay until you keep them, or merge them into the real album from Review.</p>
+          <ul role="list" class="list">
+            {held.map((g) => (
+              <li class="row" id={`u-${g.id}`}>
+                <a class="art" href={`/album/${g.id}`} tabindex="-1" aria-hidden="true">
+                  <CoverArt artKey={g.art_key} title={g.title} sizes="3rem" />
+                </a>
+                <div class="text">
+                  <a class="title" href={`/album/${g.id}`}>{g.title}</a>
+                  <span class="meta muted small">
+                    {[g.artist, TYPES[g.type] ?? g.type, g.blocked === 'rated' ? 'rated' : 'owned'].filter(Boolean).join(' · ')}
+                  </span>
+                </div>
+                <form method="post" action="/api/write/unofficial" class="actions" data-row>
+                  <input type="hidden" name="id" value={g.id} />
+                  <button class="button small button--quiet" type="submit" name="intent" value="keep">
+                    Keep
+                  </button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+  </div>
+</Base>
+
+<script>
+  const post = async (form: HTMLFormElement, intent: string) => {
+    const body = new FormData(form);
+    body.set('intent', intent);
+    const response = await fetch(form.action, { method: 'POST', body, headers: { Accept: 'application/json' } });
+    return (await response.json()) as { ok: boolean; error?: string; removed?: number; left?: number };
+  };
+
+  // One row at a time: the row goes, and focus moves to the next.
+  for (const form of document.querySelectorAll<HTMLFormElement>('[data-row]')) {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const intent = (event.submitter as HTMLButtonElement | null)?.value ?? 'remove';
+      const row = form.closest('li')!;
+      for (const b of form.querySelectorAll('button')) b.disabled = true;
+      const result = await post(form, intent);
+      if (!result.ok) {
+        alert(result.error ?? 'That did not work.');
+        for (const b of form.querySelectorAll('button')) b.disabled = false;
+        return;
+      }
+      const next = row.nextElementSibling?.querySelector<HTMLElement>('button[value="remove"], button');
+      row.remove();
+      next?.focus();
+    });
+  }
+
+  // Everything: a batch at a time until nothing is left, then a fresh page.
+  const all = document.querySelector<HTMLFormElement>('[data-remove-all]');
+  all?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = all.querySelector('button')!;
+    const status = all.querySelector<HTMLElement>('[data-all-status]')!;
+    button.disabled = true;
+    let removed = 0;
+    for (;;) {
+      const result = await post(all, 'remove_all');
+      if (!result.ok) {
+        status.textContent = result.error ?? 'That did not work.';
+        button.disabled = false;
+        return;
+      }
+      removed += result.removed ?? 0;
+      status.textContent = `Removed ${removed}${result.left ? `, ${result.left} to go…` : '.'}`;
+      if (!result.left || !result.removed) break;
+    }
+    location.assign(`/manage/unofficial?done=batch&removed=${removed}&left=0`);
+  });
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .lede {
+    max-width: 60ch;
+    color: var(--text-muted);
+  }
+
+  .all {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 3rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding-block: var(--space-2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .art {
+    display: block;
+    width: 3rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .text {
+    display: grid;
+    min-width: 0;
+  }
+
+  .title {
+    overflow: hidden;
+    font-weight: 650;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .actions {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .held {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .held h2 {
+    font-size: var(--step-1);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+</style>

@@ -147,11 +147,16 @@ export interface MbReleaseGroupSummary {
 }
 
 /** Every release group an artist is credited on as the artist, all pages. */
+/**
+ * An artist's release groups as MusicBrainz's own site lists them: only
+ * groups with an official release. Without the filter the list carries
+ * every bootleg, fan-made "album" and unofficial mixtape anyone has entered.
+ */
 export async function browseArtistReleaseGroups(artistMbid: string): Promise<MbReleaseGroupSummary[]> {
   const groups: MbReleaseGroupSummary[] = [];
   for (let offset = 0; offset < 2000; offset += BROWSE_PAGE) {
     const page = await get<{ 'release-groups': MbReleaseGroupSummary[]; 'release-group-count': number }>(
-      `release-group?artist=${artistMbid}&limit=${BROWSE_PAGE}&offset=${offset}`,
+      `release-group?artist=${artistMbid}&release-group-status=website-default&limit=${BROWSE_PAGE}&offset=${offset}`,
       [],
     );
     groups.push(...page['release-groups']);

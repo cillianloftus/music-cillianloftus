@@ -14,6 +14,21 @@ import { linkAlbumsToSpotify } from './lib/spotify/link';
 import { detectAnomalies } from './lib/review';
 import { syncAllScrobbles } from './lib/scrobbles';
 import { fillAlbumsFromDiscogs } from './lib/sources/discogs';
+import { checkOfficialReleases } from './lib/official';
+
+/**
+ * Checks the library against MusicBrainz's official releases a little at a
+ * time (src/lib/official.ts), when no import is using MusicBrainz. Once a
+ * pass finds nothing left to look up, it rests for six hours.
+ */
+async function checkOfficial(): Promise<void> {
+  const REST = 'official-check-resting';
+  if (await env.CACHE.get(REST)) return;
+  const busy = await env.DB.prepare(`SELECT 1 FROM job WHERE status IN ('queued', 'running') LIMIT 1`).first();
+  if (busy) return;
+  const lookups = await checkOfficialReleases({ budgetMs: 20_000 });
+  if (lookups === 0) await env.CACHE.put(REST, '1', { expirationTtl: 6 * 3600 });
+}
 
 /** Must match the daily entry in wrangler.jsonc triggers.crons. */
 const DAILY_BACKUP = '0 4 * * *';
@@ -71,6 +86,7 @@ export default {
           }
         }
         await runJobs({ budgetMs: 50_000 });
+        await checkOfficial().catch((error) => console.error('Official release check failed', error));
       })(),
     );
   },
