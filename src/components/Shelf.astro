@@ -1,7 +1,7 @@
 ---
 /**
- * A sideways row of cards. On touch screens it is a swipe that snaps to
- * each card; with a mouse, round buttons either side scroll it smoothly a
+ * A sideways row of cards. On touch screens it is a free swipe that
+ * carries as far as the flick does; with a mouse, round buttons either side scroll it smoothly a
  * screen at a time. A button fades out and stops responding when there is
  * nothing more that way, and the row's edges fade where more is hidden.
  * No scrollbar either way. Without JavaScript it still scrolls (by swipe,
@@ -70,7 +70,8 @@ const { label, item = 'min(11rem, 42vw)' } = Astro.props;
   .track {
     overflow-x: auto;
     overscroll-behavior-x: contain;
-    scroll-snap-type: x mandatory;
+    /* No snapping: a hard flick should carry as far as it would anywhere
+       else, not be cut short and settled on the next card. */
     scroll-padding-inline: var(--gutter);
     scrollbar-width: none;
     /* Fade the edges where there is more to see. */
@@ -114,7 +115,6 @@ const { label, item = 'min(11rem, 42vw)' } = Astro.props;
 
   .track :global(> ol > li),
   .track :global(> ul > li) {
-    scroll-snap-align: start;
   }
 
   .nav {
