@@ -1641,4 +1641,13 @@ const facts = [
   .kin a:hover {
     text-decoration: underline;
   }
+
+  /* Phones: the art fills the column, left edge with the text; capped on
+     tablets so a square cover never outgrows the screen. */
+  @media (max-width: 47.99rem) {
+    .portrait {
+      width: 100%;
+      max-width: 30rem;
+    }
+  }
 </style>

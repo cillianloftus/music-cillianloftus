@@ -94,9 +94,25 @@
   display: none !important;
 }
 
+/* Everything is sized in rem, so the root size scales the whole site:
+   smaller on phones, where every line counts, and times the size the
+   visitor chose on Manage (--ui-scale, set before first paint). */
 html {
+  font-size: calc(100% * var(--ui-scale, 1));
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+}
+
+@media (max-width: 39.99rem) {
+  html {
+    font-size: calc(87.5% * var(--ui-scale, 1));
+  }
+
+  /* No header on phones (see SiteHeader). */
+  :root {
+    --header-height: 0px;
+    scroll-padding-top: var(--space-4);
+  }
 }
 
 body {

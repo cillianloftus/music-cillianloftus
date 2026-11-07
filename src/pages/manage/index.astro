@@ -6,6 +6,8 @@
 import { env } from 'cloudflare:workers';
 import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
+import DisplaySettings from '../../components/DisplaySettings.astro';
+import { THEME_COOKIE, themeFrom } from '../../lib/theme';
 import { connection } from '../../lib/spotify/client';
 import { waitingCount } from '../../lib/connections';
 
@@ -162,6 +164,11 @@ const groups: { heading: string; items: Item[] }[] = [
         </section>
       ))
     }
+
+    <section aria-labelledby="group-display">
+      <h2 id="group-display">Display</h2>
+      <DisplaySettings theme={themeFrom(Astro.cookies.get(THEME_COOKIE)?.value)} />
+    </section>
   </div>
 </Base>
 
@@ -284,5 +291,32 @@ const groups: { heading: string; items: Item[] }[] = [
 
   .small {
     font-size: var(--step--1);
+  }
+
+  /* Phones: a tighter list, so a screen shows most of what is here. */
+  @media (max-width: 39.99rem) {
+    .page {
+      gap: var(--space-5);
+    }
+
+    .cards {
+      gap: var(--space-2);
+    }
+
+    li {
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-3);
+    }
+
+    .icon {
+      width: 2.25rem;
+      height: 2.25rem;
+    }
+
+    .icon svg {
+      width: 1.2rem;
+      height: 1.2rem;
+    }
   }
 </style>

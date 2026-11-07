@@ -11,12 +11,36 @@ const path = Astro.url.pathname;
 
 // Icons are SVG path data on a 24px grid, drawn as strokes.
 const links = [
-  // Home is the brand on wide screens; on phones the bottom bar needs it.
-  { href: '/', label: 'Home', icon: 'M4 11l8-7 8 7v9H4z M10 20v-5h4v5', phoneOnly: true },
-  { href: '/diary', label: 'Diary', icon: 'M6 4h11a1 1 0 0 1 1 1v15H7a2 2 0 0 1-2-2V5a1 1 0 0 1 1-1z M5 17a2 2 0 0 1 2-2h11 M9 8h6' },
-  { href: '/artists', label: 'Artists', icon: 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21a8 8 0 0 1 16 0' },
-  { href: '/genres', label: 'Genres', icon: 'M9 9.5a5 5 0 1 0 0 .01M16.5 16a3.5 3.5 0 1 0 0 .01M17 6.5a2 2 0 1 0 0 .01' },
-  { href: '/playlists', label: 'Playlists', icon: 'M4 6h12M4 12h12M4 18h7M18 15v6M15 18h6' },
+  { href: '/diary', label: 'Diary' },
+  { href: '/artists', label: 'Artists' },
+  { href: '/genres', label: 'Genres' },
+  { href: '/playlists', label: 'Playlists' },
+];
+
+// Phones: one bar along the bottom, in thumb reach, and no header. Five
+// tabs; Browse opens a sheet with the rest of the site.
+const ICONS = {
+  home: 'M4 11l8-7 8 7v9H4z M10 20v-5h4v5',
+  search: 'M10.5 16.5a6 6 0 1 0 0-12 6 6 0 0 0 0 12z M15 15l5 5',
+  playlists: 'M4 6h12M4 12h12M4 18h7M18 15v6M15 18h6',
+  browse: 'M4 4h6.5v6.5H4z M13.5 4H20v6.5h-6.5z M4 13.5h6.5V20H4z M13.5 13.5H20V20h-6.5z',
+  manage: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.5 7.5 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.5 7.5 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.5 7.5 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.5 7.5 0 0 0 2.6-1.5l2.4 1 2-3.4z',
+  signin: 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21a8 8 0 0 1 16 0',
+};
+const browse = [
+  { href: '/insights', label: 'Insights' },
+  { href: '/diary', label: 'Diary' },
+  { href: '/artists', label: 'Artists' },
+  { href: '/genres', label: 'Genres' },
+  ...(user ? [{ href: '/queue', label: 'Rating queue' }] : []),
+];
+const under = (href: string) => path === href || path.startsWith(`${href}/`);
+const inManage = under('/manage') || path.startsWith('/edit/') || path === '/query';
+const inBrowse = browse.some((b) => under(b.href)) || under('/artist') || under('/genre') || under('/year');
+const tabs = [
+  { href: '/', label: 'Home', icon: ICONS.home, current: path === '/' || under('/album') || under('/track') },
+  { href: '/search', label: 'Search', icon: ICONS.search, current: path === '/search' },
+  { href: '/playlists', label: 'Playlists', icon: ICONS.playlists, current: under('/playlists') || under('/playlist') },
 ];
 
 // Cillian's own tools, in one menu.
@@ -49,15 +73,12 @@ const next = theme === 'dark' ? 'light' : 'dark';
   <div class="wrap bar">
     <a class="brand" href="/">music<span class="visually-hidden">, home</span></a>
 
-    <nav aria-label="Main">
+    <nav class="wide" aria-label="Main">
       <ul>
         {
           links.map((link) => (
-            <li class:list={[{ 'phone-only': link.phoneOnly }]}>
+            <li>
               <a href={link.href} aria-current={isCurrent(link.href) ? 'page' : undefined}>
-                <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d={link.icon}></path>
-                </svg>
                 {link.label}
               </a>
             </li>
@@ -79,6 +100,8 @@ const next = theme === 'dark' ? 'light' : 'dark';
         <path d="M15 15l5 5"></path>
       </svg>
     </a>
+
+    {!user && <a class="sign-in" href="/manage">Sign in</a>}
 
     {
       tools.length > 0 && (
@@ -119,6 +142,46 @@ const next = theme === 'dark' ? 'light' : 'dark';
     </form>
   </div>
 </header>
+
+<nav class="tabbar" aria-label="Main">
+  <ul>
+    {
+      tabs.map((tab) => (
+        <li>
+          <a
+            href={tab.href}
+            class:list={[{ 'search-link': tab.href === '/search' }]}
+            aria-current={tab.current ? 'page' : undefined}
+          >
+            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d={tab.icon}></path></svg>
+            {tab.label}
+          </a>
+        </li>
+      ))
+    }
+    <li>
+      <details class="browse" data-menu>
+        <summary data-current={inBrowse ? 'true' : undefined}>
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d={ICONS.browse}></path></svg>
+          Browse
+        </summary>
+        <ul class="sheet" role="list">
+          {browse.map((b) => (
+            <li>
+              <a href={b.href} aria-current={under(b.href) ? 'page' : undefined}>{b.label}</a>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </li>
+    <li>
+      <a href="/manage" aria-current={inManage ? 'page' : undefined}>
+        <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d={user ? ICONS.manage : ICONS.signin}></path></svg>
+        {user ? 'Manage' : 'Sign in'}
+      </a>
+    </li>
+  </ul>
+</nav>
 
 <script>
   // Progressive enhancement: without JS the form posts and reloads.
@@ -210,11 +273,11 @@ const next = theme === 'dark' ? 'light' : 'dark';
     background: var(--accent);
   }
 
-  nav {
+  .wide {
     margin-left: auto;
   }
 
-  nav ul {
+  .wide ul {
     display: flex;
     gap: var(--space-1);
     margin: 0;
@@ -222,7 +285,7 @@ const next = theme === 'dark' ? 'light' : 'dark';
     list-style: none;
   }
 
-  nav a {
+  .wide a {
     display: inline-flex;
     align-items: center;
     min-height: var(--target);
@@ -233,17 +296,95 @@ const next = theme === 'dark' ? 'light' : 'dark';
     text-decoration: none;
   }
 
-  nav a:hover {
+  .wide a:hover {
     color: var(--text);
   }
 
-  nav a[aria-current='page'] {
+  .wide a[aria-current='page'] {
     color: var(--text);
     background: var(--surface-2);
   }
 
-  .nav-icon {
+  .sign-in {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    padding-inline: var(--space-3);
+    color: var(--text-muted);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .sign-in:hover {
+    color: var(--text);
+  }
+
+  /* Phones: no header at all; the tab bar does the navigating. */
+  .tabbar {
     display: none;
+  }
+
+  @media (max-width: 39.99rem) {
+    .site-header {
+      display: none;
+    }
+
+    .tabbar {
+      display: block;
+      position: fixed;
+      inset: auto 0 0 0;
+      z-index: 45;
+      padding-bottom: env(safe-area-inset-bottom);
+      border-top: 1px solid var(--border);
+      background: var(--surface-1);
+    }
+
+    /* Keep page content clear of the bar. */
+    :global(body) {
+      padding-bottom: calc(3.25rem + env(safe-area-inset-bottom));
+    }
+  }
+
+  .tabbar > ul {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .tabbar > ul > li > a,
+  .browse summary {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-height: 3.25rem;
+    color: var(--text-muted);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .tabbar a[aria-current='page'],
+  .browse summary[data-current='true'],
+  .browse[open] summary {
+    color: var(--accent);
+  }
+
+  /* While the search panel is open, Search is where you are. */
+  :global(:root[data-searching]) .tabbar a[aria-current='page'] {
+    color: var(--text-muted);
+  }
+
+  :global(:root[data-searching]) .tabbar .search-link {
+    color: var(--accent);
+  }
+
+  .tab-icon {
     width: 22px;
     height: 22px;
     fill: none;
@@ -253,55 +394,43 @@ const next = theme === 'dark' ? 'light' : 'dark';
     stroke-linejoin: round;
   }
 
-  /* Phones: the nav becomes a bar along the bottom, in thumb reach, and the
-     header keeps only the brand and theme toggle. */
-  @media (max-width: 39.99rem) {
-    nav {
-      position: fixed;
-      inset: auto 0 0 0;
-      z-index: 20;
-      margin: 0;
-      padding-bottom: env(safe-area-inset-bottom);
-      border-top: 1px solid var(--border);
-      background: var(--surface-1);
-    }
+  .browse summary {
+    list-style: none;
+  }
 
-    nav ul {
-      justify-content: space-around;
-    }
+  .browse summary::-webkit-details-marker {
+    display: none;
+  }
 
-    nav li {
-      flex: 1;
-    }
+  /* The rest of the site, in a sheet that rises from the bar. */
+  .sheet {
+    position: fixed;
+    inset: auto var(--space-2) calc(3.25rem + env(safe-area-inset-bottom) + var(--space-2));
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-1);
+    margin: 0;
+    padding: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+    box-shadow: 0 -12px 32px -12px rgb(0 0 0 / 0.45);
+    list-style: none;
+  }
 
-    nav a {
-      flex-direction: column;
-      justify-content: center;
-      gap: 2px;
-      width: 100%;
-      min-height: 3.5rem;
-      padding: 0;
-      border-radius: 0;
-      font-size: 0.75rem;
-    }
+  .sheet a {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    padding-inline: var(--space-3);
+    border-radius: var(--radius-m);
+    color: var(--text);
+    font-weight: 600;
+    text-decoration: none;
+  }
 
-    nav a[aria-current='page'] {
-      background: none;
-      color: var(--accent);
-    }
-
-    .nav-icon {
-      display: block;
-    }
-
-    .search-link {
-      margin-left: auto;
-    }
-
-    /* Keep page content clear of the bar. */
-    :global(body) {
-      padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
-    }
+  .sheet a[aria-current='page'] {
+    background: var(--surface-2);
   }
 
   .icon-button,
@@ -345,17 +474,6 @@ const next = theme === 'dark' ? 'light' : 'dark';
   :global([data-theme='dark']) .icon-moon,
   :global([data-theme='light']) .icon-sun {
     display: none;
-  }
-
-  /* Home lives in the bottom bar on phones only. */
-  .phone-only {
-    display: none;
-  }
-
-  @media (max-width: 39.99rem) {
-    .phone-only {
-      display: block;
-    }
   }
 
   .you {

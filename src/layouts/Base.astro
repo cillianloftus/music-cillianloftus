@@ -22,7 +22,7 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
 <html lang="en-IE" data-theme={theme}>
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
     <meta property="og:site_name" content="music · Cillian Loftus" />
@@ -36,6 +36,15 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     <meta name="theme-color" content={theme === 'light' ? '#f6f3ec' : '#0e0e10'} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <script is:inline>
+      // The text size chosen on Manage, applied before anything paints.
+      try {
+        const scale = Number(localStorage.getItem('ui-scale'));
+        if (scale >= 0.7 && scale <= 1.5) document.documentElement.style.setProperty('--ui-scale', String(scale));
+      } catch {}
+    </script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
