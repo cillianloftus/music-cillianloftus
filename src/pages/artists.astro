@@ -9,15 +9,15 @@ import CoverArt from '../components/CoverArt.astro';
 import { hueOf } from '../lib/art/playlist';
 import { ownerId } from '../lib/auth/user';
 import { scoreTone } from '../lib/format';
-import { initial, roster, type RosterArtist, type RosterSort } from '../lib/roster';
+import { initial, roster, sortRoster, type RosterArtist, type RosterSort } from '../lib/roster';
 
 import { byLibrary } from '../lib/library-cache';
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
 const requested = Astro.url.searchParams.get('sort');
 const SORT_KEYS: RosterSort[] = ['score', 'rated', 'releases', 'recent', 'name'];
 const sort: RosterSort = SORT_KEYS.includes(requested as RosterSort) ? (requested as RosterSort) : 'score';
-// Kept per library state: it groups every credit, and changes only when the library does.
-const artists = await byLibrary(`roster:v1:${sort}`, viewerId, () => roster(viewerId, sort));
+// Kept per library state, once for every order: it groups every credit, and changes only when the library does.
+const artists = sortRoster(await byLibrary('roster:v2', viewerId, () => roster(viewerId)), sort);
 
 // Letters earn their place once the wall is long; a short list is one grid.
 const LETTERS_FROM = 40;
