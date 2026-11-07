@@ -341,7 +341,7 @@ const next = theme === 'dark' ? 'light' : 'dark';
 
     /* Keep page content clear of the bar. */
     :global(body) {
-      padding-bottom: calc(3.25rem + env(safe-area-inset-bottom));
+      padding-bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom));
     }
   }
 
@@ -359,10 +359,10 @@ const next = theme === 'dark' ? 'light' : 'dark';
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 2px;
-    min-height: 3.25rem;
+    gap: 3px;
+    min-height: var(--tabbar-height);
     color: var(--text-muted);
-    font-size: 0.6875rem;
+    font-size: 0.8125rem;
     font-weight: 600;
     text-decoration: none;
     cursor: pointer;
@@ -385,8 +385,8 @@ const next = theme === 'dark' ? 'light' : 'dark';
   }
 
   .tab-icon {
-    width: 22px;
-    height: 22px;
+    width: 1.75rem;
+    height: 1.75rem;
     fill: none;
     stroke: currentColor;
     stroke-width: 1.8;
@@ -405,7 +405,7 @@ const next = theme === 'dark' ? 'light' : 'dark';
   /* The rest of the site, in a sheet that rises from the bar. */
   .sheet {
     position: fixed;
-    inset: auto var(--space-2) calc(3.25rem + env(safe-area-inset-bottom) + var(--space-2));
+    inset: auto var(--space-2) calc(var(--tabbar-height) + env(safe-area-inset-bottom) + var(--space-2));
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--space-1);

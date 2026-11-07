@@ -83,10 +83,15 @@ export function forgetStamp(): void {
   memo = null;
 }
 
-/** The cache key for a page as one viewer, in one theme, at one state of the site. */
+declare const __BUILD_ID__: string | undefined;
+/** This deploy (set at build, see astro.config.mjs); absent in tests. */
+const BUILD = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'test';
+
+/** The cache key for a page as one viewer, in one theme, at one state of the site, from one deploy. */
 export function pageKey(url: URL, stamp: string, viewer: string | null, theme: string | undefined): Request {
   const key = new URL(url.pathname + url.search, url.origin);
   key.searchParams.set('__site', stamp);
+  key.searchParams.set('__build', BUILD);
   key.searchParams.set('__viewer', viewer ?? 'anyone');
   key.searchParams.set('__theme', theme ?? 'default');
   return new Request(key.toString(), { method: 'GET' });

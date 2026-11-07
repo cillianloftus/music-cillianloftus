@@ -111,6 +111,8 @@ html {
   /* No header on phones (see SiteHeader). */
   :root {
     --header-height: 0px;
+    /* The phone tab bar (SiteHeader), which content keeps clear of. */
+    --tabbar-height: 4rem;
     scroll-padding-top: var(--space-4);
   }
 }

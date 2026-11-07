@@ -116,6 +116,9 @@ const image = src ?? (artKey ? `/${artKey}/250.jpg` : null);
     z-index: -1;
     height: calc(var(--backdrop-height) + var(--header-height) + 1px);
     max-width: none;
+    /* Absolutely placed: no margin from the stack it sits in, or a pale
+       strip shows above it. */
+    margin: 0;
     pointer-events: none;
     /* Fades into the page rather than ending in an edge. Gradients only:
        nothing here needs filtering, so scrolling stays cheap. */

@@ -70,7 +70,13 @@ const returnTo = Astro.url.pathname + Astro.url.search;
     const current = Number(getComputedStyle(root).getPropertyValue('--ui-scale')) || 1;
     input.value = String(current);
     show(current);
-    input.addEventListener('input', () => apply(Number(input.value)));
+    // Everything above the slider grows or shrinks with it, which would carry
+    // it off screen mid-drag: scroll by the same amount to keep it in place.
+    input.addEventListener('input', () => {
+      const before = input.getBoundingClientRect().top;
+      apply(Number(input.value));
+      window.scrollBy(0, input.getBoundingClientRect().top - before);
+    });
     reset.addEventListener('click', () => {
       input.value = '1';
       apply(1);
