@@ -15,6 +15,7 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { splitVersion } from './versions';
 
 export const QUEUE_RULES = {
   highlyRatedArtist: 80,
@@ -52,6 +53,9 @@ interface Row {
   plays: number;
   gut: number | null;
   rated_track_count: number | null;
+  /** A release's title and kind, to know a remix single by. */
+  title: string | null;
+  type: string | null;
   handed_off: number;
   skipped: number;
 }
@@ -73,6 +77,8 @@ latest_rating AS (
 albums AS (
   SELECT
     g.id AS entity_id,
+    g.title,
+    g.type,
     g.created_at,
     s.rated_track_count,
     (SELECT a.name FROM artist_credit c JOIN artist a ON a.id = c.artist_id
@@ -95,7 +101,7 @@ albums AS (
 items AS (
   SELECT
     'release_group' AS entity_type, entity_id, artist_name, artist_score, plays,
-    NULL AS gut, rated_track_count, created_at,
+    NULL AS gut, rated_track_count, created_at, title, type,
     CASE
       WHEN artist_score >= ?2 THEN 1
       WHEN plays >= ?3 THEN 2
@@ -107,13 +113,13 @@ items AS (
   UNION ALL
   -- Believed excellent but not yet examined: the second tier.
   SELECT
-    l.entity_type, l.entity_id, NULL, NULL, 0, l.gut_score, NULL, l.rated_at, 3
+    l.entity_type, l.entity_id, NULL, NULL, 0, l.gut_score, NULL, l.rated_at, NULL, NULL, 3
   FROM v_latest_rating_axes l
   WHERE l.user_id = ?1 AND l.depth = 'gut' AND l.gut_score >= ?4
     AND NOT EXISTS (SELECT 1 FROM recording_kind k WHERE k.recording_id = l.entity_id AND k.kind = 'skit')
 )
 SELECT
-  i.entity_type, i.entity_id, i.tier, i.artist_name, i.artist_score, i.plays, i.gut, i.rated_track_count,
+  i.entity_type, i.entity_id, i.tier, i.artist_name, i.artist_score, i.plays, i.gut, i.rated_track_count, i.title, i.type,
   (h.opened_at IS NOT NULL
    AND h.opened_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || ?6 || ' hours')
    AND h.opened_at > coalesce(lr.rated_at, '')) AS handed_off,
@@ -164,7 +170,10 @@ export async function ratingQueue(userId: string): Promise<QueueEntry[]> {
       QUEUE_RULES.handoffHours,
     )
     .all<Row>();
-  return results.map((row) => ({
+  // A remix single or EP is a version of a song rated elsewhere, not a record to rate.
+  return results
+    .filter((row) => !(row.type === 'single' || row.type === 'ep') || !row.title || splitVersion(row.title).version === null)
+    .map((row) => ({
     entity_type: row.entity_type,
     entity_id: row.entity_id,
     reason: reasonFor(row),
