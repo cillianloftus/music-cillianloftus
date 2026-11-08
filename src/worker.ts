@@ -18,15 +18,15 @@ import { checkOfficialReleases } from './lib/official';
 
 /**
  * Checks the library against MusicBrainz's official releases a little at a
- * time (src/lib/official.ts), when no import is using MusicBrainz. Once a
- * pass finds nothing left to look up, it rests for six hours.
+ * time (src/lib/official.ts): a short slice while imports are also using
+ * MusicBrainz, a longer one when they are not. Once a pass finds nothing
+ * left to look up, it rests for six hours.
  */
 async function checkOfficial(): Promise<void> {
   const REST = 'official-check-resting';
   if (await env.CACHE.get(REST)) return;
   const busy = await env.DB.prepare(`SELECT 1 FROM job WHERE status IN ('queued', 'running') LIMIT 1`).first();
-  if (busy) return;
-  const lookups = await checkOfficialReleases({ budgetMs: 20_000 });
+  const lookups = await checkOfficialReleases({ budgetMs: busy ? 6_000 : 20_000 });
   if (lookups === 0) await env.CACHE.put(REST, '1', { expirationTtl: 6 * 3600 });
 }
 
