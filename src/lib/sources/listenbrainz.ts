@@ -39,9 +39,24 @@ interface RawListen {
     artist_name: string;
     track_name: string;
     release_name?: string;
-    additional_info?: { recording_mbid?: string };
+    additional_info?: {
+      recording_mbid?: string;
+      duration_ms?: number;
+      duration?: number;
+      spotify_id?: string;
+      media_player?: string;
+      music_service_name?: string;
+      submission_client?: string;
+    };
     mbid_mapping?: { recording_mbid?: string };
   };
+}
+
+/** A listen's length, when given: duration_ms, or duration in seconds. */
+function durationOf(info: RawListen['track_metadata']['additional_info']): number | null {
+  if (typeof info?.duration_ms === 'number' && info.duration_ms > 0) return Math.round(info.duration_ms);
+  if (typeof info?.duration === 'number' && info.duration > 0) return Math.round(info.duration * 1000);
+  return null;
 }
 
 /** Listens before a time (seconds, exclusive), newest first, up to 1000. */
@@ -56,5 +71,12 @@ export async function listensBefore(user: string, before: number, token?: string
     album: l.track_metadata.release_name ?? null,
     mbid: l.track_metadata.mbid_mapping?.recording_mbid ?? l.track_metadata.additional_info?.recording_mbid ?? null,
     at: l.listened_at,
+    duration_ms: durationOf(l.track_metadata.additional_info),
+    spotify_id: l.track_metadata.additional_info?.spotify_id?.match(/track[/:]([A-Za-z0-9]{22})/)?.[1] ?? null,
+    player:
+      l.track_metadata.additional_info?.media_player ??
+      l.track_metadata.additional_info?.music_service_name ??
+      l.track_metadata.additional_info?.submission_client ??
+      null,
   }));
 }

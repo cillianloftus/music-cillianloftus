@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
-import { insert, migratedDb, seedLibrary } from '../test/db';
+import { insert, insertPlays, migratedDb, seedLibrary } from '../test/db';
 import { detectAnomalies, dismiss, findAnomalies, linkAllVersions, linkWork, matchingAlbumPairs, mergeMatchingAlbums, matchingTrackPairs, mergeMatchingTracks, openAnomalies, ReviewError, same, skip } from './review';
 
 let db: DatabaseSync;
@@ -208,7 +208,7 @@ describe('deciding', () => {
     insert(db, 'rating', [
       { id: 'r-dup', user_id: 'u-owner', entity_type: 'recording', entity_id: 'a2-dup', depth: 'gut', gut_score: 3, rated_at: '2026-03-01T00:00:00.000Z' },
     ]);
-    insert(db, 'play', [{ id: 'p1', user_id: 'u-owner', recording_id: 'a2-dup', played_at: '2026-03-02T00:00:00.000Z', ms_played: 200000, source: 'lastfm' }]);
+    insertPlays(db, [{ id: 'p1', user_id: 'u-owner', recording_id: 'a2-dup', played_at: '2026-03-02T00:00:00.000Z', ms_played: 200000, source: 'lastfm' }]);
     await detectAnomalies();
     const dup = (await openAnomalies('near_duplicate_recording'))[0]!;
     await same(dup.id);

@@ -7,9 +7,10 @@
  * started until it meets what an earlier sync already took, saving its
  * place after every page; so a first sync of years of scrobbles can span
  * several nightly runs and pick up where it stopped, and later syncs only
- * fetch what is new. Only scrobbles of recordings in the catalogue are
- * stored. Overlap is harmless: plays are unique per recording, time and
- * source.
+ * fetch what is new. Every scrobble is kept, in the catalogue or not.
+ * Overlap is harmless: plays are unique per track, time and source, and
+ * a scrobble of a stream the Spotify export (or the other service) also
+ * has counts once (listens/dedupe.ts).
  */
 
 import { env } from 'cloudflare:workers';
@@ -18,7 +19,9 @@ import { checkConnection } from './connection-check';
 import { credentials, recordCheck, recordSync, stateOf, type ServiceId } from './connections';
 import { scrobblesBetween, type Scrobble } from './sources/lastfm';
 import { listensBefore } from './sources/listenbrainz';
-import { normaliseName, normaliseTitle } from './text';
+import { listenTrack, type ListenTrackRow } from './listens/keys';
+import { artistNames, catalogueIndex, type CatalogueIndex } from './listens/match';
+import { savePlays, saveTracks, type NewPlay } from './listens/store';
 
 /** How far back a late scrobble can land. */
 const LATE_SECONDS = 14 * 24 * 60 * 60;
@@ -41,89 +44,26 @@ export function parseCursor(raw: string | null): Cursor {
   return { through: 0 };
 }
 
-/** Splits "A feat. B", "A & B", "A, B" into the names a credit might use. */
-export function artistNames(credit: string): string[] {
-  const whole = normaliseName(credit);
-  const parts = credit
-    .split(/\s+(?:feat\.?|ft\.?|featuring|with|x|&|and|vs\.?)\s+|,\s*|\s*;\s*/i)
-    .map((p) => normaliseName(p))
-    .filter(Boolean);
-  return [...new Set([whole, ...parts])];
-}
+export { artistNames };
 
-interface IndexRow {
-  id: string;
-  title: string;
-  mbid: string | null;
-  length_ms: number | null;
-  artists: string | null;
-  albums: string | null;
-}
-
-export interface CatalogueIndex {
-  byMbid: Map<string, IndexRow>;
-  byName: Map<string, IndexRow[]>;
-}
-
-export async function catalogueIndex(): Promise<CatalogueIndex> {
-  const { results } = await env.DB.prepare(
-    `SELECT r.id, r.title, r.mbid, r.length_ms,
-            (SELECT json_group_array(a.name) FROM artist_credit c JOIN artist a ON a.id = c.artist_id
-             WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role IN ('primary', 'featured')) AS artists,
-            (SELECT json_group_array(g.title) FROM track t JOIN release x ON x.id = t.release_id
-             JOIN release_group g ON g.id = x.release_group_id WHERE t.recording_id = r.id) AS albums
-     FROM recording r`,
-  ).all<IndexRow>();
-  const byMbid = new Map<string, IndexRow>();
-  const byName = new Map<string, IndexRow[]>();
-  for (const row of results) {
-    if (row.mbid) byMbid.set(row.mbid, row);
-    const title = normaliseTitle(row.title);
-    for (const artist of JSON.parse(row.artists ?? '[]') as string[]) {
-      const key = `${normaliseName(artist)}\u0000${title}`;
-      const list = byName.get(key);
-      if (list) list.push(row);
-      else byName.set(key, [row]);
-    }
-  }
-  return { byMbid, byName };
-}
-
-/** The recording a scrobble is of, if it is in the catalogue. */
-export function matchScrobble(index: CatalogueIndex, s: Scrobble): IndexRow | null {
-  if (s.mbid) {
-    const exact = index.byMbid.get(s.mbid);
-    if (exact) return exact;
-  }
-  const title = normaliseTitle(s.title);
-  const album = s.album ? normaliseTitle(s.album) : null;
-  for (const artist of artistNames(s.artist)) {
-    const candidates = index.byName.get(`${artist}\u0000${title}`);
-    if (!candidates?.length) continue;
-    const onAlbum = album ? candidates.find((c) => (JSON.parse(c.albums ?? '[]') as string[]).some((a) => normaliseTitle(a) === album)) : undefined;
-    return onAlbum ?? candidates[0]!;
-  }
-  return null;
-}
-
+/** Keeps a page of scrobbles: every one, in the catalogue or not. */
 async function store(userId: string, source: ScrobbleSource, index: CatalogueIndex, page: Scrobble[]): Promise<{ matched: number; added: number }> {
-  const rows = [];
+  const tracks = new Map<string, ListenTrackRow>();
+  const plays: NewPlay[] = [];
   for (const s of page) {
-    const hit = matchScrobble(index, s);
-    if (!hit) continue;
-    rows.push({ id: crypto.randomUUID(), recording_id: hit.id, played_at: new Date(s.at * 1000).toISOString(), ms_played: hit.length_ms ?? 0 });
+    const track = listenTrack({ artist: s.artist, title: s.title, album: s.album, mbid: s.mbid, spotify_id: s.spotify_id ?? null });
+    tracks.set(track.key, track);
+    plays.push({
+      track_key: track.key,
+      played_at: new Date(s.at * 1000).toISOString(),
+      // Last.fm never says how long; ListenBrainz sometimes does.
+      ms_played: s.duration_ms ?? null,
+      platform: s.player ?? null,
+    });
   }
-  if (rows.length === 0) return { matched: 0, added: 0 };
-  const result = await env.DB.prepare(
-    `INSERT INTO play (id, user_id, recording_id, played_at, ms_played, source)
-     SELECT j.value ->> '$.id', ?1, j.value ->> '$.recording_id', j.value ->> '$.played_at', j.value ->> '$.ms_played', ?3
-     FROM json_each(?2) j
-     WHERE true
-     ON CONFLICT (user_id, recording_id, played_at, source) DO NOTHING`,
-  )
-    .bind(userId, JSON.stringify(rows), source)
-    .run();
-  return { matched: rows.length, added: result.meta.changes ?? 0 };
+  const matched = await saveTracks([...tracks.values()], index);
+  const added = await savePlays(userId, source, plays);
+  return { matched, added };
 }
 
 export interface SyncReport {

@@ -300,6 +300,7 @@ export async function mergeRecordings(keepId: string, goneId: string): Promise<v
     db.prepare(`UPDATE track SET recording_id = ?1 WHERE recording_id = ?2`).bind(keepId, goneId),
     db.prepare(`UPDATE rating SET entity_id = ?1 WHERE entity_type = 'recording' AND entity_id = ?2`).bind(keepId, goneId),
     db.prepare(`UPDATE play SET recording_id = ?1 WHERE recording_id = ?2`).bind(keepId, goneId),
+    db.prepare(`UPDATE listen_track SET recording_id = ?1 WHERE recording_id = ?2`).bind(keepId, goneId),
     ...moveColumn('file'),
     ...moveColumn('definition_pin'),
     ...moveColumn('definition_exclude'),

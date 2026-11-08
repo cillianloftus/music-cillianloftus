@@ -1,0 +1,1064 @@
+---
+/**
+ * Recaps: a Wrapped for any stretch of time (ARCHITECTURE.md "As built:
+ * listens and recaps"). The range is in the URL (src/lib/recap/range.ts);
+ * the numbers come from counted listens only, each moment of listening
+ * once whichever services reported it (src/lib/listens/dedupe.ts).
+ * Personal: each signed-in listener sees their own.
+ */
+import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import CoverArt from '../../components/CoverArt.astro';
+import BarChart, { type Bar } from '../../components/BarChart.astro';
+import { listeningSpan, recapFor, type RecapView } from '../../lib/recap/load';
+import { PRESETS, parseRange, slugFor, addDays, localDay, spanLabel } from '../../lib/recap/range';
+import type { SongTally } from '../../lib/recap/build';
+
+const user = Astro.locals.user;
+const params = Astro.url.searchParams;
+
+// The custom-dates form submits ?from=&to=; its range has a URL of its own.
+const fromParam = params.get('from');
+const toParam = params.get('to');
+if (fromParam && toParam && /^\d{4}-\d{2}-\d{2}$/.test(fromParam) && /^\d{4}-\d{2}-\d{2}$/.test(toParam)) {
+  return Astro.redirect(`/recap/${slugFor(fromParam, toParam)}`, 303);
+}
+
+const slug = Astro.params.range;
+if (slug && !parseRange(slug)) return new Response(null, { status: 404 });
+
+const view: RecapView | null = user ? await recapFor(user.id, slug) : null;
+const span = user ? await listeningSpan(user.id) : null;
+const r = view?.recap;
+const range = view?.range ?? parseRange(slug)!;
+
+const n = (x: number) => Math.round(x).toLocaleString('en-GB');
+const pct = (x: number) => `${Math.round(x * 100)}%`;
+const hoursAndMinutes = (minutes: number) => {
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  return h ? `${h.toLocaleString('en-GB')}h ${m}m` : `${m}m`;
+};
+const change = (now: number, before: number) => {
+  if (!before) return null;
+  const d = (now - before) / before;
+  if (Math.abs(d) < 0.005) return 'The same as';
+  return `${d > 0 ? 'Up' : 'Down'} ${Math.round(Math.abs(d) * 100)}% on`;
+};
+const dayLabel = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+const monthLabel = (month: string) => new Date(`${month}-15T12:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+const timeLabel = (ms: number) => new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Dublin' });
+
+const song = (key: string) => view!.songs[key] ?? { title: key.split('|')[1] ?? key, artist: '', artistId: null, recordingId: null, albumId: null, art: null };
+const artist = (key: string) => view!.artists[key] ?? { name: key, id: null, art: null };
+const songHref = (key: string) => (song(key).recordingId ? `/track/${song(key).recordingId}` : null);
+const artistHref = (key: string) => (artist(key).id ? `/artist/${artist(key).id}` : null);
+
+const PRESET_LABEL: Record<(typeof PRESETS)[number], string> = {
+  'last-7-days': '7 days',
+  'last-30-days': '30 days',
+  'this-month': 'This month',
+  'last-90-days': '90 days',
+  'this-year': 'This year',
+  'last-12-months': '12 months',
+  all: 'All time',
+};
+const months = (span?.months ?? []).slice().reverse();
+const years = [...new Set(months.map((m) => m.month.slice(0, 4)))];
+const today = localDay(Date.now());
+
+const SOURCE_NAME: Record<string, string> = { spotify_export: 'Spotify export', lastfm: 'Last.fm', listenbrainz: 'ListenBrainz', manual: 'Added by hand' };
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+/**
+ * Under a bar: the day of the month, with the month's name where a label
+ * is the first or the month has changed since the last label; for months,
+ * the month (with the year at January and the start).
+ */
+const seriesEvery = r ? Math.max(1, Math.ceil(r.series.buckets.length / 8)) : 1;
+const shortLabel = (day: string, i: number) => {
+  const d = new Date(`${day}T12:00:00Z`);
+  const month = d.toLocaleDateString('en-GB', { month: 'short' });
+  if (r!.series.unit === 'month') return d.getUTCMonth() === 0 || i === 0 ? `${month} ${String(d.getUTCFullYear()).slice(2)}` : month;
+  const before = i >= seriesEvery ? r!.series.buckets[i - seriesEvery]!.from.slice(0, 7) : null;
+  return before === null || before !== day.slice(0, 7) ? `${d.getUTCDate()} ${month}` : String(d.getUTCDate());
+};
+
+const seriesBars: Bar[] = r
+  ? r.series.buckets.map((b, i) => ({
+      label: shortLabel(b.from, i),
+      value: Math.round(b.minutes),
+      detail: `${r.series.unit === 'week' ? 'Week of ' : ''}${r.series.unit === 'month' ? monthLabel(b.from.slice(0, 7)) : dayLabel(b.from)}: ${hoursAndMinutes(b.minutes)}, ${n(b.plays)} plays`,
+    }))
+  : [];
+const hourBars: Bar[] = r ? r.hours.map((m, h) => ({ label: String(h).padStart(2, '0'), value: Math.round(m), detail: `${String(h).padStart(2, '0')}:00: ${hoursAndMinutes(m)}` })) : [];
+const weekdayBars: Bar[] = r ? r.weekdays.map((m, d) => ({ label: WEEKDAYS[d]!, value: Math.round(m), detail: `${WEEKDAYS[d]}: ${hoursAndMinutes(m)}` })) : [];
+const genreBars: Bar[] = r ? r.genres.slice(0, 12).map((g) => ({ label: view!.genres[g.key]?.name ?? g.key, value: Math.round(g.minutes), detail: `${hoursAndMinutes(g.minutes)}, ${n(g.plays)} plays`, href: `/genre/${g.key}` })) : [];
+const hasData = Boolean(r && r.totals.plays > 0);
+const top = r?.songs[0];
+const topArtist = r?.artists[0];
+const SHOW = 10;
+---
+
+<Base title={`Recap · ${range.label}`} description={`Listening recap: ${range.label}.`}>
+  <div class="wrap page">
+    <PageHeader title="Recap" />
+
+    <nav class="ranges" aria-label="Time period">
+      <div class="pills" role="list">
+        {
+          PRESETS.map((p) => (
+            <a role="listitem" href={p === 'last-30-days' ? '/recap' : `/recap/${p}`} aria-current={range.slug === p ? 'page' : undefined}>
+              {PRESET_LABEL[p]}
+            </a>
+          ))
+        }
+      </div>
+      <details class="more-ranges" open={!PRESETS.includes(range.slug as never) || undefined}>
+        <summary>Pick a month, year or dates</summary>
+        <div class="pickers">
+          {
+            months.length > 0 && (
+              <div class="picker">
+                <h2 class="picker-head">Months</h2>
+                <ul role="list" class="chips">
+                  {months.slice(0, 24).map((m) => (
+                    <li>
+                      <a href={`/recap/${m.month}`} aria-current={range.slug === m.month ? 'page' : undefined}>
+                        {new Date(`${m.month}-15T12:00:00Z`).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )
+          }
+          {
+            years.length > 0 && (
+              <div class="picker">
+                <h2 class="picker-head">Years</h2>
+                <ul role="list" class="chips">
+                  {years.map((y) => (
+                    <li>
+                      <a href={`/recap/${y}`} aria-current={range.slug === y ? 'page' : undefined}>
+                        {y}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )
+          }
+          <form class="dates" method="get" action="/recap">
+            <label>
+              <span>From</span>
+              <input type="date" name="from" required value={range.from} max={today} />
+            </label>
+            <label>
+              <span>To</span>
+              <input type="date" name="to" required value={addDays(range.to, -1)} max={today} />
+            </label>
+            <button class="button" type="submit">Show</button>
+          </form>
+        </div>
+      </details>
+    </nav>
+
+    <p class="range-label">
+      <strong>{range.label}</strong>
+      {(range.kind === 'rolling' || range.kind === 'all') && <span class="muted"> · {spanLabel(range.from, addDays(range.to, -1))}</span>}
+      {(range.kind === 'month' || range.kind === 'year' || range.kind === 'custom') && <span class="muted"> · {range.days.toLocaleString('en-GB')} days</span>}
+    </p>
+
+    {
+      !user ? (
+        <section class="empty">
+          <p>Recaps are personal: each listener sees their own.</p>
+          <a class="button button--primary" href="/manage">
+            Sign in
+          </a>
+        </section>
+      ) : !hasData ? (
+        <section class="empty">
+          {span?.first ? (
+            <p>Nothing was played {range.kind === 'all' ? 'yet' : 'in this stretch'}.{span.last && ` The last listen was on ${dayLabel(span.last)}.`}</p>
+          ) : (
+            <>
+              <p>No listening yet. Recaps fill in from your listening history:</p>
+              <ul class="how">
+                <li>
+                  <a href="/manage/history">Import Spotify’s extended streaming history</a>, for everything up to the day you ask for it.
+                </li>
+                <li>
+                  <a href="/manage/connections">Connect Last.fm or ListenBrainz</a>, to keep it going from then on.
+                </li>
+              </ul>
+              <p class="muted small">Both can be used together: a stream that is in the export and was also scrobbled counts once.</p>
+            </>
+          )}
+        </section>
+      ) : (
+        r &&
+        view && (
+          <>
+            <section class="hero" aria-labelledby="hero-heading">
+              <h2 id="hero-heading" class="visually-hidden">
+                In numbers
+              </h2>
+              <p class="big">
+                <span class="tabular">{n(r.totals.minutes)}</span>
+                <span class="unit">minutes</span>
+              </p>
+              <p class="muted hero-sub">
+                {hoursAndMinutes(r.totals.minutes)} across {r.totals.activeDays.toLocaleString('en-GB')} of {r.totals.days.toLocaleString('en-GB')} days
+                {r.totals.activeDays > 0 && `, ${hoursAndMinutes(r.totals.minutes / r.totals.activeDays)} a listening day`}
+                {view.previous && view.range.previous && change(r.totals.minutes, view.previous.minutes) && (
+                  <>
+                    . {change(r.totals.minutes, view.previous.minutes)} {view.range.previous.label}
+                  </>
+                )}
+              </p>
+              <dl class="stats">
+                <div>
+                  <dt>Plays</dt>
+                  <dd class="tabular">{n(r.totals.plays)}</dd>
+                </div>
+                <div>
+                  <dt>Songs</dt>
+                  <dd class="tabular">{n(r.totals.songs)}</dd>
+                </div>
+                <div>
+                  <dt>Artists</dt>
+                  <dd class="tabular">{n(r.totals.artists)}</dd>
+                </div>
+                <div>
+                  <dt>Albums</dt>
+                  <dd class="tabular">{n(r.totals.albums)}</dd>
+                </div>
+              </dl>
+              {r.totals.estimatedShare > 0.05 && (
+                <p class="muted small">{pct(r.totals.estimatedShare)} of the minutes are estimated from track lengths: scrobbles don’t say how long was played.</p>
+              )}
+            </section>
+
+            {top && (
+              <section class="spotlight" aria-label="Number one">
+                <a class="spot" href={songHref(top.key) ?? undefined}>
+                  <span class="spot-art">
+                    <CoverArt artKey={song(top.key).art} title={song(top.key).title} sizes="(max-width: 40rem) 40vw, 12rem" priority />
+                  </span>
+                  <span class="spot-text">
+                    <span class="eyebrow">Top song</span>
+                    <strong class="spot-title">{song(top.key).title}</strong>
+                    <span class="muted">{song(top.key).artist}</span>
+                    <span class="spot-num tabular">
+                      {n(top.plays)} plays · {hoursAndMinutes(top.minutes)}
+                    </span>
+                  </span>
+                </a>
+                {topArtist && (
+                  <a class="spot" href={artistHref(topArtist.key) ?? undefined}>
+                    <span class="spot-art round">
+                      <CoverArt artKey={artist(topArtist.key).art} title={artist(topArtist.key).name} sizes="(max-width: 40rem) 40vw, 12rem" />
+                    </span>
+                    <span class="spot-text">
+                      <span class="eyebrow">Top artist</span>
+                      <strong class="spot-title">{artist(topArtist.key).name}</strong>
+                      <span class="muted">{pct(topArtist.minutes / r.totals.minutes)} of your listening</span>
+                      <span class="spot-num tabular">
+                        {hoursAndMinutes(topArtist.minutes)} · {n(topArtist.songs)} {topArtist.songs === 1 ? 'song' : 'songs'}
+                      </span>
+                    </span>
+                  </a>
+                )}
+              </section>
+            )}
+
+            <section aria-labelledby="songs-heading">
+              <h2 id="songs-heading">Top songs</h2>
+              <ol role="list" class="ranked">
+                {r.songs.slice(0, 50).map((s, i) => (
+                  <li class={i >= SHOW ? 'extra' : undefined}>
+                    <span class="rank tabular">{i + 1}</span>
+                    <span class="thumb">
+                      <CoverArt artKey={song(s.key).art} title={song(s.key).title} sizes="3rem" />
+                    </span>
+                    <span class="what">
+                      {songHref(s.key) ? <a href={songHref(s.key)}>{song(s.key).title}</a> : <span>{song(s.key).title}</span>}
+                      <span class="by muted">
+                        {song(s.key).artist}
+                        {s.isNew && <span class="tag">New</span>}
+                      </span>
+                    </span>
+                    <span class="num tabular">
+                      <strong>{n(s.plays)}</strong>
+                      <span class="muted"> {s.plays === 1 ? 'play' : 'plays'}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              {r.songs.length > SHOW && (
+                <button class="show-more" type="button" data-show-more aria-expanded="false">
+                  Show {Math.min(50, r.songs.length) - SHOW} more
+                </button>
+              )}
+            </section>
+
+            <section aria-labelledby="artists-heading">
+              <h2 id="artists-heading">Top artists</h2>
+              <ol role="list" class="ranked">
+                {r.artists.slice(0, 50).map((a, i) => (
+                  <li class={i >= SHOW ? 'extra' : undefined}>
+                    <span class="rank tabular">{i + 1}</span>
+                    <span class="thumb round">
+                      <CoverArt artKey={artist(a.key).art} title={artist(a.key).name} sizes="3rem" />
+                    </span>
+                    <span class="what">
+                      {artistHref(a.key) ? <a href={artistHref(a.key)}>{artist(a.key).name}</a> : <span>{artist(a.key).name}</span>}
+                      <span class="by muted">
+                        Most: {song(a.topSong).title}
+                        {a.isNew && <span class="tag">New</span>}
+                      </span>
+                    </span>
+                    <span class="num tabular">
+                      <strong>{hoursAndMinutes(a.minutes)}</strong>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              {r.artists.length > SHOW && (
+                <button class="show-more" type="button" data-show-more aria-expanded="false">
+                  Show {Math.min(50, r.artists.length) - SHOW} more
+                </button>
+              )}
+            </section>
+
+            {r.albums.length > 0 && (
+              <section aria-labelledby="albums-heading">
+                <h2 id="albums-heading">Top albums</h2>
+                <ol role="list" class="covers">
+                  {r.albums.slice(0, 12).map((a, i) => {
+                    const album = view.albums[a.key];
+                    return (
+                      <li>
+                        <a href={album?.id ? `/album/${album.id}` : undefined}>
+                          <CoverArt artKey={album?.art ?? null} title={album?.title ?? ''} sizes="(max-width: 40rem) 30vw, 10rem" />
+                          <span class="cover-title">
+                            <span class="rank tabular">{i + 1}</span> {album?.title}
+                          </span>
+                          <span class="muted small cover-by">
+                            {album?.artist} · {hoursAndMinutes(a.minutes)}
+                          </span>
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </section>
+            )}
+
+            {genreBars.length > 0 && (
+              <section aria-labelledby="genres-heading">
+                <h2 id="genres-heading">Genres</h2>
+                <BarChart bars={genreBars} title="Minutes by genre" orientation="horizontal" valueLabel="Minutes" />
+                <p class="muted small">
+                  Minutes by genre, from the {pct(r.genreCoverage)} of listening on tracks in the catalogue with genres. A song in two genres counts for both.
+                </p>
+              </section>
+            )}
+
+            {seriesBars.length > 1 && (
+              <section aria-labelledby="time-heading">
+                <h2 id="time-heading">Across {r.series.unit === 'day' ? 'the days' : r.series.unit === 'week' ? 'the weeks' : 'the months'}</h2>
+                <BarChart bars={seriesBars} title={`Minutes per ${r.series.unit}`} valueLabel="Minutes" labelEvery={seriesEvery} />
+              </section>
+            )}
+
+            <section aria-labelledby="clock-heading">
+              <h2 id="clock-heading">When you listen</h2>
+              <BarChart bars={hourBars} title="Minutes by hour of the day" valueLabel="Minutes" labelEvery={3} />
+              <BarChart bars={weekdayBars} title="Minutes by day of the week" valueLabel="Minutes" />
+              {r.lateShare >= 0.01 && <p class="muted small">{pct(r.lateShare)} after midnight and before five.</p>}
+            </section>
+
+            <section aria-labelledby="moments-heading">
+              <h2 id="moments-heading">Moments</h2>
+              <ul role="list" class="moments">
+                {r.biggestDay && (
+                  <li>
+                    <span class="eyebrow">Biggest day</span>
+                    <a class="moment-main" href={`/recap/${r.biggestDay.day}`}>
+                      {dayLabel(r.biggestDay.day)}
+                    </a>
+                    <span class="muted">
+                      {hoursAndMinutes(r.biggestDay.minutes)}, mostly {song(r.biggestDay.song).title}
+                    </span>
+                  </li>
+                )}
+                {r.streak && r.streak.days > 1 && (
+                  <li>
+                    <span class="eyebrow">Longest run</span>
+                    <span class="moment-main">{r.streak.days} days in a row</span>
+                    <span class="muted">
+                      {dayLabel(r.streak.from)} to {dayLabel(r.streak.to)}
+                    </span>
+                  </li>
+                )}
+                {r.session && r.session.plays > 1 && (
+                  <li>
+                    <span class="eyebrow">Longest session</span>
+                    <span class="moment-main">{hoursAndMinutes(r.session.minutes)}</span>
+                    <span class="muted">
+                      {n(r.session.plays)} plays, {dayLabel(localDay(r.session.start))} from {timeLabel(r.session.start)}
+                    </span>
+                  </li>
+                )}
+                {r.repeat && (
+                  <li>
+                    <span class="eyebrow">On repeat</span>
+                    <span class="moment-main">{song(r.repeat.song).title}</span>
+                    <span class="muted">
+                      {r.repeat.plays} times on {dayLabel(r.repeat.day)}
+                    </span>
+                  </li>
+                )}
+              </ul>
+            </section>
+
+            {r.discoveries && r.discoveries.songs > 0 && (
+              <section aria-labelledby="new-heading">
+                <h2 id="new-heading">New to you</h2>
+                <p>
+                  <strong class="tabular">{n(r.discoveries.songs)}</strong> songs and <strong class="tabular">{n(r.discoveries.artists)}</strong> artists heard
+                  for the first time: {pct(r.discoveries.songShare)} of your plays.
+                </p>
+                <ol role="list" class="ranked compact">
+                  {r.songs
+                    .filter((s) => s.isNew)
+                    .slice(0, 5)
+                    .map((s) => (
+                      <li>
+                        <span class="thumb">
+                          <CoverArt artKey={song(s.key).art} title={song(s.key).title} sizes="3rem" />
+                        </span>
+                        <span class="what">
+                          {songHref(s.key) ? <a href={songHref(s.key)}>{song(s.key).title}</a> : <span>{song(s.key).title}</span>}
+                          <span class="by muted">{song(s.key).artist}</span>
+                        </span>
+                        <span class="num tabular">
+                          <strong>{n(s.plays)}</strong>
+                          <span class="muted"> {s.plays === 1 ? 'play' : 'plays'}</span>
+                        </span>
+                      </li>
+                    ))}
+                </ol>
+              </section>
+            )}
+
+            <section aria-labelledby="ratings-heading">
+              <h2 id="ratings-heading">Ratings and listening</h2>
+              <p>
+                {pct(r.ratings.ratedShare)} of your plays were of songs you have rated
+                {r.ratings.average !== null && (
+                  <>
+                    , averaging <strong class="tabular">{Math.round(r.ratings.average)}</strong>
+                  </>
+                )}
+                .
+              </p>
+              <div class="pair">
+                {r.ratings.unrated.length > 0 && (
+                  <div>
+                    <h3>Played most, not rated</h3>
+                    <ol role="list" class="ranked compact">
+                      {r.ratings.unrated.slice(0, 5).map((s: SongTally) => (
+                        <li>
+                          <span class="what">
+                            <a href={songHref(s.key)!}>{song(s.key).title}</a>
+                            <span class="by muted">{song(s.key).artist}</span>
+                          </span>
+                          <span class="num tabular">
+                            <strong>{n(s.plays)}</strong>
+                            <span class="muted"> {s.plays === 1 ? 'play' : 'plays'}</span>
+                            <a class="rate" href={`/edit/rate/recording/${s.recording}`}>
+                              Rate
+                            </a>
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+                {r.ratings.best.length > 0 && (
+                  <div>
+                    <h3>Best rated you played</h3>
+                    <ol role="list" class="ranked compact">
+                      {r.ratings.best.slice(0, 5).map((s: SongTally) => (
+                        <li>
+                          <span class="what">
+                            <a href={songHref(s.key) ?? undefined}>{song(s.key).title}</a>
+                            <span class="by muted">{song(s.key).artist}</span>
+                          </span>
+                          <span class="num tabular">
+                            <strong>{Math.round(s.score!)}</strong>
+                            <span class="muted"> · {n(s.plays)} {s.plays === 1 ? 'play' : 'plays'}</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {r.months.length > 1 && (
+              <section aria-labelledby="months-heading">
+                <h2 id="months-heading">Each month’s song</h2>
+                <ol role="list" class="ranked compact">
+                  {r.months.map((m) => (
+                    <li>
+                      <span class="month-name">
+                        <a href={`/recap/${m.month}`}>{new Date(`${m.month}-15T12:00:00Z`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' })}</a>
+                      </span>
+                      <span class="what">
+                        {songHref(m.song.key) ? <a href={songHref(m.song.key)}>{song(m.song.key).title}</a> : <span>{song(m.song.key).title}</span>}
+                        <span class="by muted">{song(m.song.key).artist}</span>
+                      </span>
+                      <span class="num tabular">
+                        <strong>{n(m.song.plays)}</strong>
+                        <span class="muted"> {m.song.plays === 1 ? 'play' : 'plays'}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            )}
+
+            <section aria-labelledby="habits-heading">
+              <h2 id="habits-heading">Habits</h2>
+              <dl class="stats habits">
+                {r.skips && (
+                  <div>
+                    <dt>Skipped</dt>
+                    <dd class="tabular">{pct(r.skips.rate)}</dd>
+                  </div>
+                )}
+                {r.shuffleShare !== null && (
+                  <div>
+                    <dt>On shuffle</dt>
+                    <dd class="tabular">{pct(r.shuffleShare)}</dd>
+                  </div>
+                )}
+                {r.platforms[0] && (
+                  <div>
+                    <dt>Mostly on</dt>
+                    <dd class="platform">{r.platforms[0].key}</dd>
+                  </div>
+                )}
+              </dl>
+              <p class="muted small">
+                From {r.sources.map((s) => `${SOURCE_NAME[s.source] ?? s.source} (${n(s.plays)})`).join(', ')}.
+                {r.duplicates > 0 && ` ${n(r.duplicates)} listens reported by more than one service were counted once.`}
+                {r.skips && ' Skips are from the Spotify export: streams cut short, or under 30 seconds.'}
+              </p>
+            </section>
+          </>
+        )
+      )
+    }
+  </div>
+</Base>
+
+<script>
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-show-more]')) {
+    button.addEventListener('click', () => {
+      const list = button.previousElementSibling;
+      list?.classList.add('open');
+      button.remove();
+    });
+  }
+</script>
+
+<style>
+  .page {
+    display: grid;
+    /* One column that never grows past the screen, whatever is in it. */
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-6);
+    padding-bottom: var(--space-8);
+  }
+
+  section {
+    display: grid;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  h3 {
+    font-size: var(--step-0);
+  }
+
+  .ranges {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .pills {
+    display: flex;
+    gap: var(--space-1);
+    max-width: 100%;
+    width: fit-content;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .pills::-webkit-scrollbar {
+    display: none;
+  }
+
+  .pills a {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    min-height: calc(var(--target) - 6px);
+    padding: 0 var(--space-4);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .pills a[aria-current='page'] {
+    background: var(--text);
+    color: var(--bg);
+  }
+
+  .more-ranges summary {
+    width: fit-content;
+    min-height: var(--target);
+    display: flex;
+    align-items: center;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .pickers {
+    display: grid;
+    gap: var(--space-4);
+    padding-top: var(--space-2);
+  }
+
+  .picker {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .picker-head {
+    font-size: var(--step--1);
+    color: var(--text-muted);
+    font-weight: 650;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .chips a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.25rem;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text);
+    font-size: var(--step--1);
+    text-decoration: none;
+  }
+
+  .chips a[aria-current='page'] {
+    background: var(--text);
+    color: var(--bg);
+    border-color: var(--text);
+  }
+
+  .dates {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .dates label {
+    display: grid;
+    gap: var(--space-1);
+    font-size: var(--step--1);
+    color: var(--text-muted);
+  }
+
+  .dates input {
+    min-height: var(--target);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius, 8px);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+  }
+
+  .range-label {
+    margin-top: calc(-1 * var(--space-3));
+    font-size: var(--step-0);
+  }
+
+  .empty {
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg, 16px);
+    justify-items: start;
+  }
+
+  .how {
+    display: grid;
+    gap: var(--space-2);
+    padding-left: 1.2em;
+  }
+
+  .hero {
+    gap: var(--space-2);
+  }
+
+  .big {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    line-height: 1;
+  }
+
+  .big .tabular {
+    font-size: clamp(3.5rem, 2.4rem + 6vw, 6rem);
+    font-weight: 850;
+    letter-spacing: -0.04em;
+  }
+
+  .big .unit {
+    font-size: var(--step-1);
+    color: var(--text-muted);
+    font-weight: 650;
+  }
+
+  .hero-sub {
+    max-width: 40rem;
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+    margin: var(--space-2) 0 0;
+  }
+
+  @media (min-width: 40rem) {
+    .stats {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .habits {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  .stats div {
+    display: grid;
+    gap: 2px;
+    padding: var(--space-3);
+    border-radius: var(--radius, 12px);
+    background: var(--surface-2);
+  }
+
+  .stats dt {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .stats dd {
+    margin: 0;
+    font-size: var(--step-2);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+
+  .habits {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .platform {
+    text-transform: capitalize;
+    font-size: var(--step-1) !important;
+  }
+
+  .spotlight {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  @media (min-width: 40rem) {
+    .spotlight {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .spot {
+    display: grid;
+    grid-template-columns: 7rem minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-3);
+    border-radius: var(--radius-lg, 16px);
+    background: var(--surface-2);
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .spot-art :global(.cover),
+  .thumb :global(.cover),
+  .spot-art :global(*),
+  .thumb :global(*) {
+    border-radius: var(--radius, 8px);
+  }
+
+  .round :global(*) {
+    border-radius: 50% !important;
+  }
+
+  .spot-text {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .spot-title {
+    font-size: var(--step-1);
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  .spot-num {
+    margin-top: var(--space-1);
+    font-size: var(--step--1);
+  }
+
+  .eyebrow {
+    color: var(--accent, var(--text-muted));
+    font-size: var(--step--2, 0.75rem);
+    font-weight: 750;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .ranked {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    /* Numbers stay within reach of their names on a wide screen. */
+    max-width: 44rem;
+  }
+
+  .ranked li {
+    display: grid;
+    grid-template-columns: 1.6rem 3rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 3.5rem;
+  }
+
+  .ranked.compact li {
+    grid-template-columns: 3rem minmax(0, 1fr) auto;
+  }
+
+  .pair .ranked.compact li,
+  .ranked.compact li:not(:has(.thumb)):not(:has(.month-name)) {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .ranked .extra {
+    display: none;
+  }
+
+  .ranked.open .extra {
+    display: grid;
+  }
+
+  .rank {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 700;
+    text-align: right;
+  }
+
+  .thumb {
+    width: 3rem;
+  }
+
+  .what {
+    display: grid;
+    min-width: 0;
+  }
+
+  .what > a,
+  .what > span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 650;
+  }
+
+  .by {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    font-size: var(--step--1);
+  }
+
+  .tag {
+    flex: none;
+    padding: 0 0.45em;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 0.72rem;
+    font-weight: 700;
+  }
+
+  .num {
+    font-size: var(--step--1);
+    white-space: nowrap;
+    text-align: right;
+  }
+
+  .rate {
+    margin-left: var(--space-3);
+    font-weight: 700;
+  }
+
+  .month-name {
+    font-size: var(--step--1);
+    font-weight: 650;
+  }
+
+  .show-more {
+    justify-self: start;
+    min-height: var(--target);
+    padding: 0 var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--step--1);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .covers {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(9rem, 42%), 1fr));
+    gap: var(--space-5) var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .covers a {
+    display: grid;
+    gap: var(--space-1);
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .covers :global(.cover),
+  .covers :global(*:first-child) {
+    border-radius: var(--radius, 8px);
+  }
+
+  .cover-title {
+    font-weight: 650;
+    font-size: var(--step--1);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .cover-by {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .moments {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .moments li {
+    display: grid;
+    align-content: start;
+    gap: 2px;
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius, 12px);
+    background: var(--surface-2);
+    min-width: 0;
+  }
+
+  .moment-main {
+    font-size: var(--step-1);
+    font-weight: 750;
+    overflow-wrap: anywhere;
+  }
+
+  .pair {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  @media (min-width: 48rem) {
+    .pair {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .pair > div {
+    display: grid;
+    align-content: start;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+</style>

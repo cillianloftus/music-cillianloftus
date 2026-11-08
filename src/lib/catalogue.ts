@@ -383,7 +383,7 @@ export async function artistTopTracks(artistId: string, viewerId: string | null,
   const { results } = await env.DB.prepare(
     `WITH theirs AS (
        SELECT r.id, r.title, s.quality_score, s.personal_score,
-              (SELECT count(*) FROM play p WHERE p.user_id = ?1 AND p.recording_id = r.id) AS plays
+              (SELECT count(*) FROM play p WHERE p.user_id = ?1 AND p.recording_id = r.id AND p.counted = 1) AS plays
        FROM artist_credit c
        JOIN recording r ON r.id = c.entity_id
        LEFT JOIN v_recording_score s ON s.recording_id = r.id AND s.user_id = ?1

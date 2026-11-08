@@ -91,7 +91,7 @@ albums AS (
     (SELECT count(*) FROM play p
      JOIN track t ON t.recording_id = p.recording_id
      JOIN v_release_group_canonical cc ON cc.release_id = t.release_id
-     WHERE cc.release_group_id = g.id AND p.user_id = ?1) AS plays
+     WHERE cc.release_group_id = g.id AND p.user_id = ?1 AND p.counted = 1) AS plays
   FROM release_group g
   WHERE g.status = 'released'
     -- Bootlegs waiting to be cleared are not worth a rating.

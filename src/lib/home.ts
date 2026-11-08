@@ -116,7 +116,7 @@ export async function playedNotRated(userId: string, limit = 10): Promise<TrackC
      LEFT JOIN release_group g ON g.id = ra.release_group_id
      LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
      LEFT JOIN release x ON x.id = gc.release_id
-     WHERE p.user_id = ?1 AND p.ms_played >= 30000
+     WHERE p.user_id = ?1 AND p.counted = 1
        AND NOT EXISTS (SELECT 1 FROM v_recording_score s WHERE s.recording_id = r.id AND s.user_id = ?1)
      GROUP BY r.id ORDER BY plays DESC LIMIT ?2`,
   )

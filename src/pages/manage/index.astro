@@ -18,7 +18,7 @@ const [counts, spotify] = await Promise.all([
             (SELECT count(*) FROM job WHERE status = 'failed') AS failed,
             (SELECT count(*) FROM job WHERE status IN ('queued', 'running')) AS running,
             (SELECT count(*) FROM file) AS files,
-            (SELECT count(*) FROM play WHERE user_id = ?1) AS plays,
+            (SELECT count(*) FROM play WHERE user_id = ?1 AND counted = 1) AS plays,
             (SELECT count(*) FROM release_group WHERE official = 0 AND keep_unofficial = 0) AS unofficial`,
   )
     .bind(user.id)

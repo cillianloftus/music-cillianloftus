@@ -57,8 +57,13 @@ export interface Scrobble {
   album: string | null;
   /** The recording's MusicBrainz id, when Last.fm knows it. */
   mbid: string | null;
-  /** Seconds since the epoch. */
+  /** Seconds since the epoch: when the track started. */
   at: number;
+  /** ListenBrainz only, when the scrobbler sent them. */
+  duration_ms?: number | null;
+  spotify_id?: string | null;
+  /** The player or scrobbler: "Spotify", "Pano Scrobbler"... */
+  player?: string | null;
 }
 
 interface RawTrack {

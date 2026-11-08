@@ -85,7 +85,7 @@ describe('ListenBrainz', () => {
         },
       });
     }) as unknown as typeof fetch;
-    expect(await listensBefore('cillian', 2000, undefined, fetcher)).toEqual([{ artist: 'Artist', title: 'Song', album: 'Album', mbid: 'mapped', at: 1500 }]);
+    expect(await listensBefore('cillian', 2000, undefined, fetcher)).toEqual([{ artist: 'Artist', title: 'Song', album: 'Album', mbid: 'mapped', at: 1500, duration_ms: null, spotify_id: null, player: null }]);
   });
 });
 

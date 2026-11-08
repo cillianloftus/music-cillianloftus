@@ -54,7 +54,7 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
        SELECT (SELECT count(*) FROM firsts WHERE first >= ?2 AND first < ?3) AS rated,
               (SELECT avg(s.quality_score) FROM firsts f JOIN v_recording_score s ON s.recording_id = f.entity_id AND s.user_id = ?1
                WHERE f.first >= ?2 AND f.first < ?3) AS average,
-              (SELECT count(*) FROM play WHERE user_id = ?1 AND played_at >= ?2 AND played_at < ?3) AS plays,
+              (SELECT count(*) FROM play WHERE user_id = ?1 AND played_at >= ?2 AND played_at < ?3 AND counted = 1) AS plays,
               (SELECT count(*) FROM (
                  SELECT c.artist_id, min(f.first) AS met FROM firsts f
                  JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = f.entity_id AND c.role = 'primary'
@@ -97,7 +97,7 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
     ).bind(userId, from, to),
     env.DB.prepare(
       `SELECT DISTINCT CAST(substr(rated_at, 1, 4) AS INTEGER) AS y FROM rating WHERE user_id = ?1
-       UNION SELECT DISTINCT CAST(substr(played_at, 1, 4) AS INTEGER) FROM play WHERE user_id = ?1
+       UNION SELECT DISTINCT CAST(substr(played_at, 1, 4) AS INTEGER) FROM play WHERE user_id = ?1 AND counted = 1
        UNION SELECT DISTINCT CAST(substr(r.first_release_date, 1, 4) AS INTEGER) FROM v_recording_score s
              JOIN recording r ON r.id = s.recording_id WHERE s.user_id = ?1 AND r.first_release_date IS NOT NULL
        ORDER BY y DESC`,

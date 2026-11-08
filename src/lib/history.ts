@@ -1,33 +1,46 @@
 /**
  * Listening history from Spotify's extended streaming history export
- * (ARCHITECTURE.md §3, "Listening history"; build step 13).
+ * (ARCHITECTURE.md §3, "Listening history"; "As built: listens and recaps").
  *
- * The export is read in the browser. It sends the distinct tracks first;
- * this side matches them to recordings in the catalogue and answers with
- * the matches; the browser then sends the plays of matched tracks in
- * batches. That keeps every request small, and nothing about tracks
- * outside the catalogue is stored. Importing an overlapping export again
- * adds nothing (the play table is unique per user, recording, time and
- * source), and a later import picks up plays of albums added since.
+ * The export is read in the browser. It sends the distinct tracks first,
+ * which are kept (matched to a recording where the catalogue has one),
+ * then every music stream in batches. Nothing is thrown away for being
+ * outside the catalogue: recaps count everything, and a track's listens
+ * join its recording when the album is imported later. Importing an
+ * overlapping export again adds nothing (plays are unique per user,
+ * track, start and source), and listens that Last.fm or ListenBrainz also
+ * reported are counted once (listens/dedupe.ts).
  */
 
 import { env } from 'cloudflare:workers';
 import { z } from 'zod';
-import { normaliseName, normaliseTitle } from './text';
+import { PLAY_BATCH, TRACK_BATCH } from './history-parse';
+import { listenTrack } from './listens/keys';
+import { catalogueIndex } from './listens/match';
+import { savePlays, saveTracks } from './listens/store';
 
-import { MATCH_BATCH, MIN_PLAY_MS, PLAY_BATCH } from './history-parse';
+const spotifyUri = z.string().regex(/^spotify:track:[A-Za-z0-9]{22}$/);
 
-export const historyTrack = z
+export const tracksRequest = z
   .object({
-    uri: z.string().regex(/^spotify:track:[A-Za-z0-9]{22}$/),
-    name: z.string().min(1).max(500),
-    artist: z.string().min(1).max(500),
-    album: z.string().max(500).nullable(),
+    tracks: z
+      .array(
+        z
+          .object({
+            uri: spotifyUri,
+            name: z.string().min(1).max(500),
+            artist: z.string().min(1).max(500),
+            album: z.string().max(500).nullable(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(TRACK_BATCH),
   })
   .strict();
-export type HistoryTrack = z.infer<typeof historyTrack>;
 
-export const matchRequest = z.object({ tracks: z.array(historyTrack).min(1).max(MATCH_BATCH) }).strict();
+const flag = z.boolean().nullable();
+const short = (max: number) => z.string().max(max).nullable();
 
 export const playsRequest = z
   .object({
@@ -35,9 +48,17 @@ export const playsRequest = z
       .array(
         z
           .object({
-            recording_id: z.uuid().or(z.string().regex(/^[A-Za-z0-9-]{1,64}$/)),
+            uri: spotifyUri,
             played_at: z.iso.datetime(),
-            ms_played: z.number().int().min(MIN_PLAY_MS).max(24 * 60 * 60 * 1000),
+            ms_played: z.number().int().min(0).max(24 * 60 * 60 * 1000),
+            skipped: flag,
+            shuffle: flag,
+            offline: flag,
+            incognito: flag,
+            platform: short(100),
+            country: short(8),
+            reason_start: short(40),
+            reason_end: short(40),
           })
           .strict(),
       )
@@ -47,83 +68,30 @@ export const playsRequest = z
   .strict();
 export type PlaysRequest = z.infer<typeof playsRequest>;
 
-export type MatchHow = 'spotify_id' | 'title_artist';
+const keyOf = (uri: string) => `spotify:${uri.slice('spotify:track:'.length)}`;
 
-interface CatalogueRow {
-  id: string;
-  title: string;
-  spotify_id: string | null;
-  artists: string | null;
-  albums: string | null;
+/** Keeps the export's tracks. Returns how many are in the catalogue. */
+export async function addTracks(tracks: z.infer<typeof tracksRequest>['tracks']): Promise<number> {
+  const rows = tracks.map((t) => listenTrack({ artist: t.artist, title: t.name, album: t.album, spotify_id: t.uri.slice('spotify:track:'.length) }));
+  return saveTracks(rows, await catalogueIndex());
 }
 
-/**
- * Recording ids for the tracks that are in the catalogue. By Spotify id
- * where a recording holds one; otherwise by title and primary artist,
- * normalised, preferring the recording whose album has the same name when
- * several share a title. A title alone never matches.
- */
-export async function matchTracks(tracks: HistoryTrack[]): Promise<Record<string, { recording_id: string; how: MatchHow }>> {
-  const { results } = await env.DB.prepare(
-    `SELECT r.id, r.title, r.spotify_id,
-            (SELECT json_group_array(a.name) FROM artist_credit c JOIN artist a ON a.id = c.artist_id
-             WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary') AS artists,
-            (SELECT json_group_array(g.title) FROM track t JOIN release x ON x.id = t.release_id
-             JOIN release_group g ON g.id = x.release_group_id WHERE t.recording_id = r.id) AS albums
-     FROM recording r`,
-  ).all<CatalogueRow>();
-
-  const bySpotify = new Map<string, string>();
-  const byName = new Map<string, CatalogueRow[]>();
-  for (const row of results) {
-    if (row.spotify_id) bySpotify.set(row.spotify_id, row.id);
-    const title = normaliseTitle(row.title);
-    for (const artist of JSON.parse(row.artists ?? '[]') as string[]) {
-      const key = `${normaliseName(artist)}\u0000${title}`;
-      const list = byName.get(key);
-      if (list) list.push(row);
-      else byName.set(key, [row]);
-    }
-  }
-
-  const matches: Record<string, { recording_id: string; how: MatchHow }> = {};
-  for (const track of tracks) {
-    const id = track.uri.slice('spotify:track:'.length);
-    const exact = bySpotify.get(id);
-    if (exact) {
-      matches[track.uri] = { recording_id: exact, how: 'spotify_id' };
-      continue;
-    }
-    const candidates = byName.get(`${normaliseName(track.artist)}\u0000${normaliseTitle(track.name)}`);
-    if (!candidates?.length) continue;
-    const album = track.album ? normaliseTitle(track.album) : null;
-    const onAlbum = album
-      ? candidates.find((c) => (JSON.parse(c.albums ?? '[]') as string[]).some((a) => normaliseTitle(a) === album))
-      : undefined;
-    matches[track.uri] = { recording_id: (onAlbum ?? candidates[0]!).id, how: 'title_artist' };
-  }
-  return matches;
-}
-
-/** Adds plays, skipping any already held and any naming no recording. Returns how many were new. */
+/** Adds plays, skipping any already held. Returns how many were new. */
 export async function addPlays(userId: string, plays: PlaysRequest['plays']): Promise<number> {
-  const rows = plays.map((p) => ({ ...p, id: crypto.randomUUID() }));
-  const result = await env.DB.prepare(
-    `INSERT INTO play (id, user_id, recording_id, played_at, ms_played, source)
-     SELECT j.value ->> '$.id', ?1, r.id, j.value ->> '$.played_at', j.value ->> '$.ms_played', 'spotify_export'
-     FROM json_each(?2) j
-     JOIN recording r ON r.id = j.value ->> '$.recording_id'
-     WHERE true
-     ON CONFLICT (user_id, recording_id, played_at, source) DO NOTHING`,
-  )
-    .bind(userId, JSON.stringify(rows))
-    .run();
-  return result.meta.changes ?? 0;
+  return savePlays(
+    userId,
+    'spotify_export',
+    plays.map(({ uri, ...p }) => ({ ...p, track_key: keyOf(uri) })),
+  );
 }
 
 export interface HistorySummary {
+  /** Counted plays: 30 seconds or more, each moment of listening once. */
   plays: number;
+  /** Distinct catalogue recordings among them. */
   recordings: number;
+  /** Distinct tracks, in the catalogue or not. */
+  tracks: number;
   first: string | null;
   last: string | null;
   hours: number;
@@ -131,13 +99,13 @@ export interface HistorySummary {
 
 export async function historySummary(userId: string): Promise<HistorySummary> {
   const row = await env.DB.prepare(
-    `SELECT count(*) AS plays, count(DISTINCT recording_id) AS recordings,
+    `SELECT count(*) AS plays, count(DISTINCT recording_id) AS recordings, count(DISTINCT track_key) AS tracks,
             min(played_at) AS first, max(played_at) AS last, coalesce(sum(ms_played), 0) / 3600000.0 AS hours
-     FROM play WHERE user_id = ?`,
+     FROM play WHERE user_id = ? AND counted = 1`,
   )
     .bind(userId)
     .first<HistorySummary>();
-  return row ?? { plays: 0, recordings: 0, first: null, last: null, hours: 0 };
+  return row ?? { plays: 0, recordings: 0, tracks: 0, first: null, last: null, hours: 0 };
 }
 
 export interface Divergence {
@@ -162,7 +130,7 @@ export async function divergence(userId: string, limit = 10): Promise<{ underpla
   const { results } = await env.DB.prepare(
     `WITH rated AS (
        SELECT s.recording_id, s.quality_score,
-              (SELECT count(*) FROM play p WHERE p.recording_id = s.recording_id AND p.user_id = ?1) AS plays
+              (SELECT count(*) FROM play p WHERE p.recording_id = s.recording_id AND p.user_id = ?1 AND p.counted = 1) AS plays
        FROM v_recording_score s WHERE s.user_id = ?1
      ),
      ranked AS (
@@ -203,7 +171,7 @@ export async function playCounts(userId: string, recordingIds: string[]): Promis
   if (recordingIds.length === 0) return new Map();
   const { results } = await env.DB.prepare(
     `SELECT recording_id, count(*) AS plays FROM play
-     WHERE user_id = ? AND recording_id IN (SELECT value FROM json_each(?))
+     WHERE user_id = ? AND counted = 1 AND recording_id IN (SELECT value FROM json_each(?))
      GROUP BY recording_id`,
   )
     .bind(userId, JSON.stringify(recordingIds))
@@ -229,14 +197,14 @@ export async function trackListening(userId: string, recordingId: string, now = 
   const [summary, months, ranks] = await env.DB.batch([
     env.DB.prepare(
       `SELECT count(*) AS total, min(played_at) AS first, max(played_at) AS last, json_group_array(DISTINCT source) AS sources
-       FROM play WHERE user_id = ? AND recording_id = ?`,
+       FROM play WHERE user_id = ? AND recording_id = ? AND counted = 1`,
     ).bind(userId, recordingId),
     env.DB.prepare(
       `SELECT substr(played_at, 1, 7) AS month, count(*) AS count FROM play
-       WHERE user_id = ? AND recording_id = ? GROUP BY month ORDER BY month`,
+       WHERE user_id = ? AND recording_id = ? AND counted = 1 GROUP BY month ORDER BY month`,
     ).bind(userId, recordingId),
     env.DB.prepare(
-      `WITH counts AS (SELECT recording_id, count(*) AS n FROM play WHERE user_id = ?1 GROUP BY recording_id)
+      `WITH counts AS (SELECT recording_id, count(*) AS n FROM play WHERE user_id = ?1 AND counted = 1 AND recording_id IS NOT NULL GROUP BY recording_id)
        SELECT (SELECT count(*) FROM counts c WHERE c.n > (SELECT n FROM counts WHERE recording_id = ?2)) + 1 AS rank,
               (SELECT count(*) FROM counts) AS of`,
     ).bind(userId, recordingId),

@@ -136,7 +136,7 @@ export const ENTITIES: Record<Entity, EntitySpec> = {
       play_count: {
         label: 'Play count',
         type: 'number',
-        sql: `(SELECT count(*) FROM play p WHERE p.recording_id = e.id AND p.user_id = ${USER})`,
+        sql: `(SELECT count(*) FROM play p WHERE p.recording_id = e.id AND p.user_id = ${USER} AND p.counted = 1)`,
         sortable: true,
       },
       days_since_release: {
@@ -213,7 +213,7 @@ export const ENTITIES: Record<Entity, EntitySpec> = {
         sql: `(SELECT count(*) FROM play p
                JOIN track t ON t.recording_id = p.recording_id
                JOIN v_release_group_canonical cc ON cc.release_id = t.release_id
-               WHERE cc.release_group_id = e.id AND p.user_id = ${USER})`,
+               WHERE cc.release_group_id = e.id AND p.user_id = ${USER} AND p.counted = 1)`,
         sortable: true,
       },
       days_since_release: {
@@ -276,7 +276,7 @@ export const ENTITIES: Record<Entity, EntitySpec> = {
         type: 'number',
         sql: `(SELECT count(*) FROM play p
                JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = p.recording_id
-               WHERE c.artist_id = e.id AND c.role = 'primary' AND p.user_id = ${USER})`,
+               WHERE c.artist_id = e.id AND c.role = 'primary' AND p.user_id = ${USER} AND p.counted = 1)`,
         sortable: true,
       },
     },

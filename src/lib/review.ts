@@ -554,7 +554,7 @@ export async function reviewEntities(anomalies: Anomaly[]): Promise<Map<string, 
               (SELECT x.art_key FROM track t JOIN release x ON x.id = t.release_id
                WHERE t.recording_id = r.id AND x.art_key IS NOT NULL LIMIT 1) AS art,
               (SELECT count(*) FROM rating x WHERE x.entity_type = 'recording' AND x.entity_id = r.id) AS ratings,
-              (SELECT count(*) FROM play p WHERE p.recording_id = r.id) AS plays
+              (SELECT count(*) FROM play p WHERE p.recording_id = r.id AND p.counted = 1) AS plays
        FROM recording r WHERE r.id IN (SELECT value FROM json_each(?))`,
     ).bind(ids('recording')),
     env.DB.prepare(

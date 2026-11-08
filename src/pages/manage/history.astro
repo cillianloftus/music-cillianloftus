@@ -12,7 +12,6 @@ const user = Astro.locals.user!;
 const [summary, gaps] = await Promise.all([historySummary(user.id), divergence(user.id)]);
 const day = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
-const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString('en-GB')} ${n === 1 ? one : many}`;
 const lists: { id: string; heading: string; explain: string; rows: Divergence[] }[] = [
   {
     id: 'underplayed',
@@ -31,7 +30,9 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
 
 <Base title="Listening history">
   <div class="wrap page">
-    <PageHeader title="Listening history" />
+    <PageHeader title="Listening history">
+      {summary.plays > 0 && <a href="/recap">Your recap →</a>}
+    </PageHeader>
     <p class="muted">Spotify → Privacy settings → Download your data → Extended streaming history.</p>
 
     <section class="summary" aria-labelledby="summary-heading">
@@ -47,6 +48,10 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
             </div>
             <div>
               <dt>Tracks played</dt>
+              <dd class="tabular">{summary.tracks.toLocaleString('en-GB')}</dd>
+            </div>
+            <div>
+              <dt>In the catalogue</dt>
               <dd class="tabular">{summary.recordings.toLocaleString('en-GB')}</dd>
             </div>
             <div>
@@ -75,8 +80,9 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
       <progress hidden data-progress></progress>
       <button class="button button--primary" type="button" hidden data-go></button>
       <p class="hint muted">
-        Only plays of tracks already in the catalogue are kept, matched by Spotify id or by title and artist. Importing
-        again later picks up albums added since, and never counts a play twice.
+        Every stream is kept, in the catalogue or not, for recaps. Tracks join their catalogue recording by Spotify id or
+        by title and artist, now or when the album is imported later. Importing again adds nothing twice, and a stream
+        Last.fm or ListenBrainz also reported counts once.
       </p>
     </section>
     <noscript><p class="muted">Reading the export needs JavaScript.</p></noscript>
@@ -113,12 +119,14 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
         </section>
       ))
     }
-    <p class="muted foot">{summary.plays > 0 && `Plays counted from ${plural(summary.recordings, 'track')} in the catalogue.`}</p>
+    <p class="muted foot">
+      {summary.plays > 0 && `Plays of 30 seconds or more, each moment of listening counted once however many services reported it.`}
+    </p>
   </div>
 </Base>
 
 <script>
-  import { collectHistory, isAudioHistory, MATCH_BATCH, PLAY_BATCH, type ParsedPlay, type ParsedTrack } from '../../lib/history-parse';
+  import { collectHistory, isAudioHistory, PLAY_BATCH, TRACK_BATCH, type ParsedPlay, type ParsedTrack } from '../../lib/history-parse';
   import { zipEntries } from '../../lib/zip';
 
   const $ = <T extends Element>(s: string) => document.querySelector<T>(s)!;
@@ -130,7 +138,8 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
   const go = $<HTMLButtonElement>('[data-go]');
   section.hidden = false;
 
-  let pending: { recording_id: string; played_at: string; ms_played: number }[] = [];
+  let tracks: ParsedTrack[] = [];
+  let plays: ParsedPlay[] = [];
   const n = (x: number) => x.toLocaleString('en-GB');
 
   async function post<T>(url: string, body: unknown): Promise<T> {
@@ -142,8 +151,8 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
 
   async function load(files: File[]) {
     go.hidden = true;
-    const tracks = new Map<string, ParsedTrack>();
-    const plays: ParsedPlay[] = [];
+    const found = new Map<string, ParsedTrack>();
+    const read: ParsedPlay[] = [];
     try {
       status.textContent = 'Reading…';
       for (const file of files) {
@@ -151,58 +160,52 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
         if (file.name.toLowerCase().endsWith('.zip')) {
           for (const entry of zipEntries(bytes).filter((e) => isAudioHistory(e.name))) {
             status.textContent = `Reading ${entry.name.split('/').at(-1)}…`;
-            collectHistory(JSON.parse(new TextDecoder().decode(await entry.read())), tracks, plays);
+            collectHistory(JSON.parse(new TextDecoder().decode(await entry.read())), found, read);
           }
         } else {
-          collectHistory(JSON.parse(new TextDecoder().decode(bytes)), tracks, plays);
+          collectHistory(JSON.parse(new TextDecoder().decode(bytes)), found, read);
         }
       }
     } catch (error) {
       status.textContent = `That could not be read: ${error instanceof Error ? error.message : 'unknown error'}`;
       return;
     }
-    if (plays.length === 0) {
-      status.textContent = 'No music plays found. Choose the zip, or the Streaming_History_Audio files inside it.';
+    if (read.length === 0) {
+      status.textContent = 'No music found. Choose the zip, or the Streaming_History_Audio files inside it.';
       return;
     }
-
-    status.textContent = `${n(plays.length)} plays of ${n(tracks.size)} tracks. Matching against the catalogue…`;
-    const all = [...tracks.values()];
-    const matches: Record<string, { recording_id: string }> = {};
-    try {
-      for (let i = 0; i < all.length; i += MATCH_BATCH) {
-        Object.assign(matches, (await post<{ matches: typeof matches }>('/api/write/history/match', { tracks: all.slice(i, i + MATCH_BATCH) })).matches);
-      }
-    } catch (error) {
-      status.textContent = error instanceof Error ? error.message : 'Matching failed.';
-      return;
-    }
-
-    pending = plays.flatMap((p) => (matches[p.uri] ? [{ recording_id: matches[p.uri]!.recording_id, played_at: p.played_at, ms_played: p.ms_played }] : []));
-    const matchedTracks = Object.keys(matches).length;
-    status.textContent = `${n(matchedTracks)} of ${n(tracks.size)} tracks are in the catalogue, with ${n(pending.length)} plays between them.`;
-    if (pending.length) {
-      go.textContent = `Import ${n(pending.length)} plays`;
-      go.hidden = false;
-      go.disabled = false;
-    }
+    tracks = [...found.values()];
+    plays = read.sort((x, y) => x.played_at.localeCompare(y.played_at));
+    const full = plays.filter((p) => p.ms_played >= 30_000).length;
+    const first = new Date(plays[0]!.played_at).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+    const last = new Date(plays.at(-1)!.played_at).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+    status.textContent = `${n(full)} plays (and ${n(plays.length - full)} streams under 30 seconds) of ${n(tracks.length)} tracks, ${first} to ${last}.`;
+    go.textContent = `Import ${n(plays.length)} streams`;
+    go.hidden = false;
+    go.disabled = false;
   }
 
   go.addEventListener('click', async () => {
     go.disabled = true;
     progress.hidden = false;
-    progress.max = pending.length;
+    progress.max = tracks.length + plays.length;
+    let matched = 0;
     let added = 0;
     try {
-      for (let i = 0; i < pending.length; i += PLAY_BATCH) {
+      for (let i = 0; i < tracks.length; i += TRACK_BATCH) {
         progress.value = i;
-        status.textContent = `Importing ${n(Math.min(i + PLAY_BATCH, pending.length))} of ${n(pending.length)}…`;
-        added += (await post<{ added: number }>('/api/write/history/plays', { plays: pending.slice(i, i + PLAY_BATCH) })).added;
+        status.textContent = `Keeping tracks: ${n(Math.min(i + TRACK_BATCH, tracks.length))} of ${n(tracks.length)}…`;
+        matched += (await post<{ matched: number }>('/api/write/history/tracks', { tracks: tracks.slice(i, i + TRACK_BATCH) })).matched;
       }
-      status.textContent = `${n(added)} new plays added${added < pending.length ? `; ${n(pending.length - added)} were already here` : ''}. Reloading…`;
-      setTimeout(() => location.reload(), 1200);
+      for (let i = 0; i < plays.length; i += PLAY_BATCH) {
+        progress.value = tracks.length + i;
+        status.textContent = `Importing streams: ${n(Math.min(i + PLAY_BATCH, plays.length))} of ${n(plays.length)}…`;
+        added += (await post<{ added: number }>('/api/write/history/plays', { plays: plays.slice(i, i + PLAY_BATCH) })).added;
+      }
+      status.textContent = `${n(added)} new streams added${added < plays.length ? `; ${n(plays.length - added)} were already here` : ''}. ${n(matched)} of ${n(tracks.length)} tracks are in the catalogue. Reloading…`;
+      setTimeout(() => location.reload(), 1600);
     } catch (error) {
-      status.textContent = `Stopped after ${n(added)} new plays: ${error instanceof Error ? error.message : 'error'}. Run it again to finish; nothing is counted twice.`;
+      status.textContent = `Stopped after ${n(added)} new streams: ${error instanceof Error ? error.message : 'error'}. Run it again to finish; nothing is counted twice.`;
       go.disabled = false;
     } finally {
       progress.hidden = true;

@@ -33,6 +33,22 @@ export function insert(db: DatabaseSync, table: string, rows: Row[]): void {
 }
 
 /**
+ * Inserts plays of catalogue recordings, with the listen_track each needs
+ * ('recording:<id>', named after the recording). Rows may leave out
+ * track_key; recording_id is required.
+ */
+export function insertPlays(db: DatabaseSync, rows: Row[]): void {
+  for (const row of rows) {
+    const recording = String(row.recording_id);
+    db.prepare(
+      `INSERT OR IGNORE INTO listen_track (key, artist, title, artist_key, title_key, recording_id)
+       SELECT 'recording:' || r.id, '', r.title, '', lower(r.title), r.id FROM recording r WHERE r.id = ?`,
+    ).run(recording);
+  }
+  insert(db, 'play', rows.map((row) => ({ track_key: `recording:${row.recording_id}`, ...row })));
+}
+
+/**
  * A small library with known answers. Two users; two artists; three albums
  * (one with a deluxe edition); a genre tree pop > indie pop > bedroom pop.
  *

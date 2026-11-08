@@ -72,9 +72,17 @@ const fmt = (v: number) => `${Math.round(v * 10) / 10}${unit}`;
           </ol>
         </div>
         <ol class="xlabels" role="list" aria-hidden="true">
-          {bars.map((b, i) => (
-            <li>{i % labelEvery === 0 ? b.label : ''}</li>
-          ))}
+          {labelEvery === 1
+            ? bars.map((b) => <li>{b.label}</li>)
+            : // A label spans the unlabelled bars after it, so "14" or "Oct" has room
+              // under a thin bar; it starts at its own bar rather than centring.
+              bars.map((b, i) =>
+                i % labelEvery === 0 ? (
+                  <li class="spanning" style={`grid-column: ${i + 1} / span ${Math.min(labelEvery, bars.length - i)}`}>
+                    {b.label}
+                  </li>
+                ) : null,
+              )}
         </ol>
       </div>
     ) : (
@@ -198,6 +206,12 @@ const fmt = (v: number) => `${Math.round(v * 10) / 10}${unit}`;
     padding-top: var(--space-1);
   }
 
+  .xlabels .spanning {
+    text-align: start;
+    overflow-wrap: normal;
+    white-space: nowrap;
+  }
+
   .xlabels li {
     display: -webkit-box;
     overflow: hidden;
@@ -213,7 +227,7 @@ const fmt = (v: number) => `${Math.round(v * 10) / 10}${unit}`;
 
   /* Many bars on a narrow screen: every other label, so none collide. */
   @media (max-width: 39.99rem) {
-    .crowded .xlabels li:nth-child(even) {
+    .crowded .xlabels li:not(.spanning):nth-child(even) {
       visibility: hidden;
     }
   }

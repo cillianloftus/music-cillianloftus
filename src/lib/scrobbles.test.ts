@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
-import { insert, migratedDb, seedLibrary } from '../test/db';
+import { insert, insertPlays, migratedDb, seedLibrary } from '../test/db';
 import { artistTopTracks } from './catalogue';
 import { fillPlayMonths, trackListening } from './history';
 import { credentials, forget, saveCredentials, stateOf } from './connections';
@@ -79,13 +79,14 @@ describe('scrobble sync', () => {
     { artist: 'Xavier', title: 'Song A1', album: 'Album A', mbid: null, at: at('2026-02-03T09:00:00Z') },
   ];
 
-  it('takes every page, keeps only tracks in the library, and remembers where it got to', async () => {
+  it('takes every page, keeps every scrobble (matched where the library has it), and remembers where it got to', async () => {
     const { fetchPage } = service(library);
     const report = await syncScrobbles('lastfm', { budgetMs: 10_000, fetchPage });
-    expect(report).toMatchObject({ fetched: 5, matched: 4, added: 4, complete: true });
+    expect(report).toMatchObject({ fetched: 5, added: 5, complete: true });
     expect(plays()).toEqual([
       { recording_id: 'a1', played_at: '2026-02-01T10:00:00.000Z', source: 'lastfm' },
       { recording_id: 'a2', played_at: '2026-02-01T10:05:00.000Z', source: 'lastfm' },
+      { recording_id: null, played_at: '2026-02-01T10:10:00.000Z', source: 'lastfm' },
       { recording_id: 'b1', played_at: '2026-02-02T09:00:00.000Z', source: 'lastfm' },
       { recording_id: 'a1', played_at: '2026-02-03T09:00:00.000Z', source: 'lastfm' },
     ]);
@@ -110,7 +111,7 @@ describe('scrobble sync', () => {
     expect(parseCursor((await stateOf('lastfm'))!.cursor).pending).toBeDefined();
     const rest = await syncScrobbles('lastfm', { budgetMs: 10_000, fetchPage });
     expect(rest.complete).toBe(true);
-    expect(plays()).toHaveLength(4);
+    expect(plays()).toHaveLength(5);
   });
 
   it('never counts the same play twice', async () => {
@@ -138,9 +139,8 @@ describe('favourites', () => {
   it('are the best rated until there are plays, then plays count too', async () => {
     expect((await artistTopTracks('art-x', 'u-owner', 3)).map((t) => t.id)).toEqual(['a4', 'a1', 'b1']);
     // b2 (rated 60) played far more than anything else.
-    insert(
+    insertPlays(
       db,
-      'play',
       Array.from({ length: 40 }, (_, i) => ({
         id: `p${i}`,
         user_id: 'u-owner',
@@ -188,7 +188,7 @@ describe('track facts', () => {
 describe('a track’s listening', () => {
   it('fills the quiet months and ranks it among everything played', async () => {
     const play = (id: string, recording_id: string, played_at: string) => ({ id, user_id: 'u-owner', recording_id, played_at, ms_played: 1, source: 'lastfm' });
-    insert(db, 'play', [play('1', 'a1', '2026-01-05T00:00:00Z'), play('2', 'a1', '2026-03-05T00:00:00Z'), play('3', 'a2', '2026-01-01T00:00:00Z'), play('4', 'a2', '2026-01-02T00:00:00Z'), play('5', 'a2', '2026-01-03T00:00:00Z')]);
+    insertPlays(db, [play('1', 'a1', '2026-01-05T00:00:00Z'), play('2', 'a1', '2026-03-05T00:00:00Z'), play('3', 'a2', '2026-01-01T00:00:00Z'), play('4', 'a2', '2026-01-02T00:00:00Z'), play('5', 'a2', '2026-01-03T00:00:00Z')]);
     const l = await trackListening('u-owner', 'a1', new Date('2026-04-10T00:00:00Z'));
     expect(l).toMatchObject({ total: 2, rank: 2, of: 2, sources: ['lastfm'] });
     expect(l!.months).toEqual([

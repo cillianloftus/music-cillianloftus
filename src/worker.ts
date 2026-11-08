@@ -13,6 +13,8 @@ import { connection, spotifyFor } from './lib/spotify/client';
 import { linkAlbumsToSpotify } from './lib/spotify/link';
 import { detectAnomalies } from './lib/review';
 import { syncAllScrobbles } from './lib/scrobbles';
+import { catalogueIndex } from './lib/listens/match';
+import { rematchListens } from './lib/listens/store';
 import { fillAlbumsFromDiscogs } from './lib/sources/discogs';
 import { checkOfficialReleases } from './lib/official';
 
@@ -77,6 +79,8 @@ export default {
             // Each does nothing until its key is pasted on /manage/connections.
             ['Scrobbles from Last.fm and ListenBrainz', () => syncAllScrobbles({ budgetMs: 25_000 })],
             ['Release details from Discogs', () => fillAlbumsFromDiscogs({ budgetMs: 25_000 })],
+            // Listens of tracks imported since they were heard join their recordings.
+            ['Listens matched to the catalogue', async () => rematchListens(await catalogueIndex())],
           ] as const) {
             try {
               await task();

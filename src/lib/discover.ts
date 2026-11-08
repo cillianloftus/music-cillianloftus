@@ -99,7 +99,7 @@ export async function trackFacts(userId: string, scope: { artistId?: string; alb
              FROM genre_tag gt JOIN genre gn ON gn.id = gt.genre_id
              WHERE (gt.entity_type = 'recording' AND gt.entity_id = r.id)
                 OR (gt.entity_type = 'release_group' AND gt.entity_id = g.id)) AS genres,
-            (SELECT count(*) FROM play p WHERE p.user_id = s.user_id AND p.recording_id = r.id) AS plays,
+            (SELECT count(*) FROM play p WHERE p.user_id = s.user_id AND p.recording_id = r.id AND p.counted = 1) AS plays,
             ax.production, ax.songwriting, ax.lyrics, ax.performance, ax.gut_score
      FROM v_recording_score s
      JOIN recording r ON r.id = s.recording_id

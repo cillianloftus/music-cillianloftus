@@ -15,7 +15,7 @@ const entry = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe('collectHistory', () => {
-  it('keeps music plays of 30 seconds or more, and each track once', () => {
+  it('keeps every music stream, short ones too, and each track once', () => {
     const tracks = new Map<string, ParsedTrack>();
     const plays: ParsedPlay[] = [];
     const counted = collectHistory(
@@ -29,16 +29,39 @@ describe('collectHistory', () => {
       tracks,
       plays,
     );
-    expect(counted).toBe(2);
+    expect(counted).toBe(3);
     expect([...tracks.values()]).toEqual([{ uri: URI, name: 'Never Gonna Give You Up', artist: 'Rick Astley', album: 'Whenever You Need Somebody' }]);
-    expect(plays.map((p) => p.played_at)).toEqual(['2024-03-01T21:14:05Z', '2024-03-02T08:00:00Z']);
+    // Spotify stamps the end; played_at is the start.
+    expect(plays.map((p) => p.played_at)).toEqual(['2024-03-01T21:10:30.000Z', '2024-03-02T07:56:25.000Z', '2024-03-01T21:14:01.000Z']);
+  });
+
+  it('keeps what the export says about each stream, but not the IP address', () => {
+    const plays: ParsedPlay[] = [];
+    collectHistory(
+      [entry({ platform: 'Android OS 9 API 28 (samsung, SM-G950F)', conn_country: 'IE', ip_addr: '1.2.3.4', skipped: true, shuffle: false, offline: false, incognito_mode: false, reason_start: 'clickrow', reason_end: 'fwdbtn' })],
+      new Map(),
+      plays,
+    );
+    expect(plays[0]).toEqual({
+      uri: URI,
+      played_at: '2024-03-01T21:10:30.000Z',
+      ms_played: 215000,
+      skipped: true,
+      shuffle: false,
+      offline: false,
+      incognito: false,
+      platform: 'android',
+      country: 'IE',
+      reason_start: 'clickrow',
+      reason_end: 'fwdbtn',
+    });
+    expect(JSON.stringify(plays)).not.toContain('1.2.3.4');
   });
 
   it('produces plays the server accepts', () => {
     const plays: ParsedPlay[] = [];
     collectHistory([entry()], new Map(), plays);
-    const batch = plays.map((p) => ({ recording_id: 'a1', played_at: p.played_at, ms_played: p.ms_played }));
-    expect(playsRequest.safeParse({ plays: batch }).success).toBe(true);
+    expect(playsRequest.safeParse({ plays }).success).toBe(true);
   });
 
   it('refuses a file that is not a history', () => {

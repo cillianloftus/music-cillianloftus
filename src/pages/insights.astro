@@ -75,7 +75,10 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
 <Base title="Insights" description="What the ratings say: how scores spread, which decades and genres score highest, and how gut and considered judgement differ.">
   <div class="wrap page">
     <PageHeader title="Insights">
-      <a href={`/year/${new Date().getUTCFullYear()}`}>{new Date().getUTCFullYear()} so far →</a>
+      <span class="head-links">
+        <a href="/recap">Your recap →</a>
+        <a href={`/year/${new Date().getUTCFullYear()}`}>{new Date().getUTCFullYear()} so far →</a>
+      </span>
     </PageHeader>
 
     {
@@ -337,6 +340,12 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
 </Base>
 
 <style>
+  .head-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-5);
+  }
+
   /* One row each: the title, when it was first scored and at what, the
      score now, and the move, the numbers in columns that line up. */
   .minds {
