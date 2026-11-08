@@ -46,13 +46,15 @@ export interface Insights {
   headline: Headline;
   spread: Bin[];
   decades: Group[];
+  /** Tracks by the year they came out, newest first: the way into each year's page. */
+  years: Group[];
   families: Group[];
   months: Month[];
   artists: ArtistRow[];
 }
 
 export async function insights(userId: string): Promise<Insights> {
-  const [headline, spread, decades, families, months, artists] = await env.DB.batch([
+  const [headline, spread, decades, families, months, artists, years] = await env.DB.batch([
     env.DB.prepare(
       `SELECT (SELECT count(*) FROM v_recording_score WHERE user_id = ?1) AS ratedTracks,
               (SELECT count(*) FROM v_release_score WHERE user_id = ?1) AS ratedAlbums,
@@ -105,6 +107,12 @@ export async function insights(userId: string): Promise<Insights> {
        ORDER BY tracks DESC, average DESC
        LIMIT 8`,
     ).bind(userId),
+    env.DB.prepare(
+      `SELECT substr(r.first_release_date, 1, 4) AS key, avg(s.quality_score) AS average, count(*) AS count
+       FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
+       WHERE s.user_id = ? AND r.first_release_date IS NOT NULL
+       GROUP BY key ORDER BY key DESC`,
+    ).bind(userId),
   ]);
 
   const h = (headline!.results[0] ?? {}) as Record<string, number | null>;
@@ -120,6 +128,7 @@ export async function insights(userId: string): Promise<Insights> {
     },
     spread: Array.from({ length: 10 }, (_, band) => ({ from: band * 10, to: band === 9 ? 100 : band * 10 + 9, count: bands.get(band) ?? 0 })),
     decades: decades!.results as Group[],
+    years: (years!.results as Group[]).filter((y) => /^\d{4}$/.test(y.key)),
     families: families!.results as Group[],
     months: fillMonths(months!.results as Month[]),
     artists: artists!.results as ArtistRow[],

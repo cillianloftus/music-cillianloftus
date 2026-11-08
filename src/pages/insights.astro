@@ -21,7 +21,7 @@ const viewerId = Astro.locals.user?.id ?? (await ownerId());
 // Kept per library state: every chart here reads the whole library.
 const [data, deep, facts, minds] = viewerId
   ? await Promise.all([
-      byLibrary('insights:v1', viewerId, () => insights(viewerId)),
+      byLibrary('insights:v2', viewerId, () => insights(viewerId)),
       byLibrary('insights-deeper:v1', viewerId, () => deeperInsights(viewerId)),
       libraryFacts(viewerId),
       byLibrary('minds:v1', viewerId, () => changedMinds(viewerId)),
@@ -171,6 +171,23 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
                   colour: `oklch(0.66 0.15 ${scoreHue(d.average)})`,
                 }))}
               />
+            </section>
+          )}
+
+          {data.years.length > 0 && (
+            <section aria-labelledby="years-heading">
+              <h2 id="years-heading">Year by year</h2>
+              <ul role="list" class="years">
+                {data.years.map((y) => (
+                  <li>
+                    <a href={`/year/${y.key}`} style={`--h: ${scoreHue(y.average)}`}>
+                      <span class="year tabular">{y.key}</span>
+                      <span class="avg tabular">{Math.round(y.average)}</span>
+                      <span class="n tabular">{plural(y.count, 'track')}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
             </section>
           )}
 
@@ -487,4 +504,45 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
     font-weight: 800;
   }
 
+
+  /* Every year with rated music, each the way into its own page. */
+  .years {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .years a {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+    gap: 0 var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    text-decoration: none;
+  }
+
+  .years a:hover {
+    border-color: var(--text-subtle);
+  }
+
+  .years .year {
+    font-weight: 750;
+  }
+
+  .years .avg {
+    color: oklch(var(--score-l) var(--score-c) var(--h));
+    font-weight: 750;
+  }
+
+  .years .n {
+    grid-column: 1 / -1;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
 </style>
