@@ -227,12 +227,27 @@ export async function genresFor(entityType: 'release_group' | 'recording', id: s
      FROM tags t JOIN genre g ON g.id = t.genre_id
      WHERE t.source = 'manual' OR NOT EXISTS (SELECT 1 FROM tags WHERE source = 'manual')
      GROUP BY g.id
-     ORDER BY max(t.source = 'manual') DESC, max(t.weight) DESC, g.name
-     LIMIT 6`,
+     ORDER BY max(t.source = 'manual') DESC, max(t.weight) DESC, g.name`,
   )
     .bind(entityType, id)
     .all<Genre>();
   return results;
+}
+
+/**
+ * A track's genres as everything else counts them (v_recording_genre):
+ * its own, or, with none of its own, its album's. `inherited` says which.
+ */
+export async function trackGenres(id: string): Promise<{ genres: Genre[]; inherited: boolean }> {
+  const own = await genresFor('recording', id);
+  if (own.length > 0) return { genres: own, inherited: false };
+  const { results } = await env.DB.prepare(
+    `SELECT g.id, g.name FROM v_recording_genre vg JOIN genre g ON g.id = vg.genre_id
+     WHERE vg.recording_id = ? GROUP BY g.id ORDER BY max(vg.weight) DESC, g.name`,
+  )
+    .bind(id)
+    .all<Genre>();
+  return { genres: results, inherited: results.length > 0 };
 }
 
 export interface Contributor {

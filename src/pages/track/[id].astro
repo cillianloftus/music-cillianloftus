@@ -12,7 +12,7 @@ import ScorePanel from '../../components/ScorePanel.astro';
 import { groupCredits } from '../../lib/credits';
 import LinkIcon from '../../components/LinkIcon.astro';
 import { ownerId } from '../../lib/auth/user';
-import { genresFor, redirectFor, standardTracklist } from '../../lib/catalogue';
+import { redirectFor, standardTracklist, trackGenres } from '../../lib/catalogue';
 import AlbumShape from '../../components/AlbumShape.astro';
 import { hasShape, shapeOf } from '../../lib/shape';
 import { yearOf } from '../../lib/dates';
@@ -39,7 +39,7 @@ const [appearances, credits, versions, genres, history, plays] = await Promise.a
   trackAppearances(id, viewerId),
   trackCredits(id),
   otherVersions(id, track.work_id, viewerId),
-  genresFor('recording', id),
+  trackGenres(id),
   viewerId ? ratingHistory(viewerId, 'recording', id) : Promise.resolve([]),
   user ? playCounts(user.id, [id]) : Promise.resolve(new Map<string, number>()),
 ]);
@@ -151,9 +151,9 @@ function ordinalOf(n: number): string {
         }
 
         {
-          genres.length > 0 && (
-            <ul class="genres" aria-label="Genres">
-              {genres.map((g) => (
+          genres.genres.length > 0 && (
+            <ul class="genres" aria-label={genres.inherited ? 'Genres, from its album' : 'Genres'} title={genres.inherited ? 'From its album' : undefined}>
+              {genres.genres.map((g) => (
                 <li>
                   <a href={`/genre/${g.id}`}>{g.name}</a>
                 </li>
