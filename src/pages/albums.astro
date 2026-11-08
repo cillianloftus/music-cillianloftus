@@ -108,7 +108,7 @@ const heading = KINDS.find(([k]) => k === kind)![1];
     link.setAttribute('aria-busy', 'true');
     try {
       const doc = new DOMParser().parseFromString(await (await fetch(link.href)).text(), 'text/html');
-      grid.append(...doc.querySelectorAll('[data-shelf-grid] > li'));
+      for (const item of doc.querySelectorAll('[data-shelf-grid] > li')) grid.appendChild(item);
       const next = doc.querySelector<HTMLAnchorElement>('[data-more]');
       const count = document.querySelector('[data-more-count]');
       const nextCount = doc.querySelector('[data-more-count]');
