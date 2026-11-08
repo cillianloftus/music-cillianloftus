@@ -205,7 +205,8 @@ const onNow = Astro.url.pathname === '/now';
     gap: var(--space-1);
     padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
     border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-    border-radius: 1rem;
+    /* Concentric with the cover inside it: its corner plus the gap around it. */
+    border-radius: calc(var(--radius-s) + var(--space-1));
     background: var(--surface-1);
     box-shadow: 0 10px 28px -10px rgb(0 0 0 / 0.55);
     overflow: hidden;
