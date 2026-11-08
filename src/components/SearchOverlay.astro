@@ -71,9 +71,13 @@
   }
   function close() {
     if (!dialog?.open) return;
+    input?.blur();
     dialog.close();
   }
   dialog?.addEventListener('close', () => {
+    // The box hides with the panel but can keep focus, and Android then
+    // leaves its keyboard up over a page with nothing to type in.
+    input?.blur();
     delete document.documentElement.dataset.searching;
     if (history.state?.search) history.back();
   });
@@ -85,10 +89,18 @@
     event.preventDefault();
     location.replace(link.href);
   });
+  // A page brought back from the back/forward cache starts with the panel shut.
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted && dialog?.open && !history.state?.search) {
+      input?.blur();
+      dialog.close();
+    }
+  });
   // Back closes the panel rather than leaving the page.
   window.addEventListener('popstate', () => {
     if (dialog?.open) {
       history.replaceState(null, '');
+      input?.blur();
       dialog.close();
     }
   });
