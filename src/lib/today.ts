@@ -10,8 +10,13 @@ import { env } from 'cloudflare:workers';
 
 /** Two weeks ahead: a big anniversary is worth knowing of before the day. */
 export const WINDOW_DAYS = 14;
-/** The calendar's picks kept, by how much they are likely to matter (care below). */
-export const MAX_CALENDAR_PICKS = 24;
+/**
+ * How many of the calendar's picks are kept. Not a fixed count: everything
+ * that clears the bar (care, below), so a fortnight full of things that
+ * matter shows them all; at least a few columns' worth when it is quiet,
+ * and never so many the row stops being a glance.
+ */
+export const CALENDAR_PICKS = { min: 12, max: 40, bar: 3 };
 
 /** A version of something rather than the thing: remixes, edits, live takes. */
 const VERSION = /\b(remix(es|ed)?|mix|edit|version|live|acoustic|instrumental|sped[ -]?up|slowed|reverb|remaster(ed)?|demo|rework|flip|bootleg)\b/i;
@@ -228,11 +233,12 @@ export async function todayPicks(
     : [];
   const scores = new Map(scored.map((r) => [r.id, r.score]));
 
-  // Most likely to matter first (care, above); only the best of them kept.
+  // Most likely to matter first (care, above): all that clear the bar, within
+  // the bounds (CALENDAR_PICKS).
   const ranked = picks
     .map((p) => ({ p, weight: care({ ...p, score: scores.get(p.id) ?? null }) }))
     .sort((x, y) => y.weight - x.weight)
-    .slice(0, MAX_CALENDAR_PICKS)
+    .filter((x, i) => i < CALENDAR_PICKS.min || (x.weight >= CALENDAR_PICKS.bar && i < CALENDAR_PICKS.max))
     .map((x) => x.p);
   picks.length = 0;
   picks.push(...ranked);
