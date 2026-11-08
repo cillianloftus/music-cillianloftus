@@ -57,6 +57,9 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     <SearchOverlay />
     {Astro.locals.user && <SoftForms />}
     <script>
+      import { startSuggestions } from '../lib/client/suggest';
+      startSuggestions();
+
       // Every pop-up menu (a <details data-menu>) closes on a click or tap
       // anywhere outside it, on Escape, and when another one opens.
       const menus = () => [...document.querySelectorAll<HTMLDetailsElement>('details[data-menu][open]')];

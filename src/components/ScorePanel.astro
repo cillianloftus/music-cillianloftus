@@ -96,7 +96,7 @@ const bare = coverage === null && axes.length === 0 && !best && !(rating && rati
           )}
         </div>
 
-        {!bare && <div class="details">
+        {!bare && <div class:list={['details', { pairs: axes.length >= 4 && coverage === null && !best }]}>
           {coverage !== null && (
             <div class="meter">
               <p class="meter-label">
@@ -146,8 +146,8 @@ const bare = coverage === null && axes.length === 0 && !best && !(rating && rati
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
-    gap: var(--space-4) var(--space-6);
-    padding: var(--space-4) var(--space-5);
+    gap: var(--space-3) var(--space-5);
+    padding: var(--space-3) var(--space-4);
     border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
     border-radius: var(--radius-l);
     background: color-mix(in srgb, var(--surface-1) 72%, transparent);
@@ -217,7 +217,7 @@ const bare = coverage === null && axes.length === 0 && !best && !(rating && rati
   }
 
   .value {
-    font-size: clamp(2.8rem, 2rem + 3vw, 4rem);
+    font-size: clamp(2.4rem, 1.9rem + 2vw, 3.4rem);
     font-weight: 800;
     letter-spacing: -0.04em;
   }
@@ -242,6 +242,23 @@ const bare = coverage === null && axes.length === 0 && !best && !(rating && rati
   .meter {
     display: grid;
     gap: 3px;
+  }
+
+  /* A track's four craft axes: two by two, half the height of a column. */
+  .details.pairs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .pairs .meter-label {
+    gap: var(--space-2);
+  }
+
+  .pairs .meter-label > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .meter-label {
@@ -273,7 +290,7 @@ const bare = coverage === null && axes.length === 0 && !best && !(rating && rati
   }
 
 
-  @media (max-width: 26rem) {
+  @media (max-width: 30rem) {
     .panel {
       grid-template-columns: minmax(0, 1fr);
     }

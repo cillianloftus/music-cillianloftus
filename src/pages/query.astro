@@ -295,6 +295,7 @@ const saveHref = `/edit/definition/${saved ? saved.id : 'new'}?d=${encodeDefinit
                       value={firstValue}
                       inputmode={field.type === 'number' ? 'decimal' : undefined}
                       list={field.type === 'genre' ? 'genre-names' : field.type === 'credit' ? 'artist-names' : undefined}
+                      data-many={opsFor(field).includes('in') ? '' : undefined}
                       autocomplete="off"
                       aria-describedby="value-hint"
                     />

@@ -235,6 +235,41 @@ h1 {
   border: 0;
 }
 
+/* Suggestions under a text box (src/lib/client/suggest.ts): a solid
+   sheet floating above the page, in place of the browser's datalist. */
+.suggest-sheet {
+  position: absolute;
+  z-index: 60;
+  max-height: min(16rem, 40vh);
+  margin: 0;
+  padding: var(--space-1);
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-1);
+  box-shadow: var(--shadow);
+}
+
+.suggest-sheet[hidden] {
+  display: none;
+}
+
+.suggest-sheet [role='option'] {
+  display: flex;
+  align-items: center;
+  min-height: var(--target);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-s);
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.suggest-sheet [role='option']:hover,
+.suggest-sheet [aria-selected='true'] {
+  background: var(--surface-2);
+}
+
 .wrap {
   width: 100%;
   max-width: var(--measure);
