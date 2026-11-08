@@ -24,10 +24,11 @@ if (!Number.isInteger(year) || year < 1900 || year > thisYear) return Astro.rewr
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
 if (!viewerId) return Astro.rewrite('/404');
 const review = await yearInReview(viewerId, year);
-const [releases, discoveries, moments] = await Promise.all([
+const [releases, discoveries, moments, bestOut] = await Promise.all([
   releaseGroupsByIds(review.releases, viewerId),
   hydrateTracks(review.discoveries, viewerId),
   ratingMomentsIn(viewerId, year),
+  hydrateTracks(review.released.best, viewerId),
 ]);
 // Keep the order the review chose (best first).
 const releaseOrder = new Map(review.releases.map((id, i) => [id, i]));
@@ -45,15 +46,21 @@ const busiest = [...byMonth].map(([month, count]) => ({ month, count })).sort((a
 const older = review.years.filter((y) => y < year)[0];
 const newer = [...review.years].reverse().find((y) => y > year);
 const inProgress = year === thisYear;
+// Two kinds of year: the music that came out in it, and the rating done in
+// it. Only what has something to say is shown, so 2015 is about 2015's
+// records and this year is about both.
+const out = review.released;
 const stats = [
-  { label: 'tracks rated', value: review.rated },
-  { label: review.newArtists === 1 ? 'new artist' : 'new artists', value: review.newArtists },
+  ...(out.albums ? [{ label: out.albums === 1 ? 'album or EP from it' : 'albums and EPs from it', value: out.albums }] : []),
+  ...(out.rated ? [{ label: out.rated === 1 ? 'track rated' : 'tracks rated', value: out.rated }] : []),
+  ...(out.average !== null ? [{ label: 'their average', value: Math.round(out.average) }] : []),
+  ...(review.rated ? [{ label: `rated in ${year}`, value: review.rated }] : []),
+  ...(review.newArtists ? [{ label: review.newArtists === 1 ? 'new artist' : 'new artists', value: review.newArtists }] : []),
   ...(review.plays ? [{ label: 'plays', value: review.plays }] : []),
-  ...(review.average !== null ? [{ label: 'average score', value: Math.round(review.average) }] : []),
 ];
 ---
 
-<Base title={`${year} in review`} description={`${year} in music: ${n(review.rated, 'track')} rated, ${n(review.newArtists, 'new artist')}.`}>
+<Base title={`${year} in review`} description={`${year} in music: the best of what came out, and what was rated.`}>
   <div class="wrap page">
     <header>
       <p class="eyebrow">{inProgress ? 'So far' : 'In review'}</p>
@@ -65,8 +72,8 @@ const stats = [
     </header>
 
     {
-      review.rated === 0 && releases.length === 0 ? (
-        <p class="muted">Nothing rated in {year}.</p>
+      review.rated === 0 && releases.length === 0 && out.rated === 0 ? (
+        <p class="muted">Nothing from {year} rated yet.</p>
       ) : (
         <>
           <dl class="stats">
@@ -97,6 +104,29 @@ const stats = [
                   ))}
                 </ol>
               </Shelf>
+            </section>
+          )}
+
+          {bestOut.length > 0 && (
+            <section aria-labelledby="best-out-heading">
+              <h2 id="best-out-heading">Best songs of {year}</h2>
+              <ResultList results={bestOut} />
+            </section>
+          )}
+
+          {out.artists.length > 1 && (
+            <section aria-labelledby="year-artists-heading">
+              <h2 id="year-artists-heading">Whose {year} it was</h2>
+              <ol class="found" role="list">
+                {out.artists.map((a) => (
+                  <li>
+                    <a href={`/artist/${a.id}`}>{a.name}</a>
+                    <span class="muted small tabular">
+                      {Math.round(a.average)} across {n(a.tracks, 'track')}
+                    </span>
+                  </li>
+                ))}
+              </ol>
             </section>
           )}
 

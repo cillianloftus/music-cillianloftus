@@ -29,12 +29,24 @@ export interface YearReview {
   findings: Finding[];
   /** Years with ratings or releases, for moving between pages. */
   years: number[];
+  /** The music that came out this year, whenever it was rated. */
+  released: {
+    /** Albums, mixtapes and EPs out this year, in the library. */
+    albums: number;
+    /** Tracks out this year that have been rated, and their average. */
+    rated: number;
+    average: number | null;
+    /** The best of them, best first. */
+    best: string[];
+    /** Artists by their average across this year's tracks, at least two. */
+    artists: { id: string; name: string; average: number; tracks: number }[];
+  };
 }
 
 export async function yearInReview(userId: string, year: number): Promise<YearReview> {
   const from = `${year}-01-01`;
   const to = `${year + 1}-01-01`;
-  const [totals, releases, discoveries, found, months, years] = await env.DB.batch([
+  const [totals, releases, discoveries, found, months, years, outTotals, outBest, outArtists] = await env.DB.batch([
     env.DB.prepare(
       `WITH firsts AS (
          SELECT entity_id, min(rated_at) AS first FROM rating WHERE user_id = ?1 AND entity_type = 'recording' GROUP BY entity_id
@@ -86,9 +98,34 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
     env.DB.prepare(
       `SELECT DISTINCT CAST(substr(rated_at, 1, 4) AS INTEGER) AS y FROM rating WHERE user_id = ?1
        UNION SELECT DISTINCT CAST(substr(played_at, 1, 4) AS INTEGER) FROM play WHERE user_id = ?1
+       UNION SELECT DISTINCT CAST(substr(r.first_release_date, 1, 4) AS INTEGER) FROM v_recording_score s
+             JOIN recording r ON r.id = s.recording_id WHERE s.user_id = ?1 AND r.first_release_date IS NOT NULL
        ORDER BY y DESC`,
     ).bind(userId),
+    // The music of the year: what came out in it, however long after it was rated.
+    env.DB.prepare(
+      `SELECT (SELECT count(*) FROM release_group WHERE first_release_date >= ?2 AND first_release_date < ?3
+                 AND type IN ('album', 'mixtape', 'ep') AND (coalesce(official, 1) = 1 OR keep_unofficial = 1)) AS albums,
+              count(s.recording_id) AS rated, avg(s.quality_score) AS average
+       FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
+       WHERE s.user_id = ?1 AND r.first_release_date >= ?2 AND r.first_release_date < ?3`,
+    ).bind(userId, from, to),
+    env.DB.prepare(
+      `SELECT s.recording_id AS id FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
+       WHERE s.user_id = ?1 AND r.first_release_date >= ?2 AND r.first_release_date < ?3
+       ORDER BY s.personal_score DESC, s.quality_score DESC LIMIT 15`,
+    ).bind(userId, from, to),
+    env.DB.prepare(
+      `SELECT a.id, a.name, avg(s.quality_score) AS average, count(*) AS tracks
+       FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
+       JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary'
+       JOIN artist a ON a.id = c.artist_id
+       WHERE s.user_id = ?1 AND r.first_release_date >= ?2 AND r.first_release_date < ?3
+       GROUP BY a.id HAVING count(*) >= 2
+       ORDER BY average DESC, tracks DESC LIMIT 8`,
+    ).bind(userId, from, to),
   ]);
+  const out = outTotals!.results[0] as { albums: number; rated: number; average: number | null };
 
   const t = totals!.results[0] as { rated: number; average: number | null; plays: number; new_artists: number };
   // Every month of the year, so a quiet one shows as quiet.
@@ -115,6 +152,13 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
     months: allMonths,
     findings,
     years: (years!.results as { y: number }[]).map((r) => r.y).filter((y) => y > 1900),
+    released: {
+      albums: out.albums,
+      rated: out.rated,
+      average: out.average,
+      best: (outBest!.results as { id: string }[]).map((r) => r.id),
+      artists: outArtists!.results as YearReview['released']['artists'],
+    },
   };
 }
 

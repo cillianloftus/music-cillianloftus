@@ -384,6 +384,18 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
     color: var(--text-muted);
   }
 
+  /* Phones: the date over what was given, full width. */
+  @media (max-width: 39.99rem) {
+    .history ol {
+      gap: var(--space-3);
+    }
+
+    .history li {
+      grid-template-columns: 1fr;
+      gap: 0;
+    }
+  }
+
   .not-song {
     display: flex;
     flex-wrap: wrap;
