@@ -29,7 +29,8 @@ const [data, deep, facts, minds] = viewerId
   : [null, null, [], []];
 const since = new Intl.DateTimeFormat('en-GB', { month: 'short', year: 'numeric', timeZone: 'Europe/Dublin' });
 // Whatever stands out in the ratings right now, found rather than chosen.
-const findings = discover(facts, { limit: 18 });
+// A deep pool, turned over on each visit (Findings, rotate).
+const findings = discover(facts, { limit: 30 });
 const h = data?.headline;
 
 const monthLabel = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' });
@@ -116,7 +117,7 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
 
           <section aria-labelledby="patterns-heading">
             <h2 id="patterns-heading">What stands out</h2>
-            {findings.length > 0 ? <Findings findings={findings} show={9} /> : <p>Nothing stands out yet.</p>}
+            {findings.length > 0 ? <Findings findings={findings} show={9} rotate="insights" /> : <p>Nothing stands out yet.</p>}
           </section>
 
           {minds.length > 0 && (

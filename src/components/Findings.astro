@@ -11,16 +11,26 @@ interface Props {
   findings: Finding[];
   /** How many to show before "More"; the rest wait one tap away. */
   show?: number;
+  /**
+   * Turn the findings over on every visit: a key naming this place (say
+   * "home"). All of findings is the pool; each visit shows a fresh few, the
+   * stronger ones more often and seldom the same as last time. Done in the
+   * browser, so it works on pages served from the cache.
+   */
+  rotate?: string;
+  /** Offer the ones not shown under "N more" (on by default). */
+  moreList?: boolean;
 }
-const { findings, show = findings.length } = Astro.props;
+const { findings, show = findings.length, rotate, moreList = true } = Astro.props;
 const first = findings.slice(0, show);
 const more = findings.slice(show);
 ---
 
-<ul class="findings" role="list">
+<div class="findings-box" data-rotate={rotate} data-show={show}>
+<ul class="findings" role="list" data-first>
   {
-    first.map((f) => (
-      <li class:list={['finding', `finding--${f.tone}`, { 'finding--link': f.href, 'finding--hunch': f.confidence === 'hunch' }]}>
+    first.map((f, i) => (
+      <li class:list={['finding', `finding--${f.tone}`, { 'finding--link': f.href, 'finding--hunch': f.confidence === 'hunch' }]} data-rank={i}>
         <span class="mark" aria-hidden="true">
           {f.tone === 'up' ? '↑' : f.tone === 'down' ? '↓' : '∿'}
         </span>
@@ -40,11 +50,11 @@ const more = findings.slice(show);
 </ul>
 {
   more.length > 0 && (
-    <details class="more">
-      <summary>{more.length} more</summary>
-      <ul class="findings" role="list">
-        {more.map((f) => (
-          <li class:list={['finding', `finding--${f.tone}`, { 'finding--link': f.href, 'finding--hunch': f.confidence === 'hunch' }]}>
+    <details class="more" hidden={!moreList}>
+      <summary data-more-count>{more.length} more</summary>
+      <ul class="findings" role="list" data-more>
+        {more.map((f, i) => (
+          <li class:list={['finding', `finding--${f.tone}`, { 'finding--link': f.href, 'finding--hunch': f.confidence === 'hunch' }]} data-rank={show + i}>
             <span class="mark" aria-hidden="true">
               {f.tone === 'up' ? '↑' : f.tone === 'down' ? '↓' : '∿'}
             </span>
@@ -64,8 +74,52 @@ const more = findings.slice(show);
     </details>
   )
 }
+</div>
+
+<script>
+  // Each visit, a fresh few: weighted to the stronger findings, and away
+  // from the ones shown here last time, remembered on this device.
+  for (const box of document.querySelectorAll<HTMLElement>('.findings-box[data-rotate]')) {
+    const key = `findings-seen:${box.dataset.rotate}`;
+    const show = Number(box.dataset.show);
+    const first = box.querySelector<HTMLElement>('[data-first]');
+    const more = box.querySelector<HTMLElement>('[data-more]');
+    if (!first || !more) continue;
+    let seen: string[] = [];
+    try {
+      seen = JSON.parse(localStorage.getItem(key) ?? '[]') as string[];
+    } catch {}
+    const name = (li: HTMLElement) => li.querySelector('.headline')?.textContent?.trim() ?? '';
+    const pool = [...box.querySelectorAll<HTMLLIElement>('li.finding')].map((li) => ({
+      li,
+      weight: (1 / (1 + Number(li.dataset.rank) * 0.2)) * (seen.includes(name(li)) ? 0.12 : 1),
+    }));
+    const picked: HTMLLIElement[] = [];
+    while (picked.length < show && pool.length) {
+      let roll = Math.random() * pool.reduce((sum, p) => sum + p.weight, 0);
+      const i = Math.max(0, pool.findIndex((p) => (roll -= p.weight) <= 0));
+      picked.push(pool.splice(i, 1)[0]!.li);
+    }
+    const byRank = (a: HTMLElement, b: HTMLElement) => Number(a.dataset.rank) - Number(b.dataset.rank);
+    first.replaceChildren(...picked.sort(byRank));
+    more.replaceChildren(...pool.map((p) => p.li).sort(byRank));
+    const count = box.querySelector('[data-more-count]');
+    if (count) count.textContent = `${pool.length} more`;
+    try {
+      localStorage.setItem(key, JSON.stringify(picked.map(name)));
+    } catch {}
+  }
+</script>
 
 <style>
+  .findings-box {
+    display: grid;
+  }
+
+  .more[hidden] {
+    display: none;
+  }
+
   .findings {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));

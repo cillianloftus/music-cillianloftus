@@ -54,14 +54,9 @@ const [[recent, top, ratings, stats, picks, topSingles, topEps, topMixtapes, fav
   viewerId ? libraryFacts(viewerId) : Promise.resolve([]),
 ]);
 
-// Three things the ratings show, drawn from the strongest dozen and turned
-// over each day, so the home page keeps pointing at something new.
-const noticed = (() => {
-  const strongest = discover(facts, { limit: 12 });
-  if (strongest.length <= 3) return strongest;
-  const day = Math.floor(Date.now() / 86_400_000);
-  return Array.from({ length: 3 }, (_, i) => strongest[(day * 3 + i) % strongest.length]!).filter((f, i, all) => all.indexOf(f) === i);
-})();
+// Things the ratings show: the strongest fifteen sent, three shown, a fresh
+// three on every visit (Findings turns them over in the browser).
+const noticed = discover(facts, { limit: 15 });
 
 // Artist lines for the picks, so each artist links to their page.
 const pickAlbums = picks.filter((p) => ['anniversary', 'unrated', 'month', 'revisit'].includes(p.kind)).map((p) => p.id);
@@ -283,7 +278,7 @@ const statItems = [
             <h2 id="noticed-heading">You might not have noticed</h2>
             <a href="/insights#patterns-heading">More</a>
           </div>
-          <Findings findings={noticed} />
+          <Findings findings={noticed} show={3} rotate="home" moreList={false} />
         </section>
       )
     }
