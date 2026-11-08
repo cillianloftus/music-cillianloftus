@@ -29,6 +29,8 @@ const axisWeight = z.coerce.number().min(AXIS_WEIGHT.min).max(AXIS_WEIGHT.max).m
 export const weightsForm = z
   .object({
     ...Object.fromEntries([...CRAFT_KEYS, ...ALBUM_KEYS].map((key) => [key, axisWeight])),
+    // Older links and forms, from before it existed (0045): the default.
+    originality: axisWeight.default(DEFAULT_WEIGHTS.craft.originality),
     tracks_share: z.coerce.number().int().min(0).max(100).multipleOf(5),
     // Older links and forms have neither: they mean the defaults.
     interlude_share: z.coerce.number().int().min(0).max(100).multipleOf(5).default(Math.round(DEFAULT_WEIGHTS.release.interlude * 100)),
@@ -184,7 +186,7 @@ export async function scoreInputs(userId: string): Promise<ScoreInputs> {
     env.DB.prepare(
       `SELECT entity_type, entity_id, rated_at, gut_score, impact,
               coalesce(arrangement, production) AS arrangement, coalesce(sound, production) AS sound,
-              songwriting, lyrics, performance, sequencing, cohesion, ambition
+              songwriting, lyrics, performance, originality, sequencing, cohesion, ambition
        FROM rating WHERE user_id = ? ORDER BY rated_at`,
     ).bind(userId),
     env.DB.prepare(

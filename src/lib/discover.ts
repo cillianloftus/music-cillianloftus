@@ -53,7 +53,7 @@ export interface TrackFact {
   credits: Credit[];
   genres: { id: string; name: string }[];
   plays: number;
-  axes: { arrangement: number | null; sound: number | null; songwriting: number | null; lyrics: number | null; performance: number | null };
+  axes: { arrangement: number | null; sound: number | null; songwriting: number | null; lyrics: number | null; performance: number | null; originality: number | null };
   /** The quick gut score (out of 100) given alongside a considered rating, if any. */
   gut: number | null;
 }
@@ -80,6 +80,7 @@ interface Row {
   songwriting: number | null;
   lyrics: number | null;
   performance: number | null;
+  originality: number | null;
   gut_score: number | null;
 }
 
@@ -102,7 +103,7 @@ export async function trackFacts(userId: string, scope: { artistId?: string; alb
                 OR (gt.entity_type = 'release_group' AND gt.entity_id = g.id)) AS genres,
             (SELECT count(*) FROM play p WHERE p.user_id = s.user_id AND p.recording_id = r.id AND p.counted = 1) AS plays,
             coalesce(ax.arrangement, ax.production) AS arrangement, coalesce(ax.sound, ax.production) AS sound,
-            ax.songwriting, ax.lyrics, ax.performance, ax.gut_score
+            ax.songwriting, ax.lyrics, ax.performance, ax.originality, ax.gut_score
      FROM v_recording_score s
      JOIN recording r ON r.id = s.recording_id
      LEFT JOIN rating ax ON ax.user_id = s.user_id AND ax.entity_type = 'recording' AND ax.entity_id = r.id
@@ -149,9 +150,9 @@ export async function trackFacts(userId: string, scope: { artistId?: string; alb
     credits: parse<Credit>(r.credits),
     genres: parse<{ id: string; name: string }>(r.genres),
     plays: r.plays ?? 0,
-    axes: { arrangement: r.arrangement, sound: r.sound, songwriting: r.songwriting, lyrics: r.lyrics, performance: r.performance },
+    axes: { arrangement: r.arrangement, sound: r.sound, songwriting: r.songwriting, lyrics: r.lyrics, performance: r.performance, originality: r.originality },
     // Only where the considered axes are there too: otherwise the score is the gut.
-    gut: r.gut_score !== null && (r.arrangement ?? r.sound ?? r.songwriting ?? r.lyrics ?? r.performance) !== null ? r.gut_score * 10 : null,
+    gut: r.gut_score !== null && (r.arrangement ?? r.sound ?? r.songwriting ?? r.lyrics ?? r.performance ?? r.originality) !== null ? r.gut_score * 10 : null,
   }));
 }
 
@@ -565,8 +566,13 @@ function trendFindings(facts: TrackFact[], opts: Options, tally: Tally): Finding
 
 /** Which axis decides a score, and which one you are hardest on. */
 function axisFindings(facts: TrackFact[]): Finding[] {
-  const names = ['arrangement', 'sound', 'songwriting', 'lyrics', 'performance'] as const;
-  const detailed = facts.filter((f) => names.every((n) => f.axes[n] !== null));
+  // Originality (0045) joins once enough ratings have it: until then, requiring
+  // it would leave out every track rated before it existed.
+  const five = ['arrangement', 'sound', 'songwriting', 'lyrics', 'performance'] as const;
+  const withFive = facts.filter((f) => five.every((n) => f.axes[n] !== null));
+  const withSix = withFive.filter((f) => f.axes.originality !== null);
+  const names: readonly (keyof TrackFact['axes'])[] = withSix.length >= Math.max(8, withFive.length / 2) ? [...five, 'originality'] : five;
+  const detailed = names.length === 6 ? withSix : withFive;
   if (detailed.length < 8) return [];
   const out: Finding[] = [];
   // The axis that moves most with the others' total: the one that decides.

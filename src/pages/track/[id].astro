@@ -77,6 +77,7 @@ const axes = latest
       ['Songwriting', 'songwriting', latest.songwriting],
       ['Lyrics', 'lyrics', latest.lyrics],
       ['Performance', 'performance', latest.performance],
+      ['Originality', 'originality', latest.originality],
     ] as const)
       .filter(([, key, v]) => v != null || latest.not_applicable.includes(key))
       .map(([label, key, v]) => [label, v ?? (latest.not_applicable.includes(key) ? 'n/a' : null)] as const)
@@ -376,6 +377,7 @@ function ordinalOf(n: number): string {
                   {r.songwriting != null && ` · Songwriting ${r.songwriting}`}
                   {r.lyrics != null && ` · Lyrics ${r.lyrics}`}
                   {r.performance != null && ` · Performance ${r.performance}`}
+                  {r.originality != null && ` · Originality ${r.originality}`}
                   {r.impact != null && ` · Impact ${r.impact}`}
                 </span>
               </li>

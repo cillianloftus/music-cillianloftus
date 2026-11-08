@@ -19,7 +19,7 @@ const fact = (id: string, score: number, extra: Partial<TrackFact> = {}): TrackF
   credits: [{ id: 'ar', name: 'The Artist', role: 'primary', label: 'Artist', family: 'artist', position: 1, born: null }],
   genres: [],
   plays: 0,
-  axes: { arrangement: null, sound: null, songwriting: null, lyrics: null, performance: null },
+  axes: { arrangement: null, sound: null, songwriting: null, lyrics: null, performance: null, originality: null },
   gut: null,
   ...extra,
 });

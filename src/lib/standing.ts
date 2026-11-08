@@ -20,7 +20,7 @@ const ordinal = (n: number) => {
   return `${n}${suffix}`;
 };
 
-const AXES = ['arrangement', 'sound', 'songwriting', 'lyrics', 'performance'] as const;
+const AXES = ['arrangement', 'sound', 'songwriting', 'lyrics', 'performance', 'originality'] as const;
 
 /** How a track places among some scores: better than it, and level with it (itself excluded). */
 function placing(score: number, scores: number[]): { above: number; level: number } {

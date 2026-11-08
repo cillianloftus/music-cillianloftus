@@ -12,8 +12,8 @@
  * No imports: this file is bundled into the browser as well.
  */
 
-/** Arrangement and sound split production in two (migrations/0042). */
-export const CRAFT_KEYS = ['arrangement', 'sound', 'songwriting', 'lyrics', 'performance'] as const;
+/** Arrangement and sound split production in two (migrations/0042); originality joined (0045). */
+export const CRAFT_KEYS = ['arrangement', 'sound', 'songwriting', 'lyrics', 'performance', 'originality'] as const;
 export const ALBUM_KEYS = ['sequencing', 'cohesion', 'ambition'] as const;
 export type CraftKey = (typeof CRAFT_KEYS)[number];
 export type AlbumKey = (typeof ALBUM_KEYS)[number];
@@ -30,7 +30,7 @@ export interface Weights {
 
 /** The defaults the views fall back to for any missing key. */
 export const DEFAULT_WEIGHTS: Weights = {
-  craft: { arrangement: 0.5, sound: 0.5, songwriting: 1, lyrics: 1, performance: 1 },
+  craft: { arrangement: 0.5, sound: 0.5, songwriting: 1, lyrics: 1, performance: 1, originality: 1 },
   album: { sequencing: 1, cohesion: 1, ambition: 1 },
   release: { tracks: 0.7, album_axes: 0.3, trim_lowest: true, interlude: 0.5, length: 0 },
 };

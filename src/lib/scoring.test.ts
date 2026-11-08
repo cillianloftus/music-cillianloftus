@@ -195,7 +195,7 @@ describe('weights versions', () => {
   });
 
   it('rejects a group with every weight at zero, and off-step values', () => {
-    expect(weightsForm.safeParse(form({ arrangement: '0', sound: '0', songwriting: '0', lyrics: '0', performance: '0' })).success).toBe(false);
+    expect(weightsForm.safeParse(form({ arrangement: '0', sound: '0', songwriting: '0', lyrics: '0', performance: '0', originality: '0' })).success).toBe(false);
     expect(weightsForm.safeParse(form({ lyrics: '1.1' })).success).toBe(false);
     expect(weightsForm.safeParse(form({ lyrics: '4' })).success).toBe(false);
     expect(weightsForm.safeParse(form({ tracks_share: '101' })).success).toBe(false);

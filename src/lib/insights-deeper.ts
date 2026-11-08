@@ -50,6 +50,13 @@ export function favourite(bands: Band[]): Band | null {
   return bands.filter((b) => b.count >= 2).sort((a, b) => b.average - a.average || b.count - a.count)[0] ?? null;
 }
 
+/** The axes query's one wide row as a row per axis, the shape bands() reads. */
+function axisRows(result: D1Result | undefined): D1Result | undefined {
+  const row = (result?.results?.[0] ?? {}) as Record<string, number | null>;
+  const keys = ['arrangement', 'sound', 'songwriting', 'lyrics', 'performance', 'originality'];
+  return result && { ...result, results: keys.map((key) => ({ key, average: row[`${key}_average`] ?? null, count: row[`${key}_count`] ?? 0 })) };
+}
+
 export async function deeperInsights(userId: string): Promise<Deeper> {
   const [length, position, features, age, axes] = await env.DB.batch([
     // Song length, in bands that read naturally.
@@ -119,11 +126,15 @@ export async function deeperInsights(userId: string): Promise<Deeper> {
          WHERE x.user_id = ?1 AND x.entity_type = 'recording'
            AND x.rated_at = (SELECT max(y.rated_at) FROM rating y WHERE y.user_id = x.user_id AND y.entity_type = 'recording' AND y.entity_id = x.entity_id)
        )
-       SELECT 'arrangement' AS key, avg(coalesce(arrangement, production)) * 10 AS average, count(coalesce(arrangement, production)) AS count FROM latest
-       UNION ALL SELECT 'sound', avg(coalesce(sound, production)) * 10, count(coalesce(sound, production)) FROM latest
-       UNION ALL SELECT 'songwriting', avg(songwriting) * 10, count(songwriting) FROM latest
-       UNION ALL SELECT 'lyrics', avg(lyrics) * 10, count(lyrics) FROM latest
-       UNION ALL SELECT 'performance', avg(performance) * 10, count(performance) FROM latest`,
+       -- One row, a pair of columns per axis (D1 refuses a UNION of more than
+       -- five SELECTs); turned into a row per axis below.
+       SELECT avg(coalesce(arrangement, production)) * 10 AS arrangement_average, count(coalesce(arrangement, production)) AS arrangement_count,
+              avg(coalesce(sound, production)) * 10 AS sound_average, count(coalesce(sound, production)) AS sound_count,
+              avg(songwriting) * 10 AS songwriting_average, count(songwriting) AS songwriting_count,
+              avg(lyrics) * 10 AS lyrics_average, count(lyrics) AS lyrics_count,
+              avg(performance) * 10 AS performance_average, count(performance) AS performance_count,
+              avg(originality) * 10 AS originality_average, count(originality) AS originality_count
+       FROM latest`,
     ).bind(userId),
   ]);
 
@@ -132,7 +143,7 @@ export async function deeperInsights(userId: string): Promise<Deeper> {
     position: { '0': 'Opener', '1': 'First half', '2': 'Second half', '3': 'Closer' },
     features: { '0': 'Solo', '1': 'With a guest' },
     age: { '0': 'Under 20', '1': '20–24', '2': '25–29', '3': '30s', '4': '40 +' },
-    axes: { arrangement: 'Arrangement', sound: 'Sound', songwriting: 'Songwriting', lyrics: 'Lyrics', performance: 'Performance' },
+    axes: { arrangement: 'Arrangement', sound: 'Sound', songwriting: 'Songwriting', lyrics: 'Lyrics', performance: 'Performance', originality: 'Originality' },
   };
   const bands = (result: D1Result | undefined, kind: keyof typeof LABELS) =>
     ((result?.results ?? []) as { key: string | null; average: number | null; count: number }[])
@@ -158,6 +169,6 @@ export async function deeperInsights(userId: string): Promise<Deeper> {
     age: groupBy((x) => bandOf(x.age), (k) => LABELS.age![k] ?? k),
     ageByYear: groupBy((x) => String(x.age), (k) => k),
     ageLink: r === null ? null : { r, tracks: aged.length, artists: new Set(aged.map((x) => x.artist_id)).size },
-    axes: bands(axes, 'axes'),
+    axes: bands(axisRows(axes), 'axes'),
   };
 }

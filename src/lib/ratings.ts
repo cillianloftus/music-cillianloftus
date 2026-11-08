@@ -6,8 +6,11 @@
 import { env } from 'cloudflare:workers';
 import { z } from 'zod';
 
-/** Production was one axis until 8 Nov 2026; it is now arrangement and sound (migrations/0042). */
-export const CRAFT_AXES = ['arrangement', 'sound', 'songwriting', 'lyrics', 'performance'] as const;
+/**
+ * Production was one axis until 8 Nov 2026; it is now arrangement and sound
+ * (migrations/0042). Originality joined the same day (0045).
+ */
+export const CRAFT_AXES = ['arrangement', 'sound', 'songwriting', 'lyrics', 'performance', 'originality'] as const;
 export const ALBUM_AXES = ['sequencing', 'cohesion', 'ambition'] as const;
 export type CraftAxis = (typeof CRAFT_AXES)[number];
 export type AlbumAxis = (typeof ALBUM_AXES)[number];
@@ -36,7 +39,7 @@ export const ratingInput = z
       z.string().max(500).nullable(),
     ),
     /** Axes that do not apply (an instrumental has no lyrics): left out, and remembered as such. */
-    not_applicable: z.array(z.enum([...CRAFT_AXES, ...ALBUM_AXES])).max(8).default([]),
+    not_applicable: z.array(z.enum([...CRAFT_AXES, ...ALBUM_AXES])).max(CRAFT_AXES.length + ALBUM_AXES.length).default([]),
   })
   .superRefine((input, ctx) => {
     const forbidden = input.entity_type === 'recording' ? ALBUM_AXES : CRAFT_AXES;
@@ -83,9 +86,9 @@ export async function addRating(userId: string, input: RatingInput): Promise<str
 
   await env.DB.prepare(
     `INSERT INTO rating (id, user_id, entity_type, entity_id, depth, gut_score,
-                         arrangement, sound, songwriting, lyrics, performance,
+                         arrangement, sound, songwriting, lyrics, performance, originality,
                          sequencing, cohesion, ambition, impact, impact_note, not_applicable)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -99,6 +102,7 @@ export async function addRating(userId: string, input: RatingInput): Promise<str
       input.songwriting,
       input.lyrics,
       input.performance,
+      input.originality,
       input.sequencing,
       input.cohesion,
       input.ambition,
@@ -122,6 +126,8 @@ export interface RatingRow {
   songwriting: number | null;
   lyrics: number | null;
   performance: number | null;
+  /** None on rows rated before 0045. */
+  originality: number | null;
   sequencing: number | null;
   cohesion: number | null;
   ambition: number | null;
@@ -140,7 +146,7 @@ export async function ratingHistory(
   const { results } = await env.DB.prepare(
     `SELECT id, rated_at, depth, gut_score, production,
             coalesce(arrangement, production) AS arrangement, coalesce(sound, production) AS sound,
-            songwriting, lyrics, performance,
+            songwriting, lyrics, performance, originality,
             sequencing, cohesion, ambition, impact, impact_note, not_applicable
      FROM rating
      WHERE user_id = ? AND entity_type = ? AND entity_id = ?

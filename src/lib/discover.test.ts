@@ -56,7 +56,7 @@ function library(): TrackFact[] {
       credits: [credit(`artist${i % 5}`, 'primary'), ...(rango ? [credit('rango', 'producer')] : [credit(`other${i % 3}`, 'producer')])],
       genres: [],
       plays: 0,
-      axes: { arrangement: null, sound: null, songwriting: null, lyrics: null, performance: null },
+      axes: { arrangement: null, sound: null, songwriting: null, lyrics: null, performance: null, originality: null },
       gut: null,
     });
   }
@@ -139,7 +139,7 @@ describe('discover, beyond the obvious', () => {
     // Considered scores as they are; the quick gut score runs 15 high for artist0 only.
     const facts = library().map((f) => ({
       ...f,
-      axes: { arrangement: 8, sound: 8, songwriting: 8, lyrics: 8, performance: 8 },
+      axes: { arrangement: 8, sound: 8, songwriting: 8, lyrics: 8, performance: 8, originality: null },
       gut: f.score + (f.credits[0]!.id === 'artist0' ? 15 : 0) + ((Number(f.id.slice(1)) % 5) - 2),
     }));
     const gut = discover(facts, { limit: 40 }).find((f) => f.key === 'gut:artist:artist0');
