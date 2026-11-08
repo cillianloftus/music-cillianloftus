@@ -122,7 +122,8 @@ const keyWords = ['None', ...cal.levels.map((start, i) => (i === 3 ? `${start} +
   .scroller {
     overflow-x: auto;
     overscroll-behavior-x: contain;
-    scrollbar-width: thin;
+    /* It still scrolls by swipe or trackpad; the bar only covered the last weeks. */
+    scrollbar-width: none;
   }
 
   svg {
