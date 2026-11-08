@@ -68,19 +68,19 @@ describe('ratings', () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     await addRating(
       'u-owner',
-      ratingInput.parse({ entity_type: 'recording', entity_id: recording, gut_score: '8', production: '7.5', lyrics: '' }),
+      ratingInput.parse({ entity_type: 'recording', entity_id: recording, gut_score: '8', sound: '7.5', lyrics: '' }),
     );
     const history = await ratingHistory('u-owner', 'recording', recording);
     expect(history.map((row) => row.depth)).toEqual(['detailed', 'gut']);
-    expect(history[0]).toMatchObject({ production: 7.5, lyrics: null });
+    expect(history[0]).toMatchObject({ sound: 7.5, arrangement: null, production: null, lyrics: null });
   });
 
   it('records axes that do not apply, apart from ones not yet rated', async () => {
-    const form = { entity_type: 'recording', entity_id: recording, gut_score: '9', production: '8', lyrics: '7', na_lyrics: 'on' };
+    const form = { entity_type: 'recording', entity_id: recording, gut_score: '9', arrangement: '8', lyrics: '7', na_lyrics: 'on' };
     await addRating('u-owner', ratingInput.parse(ratingFormFields(form)));
     const [latest] = await ratingHistory('u-owner', 'recording', recording);
     // The tick wins over the 7: an instrumental has no lyrics to score.
-    expect(latest).toMatchObject({ production: 8, lyrics: null, songwriting: null, not_applicable: ['lyrics'] });
+    expect(latest).toMatchObject({ arrangement: 8, lyrics: null, songwriting: null, not_applicable: ['lyrics'] });
     expect(() => db.prepare("UPDATE rating SET not_applicable = '[]'").run()).toThrow('append-only');
   });
 

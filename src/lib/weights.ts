@@ -70,12 +70,19 @@ export function weightsToForm(w: Weights): Record<string, string> {
   };
 }
 
+/** A payload saved before the split: production's weight is shared by its two halves. */
+function legacyCraft(craft: (Partial<Weights['craft']> & { production?: number }) | undefined): Partial<Weights['craft']> {
+  if (!craft) return {};
+  const { production, ...rest } = craft;
+  return production === undefined ? rest : { arrangement: production / 2, sound: production / 2, ...rest };
+}
+
 /** A stored payload with the views' defaults filled in, as v_active_weights does. */
 export function withDefaults(payload: unknown): Weights {
   const p = (payload ?? {}) as { craft?: Partial<Weights['craft']>; album?: Partial<Weights['album']>; release?: Partial<Weights['release']> };
   const trim = p.release?.trim_lowest;
   return {
-    craft: { ...DEFAULT_WEIGHTS.craft, ...p.craft },
+    craft: { ...DEFAULT_WEIGHTS.craft, ...legacyCraft(p.craft) },
     album: { ...DEFAULT_WEIGHTS.album, ...p.album },
     release: {
       tracks: p.release?.tracks ?? DEFAULT_WEIGHTS.release.tracks,
@@ -176,7 +183,8 @@ export async function scoreInputs(userId: string): Promise<ScoreInputs> {
   const [ratings, canonical, tracks] = await env.DB.batch([
     env.DB.prepare(
       `SELECT entity_type, entity_id, rated_at, gut_score, impact,
-              production, songwriting, lyrics, performance, sequencing, cohesion, ambition
+              coalesce(arrangement, production) AS arrangement, coalesce(sound, production) AS sound,
+              songwriting, lyrics, performance, sequencing, cohesion, ambition
        FROM rating WHERE user_id = ? ORDER BY rated_at`,
     ).bind(userId),
     env.DB.prepare(

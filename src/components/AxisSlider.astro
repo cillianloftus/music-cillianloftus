@@ -27,7 +27,10 @@ const hintId = hint ? `${name}-hint` : undefined;
 
 <div class:list={['axis', { 'is-na': notApplicable }]} data-axis data-tone={tone}>
   <div class="axis-head">
-    <label for={name}>{label}</label>
+    <div class="axis-name">
+      <label for={name}>{label}</label>
+      {hint && <span class="hint" id={hintId}>{hint}</span>}
+    </div>
     <output class="axis-value tabular" for={name} data-value aria-hidden="true">{notApplicable ? 'n/a' : (value ?? '–')}</output>
   </div>
   <input
@@ -42,17 +45,14 @@ const hintId = hint ? `${name}-hint` : undefined;
     value={value ?? ''}
     aria-describedby={hintId}
   />
-  <div class="axis-foot">
-    {hint && <span class="hint" id={hintId}>{hint}</span>}
-    {
-      canNotApply && (
-        <label class="axis-na">
-          <input type="checkbox" name={`na_${name}`} checked={notApplicable} data-na />
-          Doesn’t apply
-        </label>
-      )
-    }
-  </div>
+  {
+    canNotApply && (
+      <label class="axis-na">
+        <input type="checkbox" name={`na_${name}`} checked={notApplicable} data-na />
+        <span>N/a<span class="visually-hidden"> (doesn’t apply)</span></span>
+      </label>
+    )
+  }
 </div>
 
 <script>
@@ -89,6 +89,9 @@ const hintId = hint ? `${name}-hint` : undefined;
     control.className = 'axis-control';
     control.appendChild(range);
     control.appendChild(clear);
+    // "N/a" sits at the end of the slider's row, so each axis is two lines.
+    const naLabel = row.querySelector('.axis-na');
+    if (naLabel) control.appendChild(naLabel);
     head.parentNode!.insertBefore(control, head.nextSibling);
 
     const set = (value: number | null, announce = true) => {
@@ -151,10 +154,12 @@ const hintId = hint ? `${name}-hint` : undefined;
 </script>
 
 <style>
+  /* Two lines an axis: name, what it means and the value; then the
+     slider, clear and n/a. Every axis fits on one phone screen. */
   .axis {
     display: grid;
-    gap: var(--space-2);
-    padding: var(--space-3) 0;
+    gap: 0;
+    padding: var(--space-2) 0 0;
     border-bottom: 1px solid var(--border);
   }
 
@@ -165,14 +170,22 @@ const hintId = hint ? `${name}-hint` : undefined;
     gap: var(--space-3);
   }
 
-  label {
+  .axis-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 var(--space-2);
+    min-width: 0;
+  }
+
+  .axis-name label {
     font-weight: 650;
   }
 
   .axis-value {
     min-width: 3ch;
     color: var(--text-subtle);
-    font-size: var(--step-2);
+    font-size: var(--step-1);
     font-weight: 800;
     letter-spacing: -0.03em;
     line-height: 1;
@@ -188,24 +201,12 @@ const hintId = hint ? `${name}-hint` : undefined;
     font-size: var(--step--1);
   }
 
-  .axis-foot {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2) var(--space-4);
-  }
-
-  .axis-foot:empty {
-    display: none;
-  }
-
   .axis-na {
     display: inline-flex;
+    flex: none;
     align-items: center;
-    gap: var(--space-2);
+    gap: var(--space-1);
     min-height: var(--target);
-    margin-left: auto;
     color: var(--text-muted);
     font-size: var(--step--1);
     font-weight: 600;

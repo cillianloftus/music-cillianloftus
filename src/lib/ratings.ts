@@ -6,7 +6,8 @@
 import { env } from 'cloudflare:workers';
 import { z } from 'zod';
 
-export const CRAFT_AXES = ['production', 'songwriting', 'lyrics', 'performance'] as const;
+/** Production was one axis until 8 Nov 2026; it is now arrangement and sound (migrations/0042). */
+export const CRAFT_AXES = ['arrangement', 'sound', 'songwriting', 'lyrics', 'performance'] as const;
 export const ALBUM_AXES = ['sequencing', 'cohesion', 'ambition'] as const;
 export type CraftAxis = (typeof CRAFT_AXES)[number];
 export type AlbumAxis = (typeof ALBUM_AXES)[number];
@@ -35,7 +36,7 @@ export const ratingInput = z
       z.string().max(500).nullable(),
     ),
     /** Axes that do not apply (an instrumental has no lyrics): left out, and remembered as such. */
-    not_applicable: z.array(z.enum([...CRAFT_AXES, ...ALBUM_AXES])).max(7).default([]),
+    not_applicable: z.array(z.enum([...CRAFT_AXES, ...ALBUM_AXES])).max(8).default([]),
   })
   .superRefine((input, ctx) => {
     const forbidden = input.entity_type === 'recording' ? ALBUM_AXES : CRAFT_AXES;
@@ -82,9 +83,9 @@ export async function addRating(userId: string, input: RatingInput): Promise<str
 
   await env.DB.prepare(
     `INSERT INTO rating (id, user_id, entity_type, entity_id, depth, gut_score,
-                         production, songwriting, lyrics, performance,
+                         arrangement, sound, songwriting, lyrics, performance,
                          sequencing, cohesion, ambition, impact, impact_note, not_applicable)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -93,7 +94,8 @@ export async function addRating(userId: string, input: RatingInput): Promise<str
       input.entity_id,
       depth,
       input.gut_score,
-      input.production,
+      input.arrangement,
+      input.sound,
       input.songwriting,
       input.lyrics,
       input.performance,
@@ -113,7 +115,10 @@ export interface RatingRow {
   rated_at: string;
   depth: 'gut' | 'detailed';
   gut_score: number | null;
+  /** Only on rows rated before the split; arrangement and sound below already stand in for it. */
   production: number | null;
+  arrangement: number | null;
+  sound: number | null;
   songwriting: number | null;
   lyrics: number | null;
   performance: number | null;
@@ -122,7 +127,7 @@ export interface RatingRow {
   ambition: number | null;
   impact: number | null;
   impact_note: string | null;
-  /** Axes marked as not applying. */
+  /** Axes marked as not applying ("production" on an old row reads as both halves). */
   not_applicable: string[];
 }
 
@@ -133,7 +138,9 @@ export async function ratingHistory(
   entityId: string,
 ): Promise<RatingRow[]> {
   const { results } = await env.DB.prepare(
-    `SELECT id, rated_at, depth, gut_score, production, songwriting, lyrics, performance,
+    `SELECT id, rated_at, depth, gut_score, production,
+            coalesce(arrangement, production) AS arrangement, coalesce(sound, production) AS sound,
+            songwriting, lyrics, performance,
             sequencing, cohesion, ambition, impact, impact_note, not_applicable
      FROM rating
      WHERE user_id = ? AND entity_type = ? AND entity_id = ?
@@ -141,7 +148,10 @@ export async function ratingHistory(
   )
     .bind(userId, entityType, entityId)
     .all<Omit<RatingRow, 'not_applicable'> & { not_applicable: string | null }>();
-  return results.map((r) => ({ ...r, not_applicable: r.not_applicable ? (JSON.parse(r.not_applicable) as string[]) : [] }));
+  return results.map((r) => {
+    const na = r.not_applicable ? (JSON.parse(r.not_applicable) as string[]) : [];
+    return { ...r, not_applicable: na.flatMap((axis) => (axis === 'production' ? ['arrangement', 'sound'] : [axis])) };
+  });
 }
 
 /** Only same-site paths, so a crafted form cannot redirect elsewhere. */

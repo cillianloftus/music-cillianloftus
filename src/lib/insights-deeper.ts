@@ -119,7 +119,8 @@ export async function deeperInsights(userId: string): Promise<Deeper> {
          WHERE x.user_id = ?1 AND x.entity_type = 'recording'
            AND x.rated_at = (SELECT max(y.rated_at) FROM rating y WHERE y.user_id = x.user_id AND y.entity_type = 'recording' AND y.entity_id = x.entity_id)
        )
-       SELECT 'production' AS key, avg(production) * 10 AS average, count(production) AS count FROM latest
+       SELECT 'arrangement' AS key, avg(coalesce(arrangement, production)) * 10 AS average, count(coalesce(arrangement, production)) AS count FROM latest
+       UNION ALL SELECT 'sound', avg(coalesce(sound, production)) * 10, count(coalesce(sound, production)) FROM latest
        UNION ALL SELECT 'songwriting', avg(songwriting) * 10, count(songwriting) FROM latest
        UNION ALL SELECT 'lyrics', avg(lyrics) * 10, count(lyrics) FROM latest
        UNION ALL SELECT 'performance', avg(performance) * 10, count(performance) FROM latest`,
@@ -131,7 +132,7 @@ export async function deeperInsights(userId: string): Promise<Deeper> {
     position: { '0': 'Opener', '1': 'First half', '2': 'Second half', '3': 'Closer' },
     features: { '0': 'Solo', '1': 'With a guest' },
     age: { '0': 'Under 20', '1': '20–24', '2': '25–29', '3': '30s', '4': '40 +' },
-    axes: { production: 'Production', songwriting: 'Songwriting', lyrics: 'Lyrics', performance: 'Performance' },
+    axes: { arrangement: 'Arrangement', sound: 'Sound', songwriting: 'Songwriting', lyrics: 'Lyrics', performance: 'Performance' },
   };
   const bands = (result: D1Result | undefined, kind: keyof typeof LABELS) =>
     ((result?.results ?? []) as { key: string | null; average: number | null; count: number }[])

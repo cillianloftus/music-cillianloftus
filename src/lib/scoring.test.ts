@@ -37,7 +37,13 @@ function randomRatings(random: () => number) {
     const album = random() < 0.3;
     const entity_id = album ? ALBUMS[Math.floor(random() * ALBUMS.length)]! : RECORDINGS[Math.floor(random() * RECORDINGS.length)]!;
     const keys = album ? ALBUM_KEYS : CRAFT_KEYS;
-    const axes = Object.fromEntries(keys.map((k) => [k, maybe(0.5)]));
+    const axes: Record<string, number | null> = Object.fromEntries(keys.map((k) => [k, maybe(0.5)]));
+    // Some rows from before production split into arrangement and sound.
+    if (!album && random() < 0.35) {
+      delete axes.arrangement;
+      delete axes.sound;
+      axes.production = maybe(0.6);
+    }
     const detailed = Object.values(axes).some((v) => v !== null);
     const gut = detailed ? maybe(0.6) : half();
     clock += 60_000;
@@ -60,7 +66,7 @@ function randomWeights(random: () => number): Weights {
   const axis = () => Math.round(random() * 12) / 4;
   const craft = Object.fromEntries(CRAFT_KEYS.map((k) => [k, axis()])) as Weights['craft'];
   const album = Object.fromEntries(ALBUM_KEYS.map((k) => [k, axis()])) as Weights['album'];
-  craft.production ||= 1; // The form rejects all-zero groups.
+  craft.songwriting ||= 1; // The form rejects all-zero groups.
   album.cohesion ||= 1;
   const tracks = Math.round(random() * 20) / 20;
   return {
@@ -125,6 +131,25 @@ describe('preview scoring matches the SQL views', () => {
   }
 });
 
+describe('production split into arrangement and sound', () => {
+  it('scores a rating and weights saved before the split exactly as before', async () => {
+    // Old formula: (2 × production 6 + 1 × songwriting 8) / 3.
+    insert(db, 'weights', [{ id: 'w-old', user_id: 'u-owner', version: 1, active: 1, payload_json: JSON.stringify({ craft: { production: 2, songwriting: 1 } }) }]);
+    insert(db, 'rating', [{ id: 'old', user_id: 'u-owner', entity_type: 'recording', entity_id: 'a1', depth: 'detailed', production: 6, songwriting: 8, rated_at: '2030-01-01T00:00:00.000Z' }]);
+    const sql = db.prepare(`SELECT quality_score FROM v_recording_score WHERE recording_id = 'a1'`).get() as { quality_score: number };
+    expect(sql.quality_score).toBeCloseTo((10 * (2 * 6 + 8)) / 3, 9);
+    const weights = await activeWeights('u-owner');
+    expect(weights.craft).toMatchObject({ arrangement: 1, sound: 1, songwriting: 1 });
+    expect(computeScores(await scoreInputs('u-owner'), weights).recordings.get('a1')!.quality).toBeCloseTo(sql.quality_score, 9);
+  });
+
+  it('scores the two halves on their own once given', () => {
+    insert(db, 'rating', [{ id: 'new', user_id: 'u-owner', entity_type: 'recording', entity_id: 'a1', depth: 'detailed', arrangement: 4, sound: 8, rated_at: '2030-01-01T00:00:00.000Z' }]);
+    const sql = db.prepare(`SELECT quality_score FROM v_recording_score WHERE recording_id = 'a1'`).get() as { quality_score: number };
+    expect(sql.quality_score).toBeCloseTo(60, 9);
+  });
+});
+
 describe('ranking', () => {
   it('orders best first, ties by id', () => {
     const scores = new Map([
@@ -149,7 +174,8 @@ describe('ranking', () => {
 
 describe('weights versions', () => {
   const form = (overrides: Record<string, string> = {}) => ({
-    production: '1',
+    arrangement: '0.5',
+    sound: '0.5',
     songwriting: '1',
     lyrics: '1',
     performance: '1',
@@ -169,7 +195,7 @@ describe('weights versions', () => {
   });
 
   it('rejects a group with every weight at zero, and off-step values', () => {
-    expect(weightsForm.safeParse(form({ production: '0', songwriting: '0', lyrics: '0', performance: '0' })).success).toBe(false);
+    expect(weightsForm.safeParse(form({ arrangement: '0', sound: '0', songwriting: '0', lyrics: '0', performance: '0' })).success).toBe(false);
     expect(weightsForm.safeParse(form({ lyrics: '1.1' })).success).toBe(false);
     expect(weightsForm.safeParse(form({ lyrics: '4' })).success).toBe(false);
     expect(weightsForm.safeParse(form({ tracks_share: '101' })).success).toBe(false);
@@ -177,10 +203,10 @@ describe('weights versions', () => {
 
   it('saving adds a version and makes it active; switching back replays the old one', async () => {
     const lyricsHeavy = weightsForm.parse(form({ lyrics: '3' }));
-    const productionHeavy = weightsForm.parse(form({ production: '3' }));
+    const productionHeavy = weightsForm.parse(form({ sound: '3' }));
     expect(await saveWeights('u-owner', lyricsHeavy)).toBe(1);
     expect(await saveWeights('u-owner', productionHeavy)).toBe(2);
-    expect((await activeWeights('u-owner')).craft.production).toBe(3);
+    expect((await activeWeights('u-owner')).craft.sound).toBe(3);
 
     const versions = await weightsVersions('u-owner');
     expect(versions.map((v) => [v.version, v.active])).toEqual([

@@ -28,7 +28,7 @@ let error = params.get('error');
 const fromVersion = versions.find((v) => v.id === params.get('version'));
 if (fromVersion) {
   preview = fromVersion.weights;
-} else if (params.has('production')) {
+} else if (params.has('songwriting')) {
   const parsed = weightsForm.safeParse(Object.fromEntries(params));
   if (parsed.success) preview = parsed.data;
   else error ??= parsed.error.issues[0]?.message ?? 'Those weights are not valid.';
@@ -81,7 +81,8 @@ function rows(kind: 'albums' | 'tracks') {
 }
 
 const LABELS: Record<string, string> = {
-  production: 'Production',
+  arrangement: 'Arrangement',
+  sound: 'Sound',
   songwriting: 'Songwriting',
   lyrics: 'Lyrics',
   performance: 'Performance',

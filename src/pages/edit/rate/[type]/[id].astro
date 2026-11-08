@@ -6,7 +6,6 @@ import AxisSlider from '../../../../components/AxisSlider.astro';
 import Backdrop from '../../../../components/Backdrop.astro';
 import CoverArt from '../../../../components/CoverArt.astro';
 import CreditLine from '../../../../components/CreditLine.astro';
-import GutScale from '../../../../components/GutScale.astro';
 import { artistLines } from '../../../../lib/catalogue';
 import {
   ALBUM_AXES,
@@ -14,6 +13,7 @@ import {
   ratingHistory,
   safeReturnPath,
   type RatableEntity,
+  type RatingRow,
 } from '../../../../lib/ratings';
 import { activeWeights } from '../../../../lib/weights';
 
@@ -35,19 +35,22 @@ interface Subject {
 const subject =
   entityType === 'recording'
     ? await env.DB.prepare(
+        // The earliest release with a cover: an edition without art would show initials.
         `SELECT rec.title, g.id AS album_id, g.title AS album_title, r.art_key
          FROM recording rec
          LEFT JOIN track t ON t.recording_id = rec.id
          LEFT JOIN release r ON r.id = t.release_id
          LEFT JOIN release_group g ON g.id = r.release_group_id
          WHERE rec.id = ?
-         ORDER BY r.date IS NULL, r.date
+         ORDER BY r.art_key IS NULL, r.date IS NULL, r.date
          LIMIT 1`,
       )
         .bind(id)
         .first<Subject>()
     : await env.DB.prepare(
-        `SELECT g.title, g.id AS album_id, NULL AS album_title, r.art_key, g.type
+        `SELECT g.title, g.id AS album_id, NULL AS album_title, g.type,
+                coalesce(r.art_key, (SELECT x.art_key FROM release x WHERE x.release_group_id = g.id AND x.art_key IS NOT NULL
+                                     ORDER BY x.date IS NULL, x.date LIMIT 1)) AS art_key
          FROM release_group g
          LEFT JOIN v_release_group_canonical c ON c.release_group_id = g.id
          LEFT JOIN release r ON r.id = c.release_id
@@ -73,8 +76,10 @@ const returnTo = safeReturnPath(Astro.url.searchParams.get('return_to'), fallbac
 const error = Astro.url.searchParams.get('error');
 
 const axes = entityType === 'recording' ? CRAFT_AXES : ALBUM_AXES;
+// Kept short and always shown: they say what to listen for.
 const axisHints: Record<string, string> = {
-  production: 'How it sounds: recording, mix, arrangement.',
+  arrangement: 'What’s played, and how the parts fit.',
+  sound: 'Recording, mix, texture.',
   songwriting: 'Melody, structure, harmony.',
   lyrics: 'The words on their own terms.',
   performance: 'Delivery, feel, playing.',
@@ -84,19 +89,23 @@ const axisHints: Record<string, string> = {
 };
 const capitalise = (s: string) => s[0]!.toUpperCase() + s.slice(1);
 
+/** A row as it was given: production before the split, its halves after. */
+const givenAxes = (row: RatingRow): string[] =>
+  entityType === 'recording' && row.production != null ? ['production', ...CRAFT_AXES.slice(2)] : [...axes];
+
 const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Dublin' });
 ---
 
 <Base title={`Rate ${subject.title}`}>
   <div class="wrap page">
-    <Backdrop artKey={subject.art_key} height="26rem" />
-    <p><a class="back" href={returnTo}>← Back</a></p>
+    <Backdrop artKey={subject.art_key} height="20rem" />
 
     <header class="subject">
       <div class="thumb">
-        <CoverArt artKey={subject.art_key} title={subject.album_title ?? subject.title} sizes="5rem" />
+        <CoverArt artKey={subject.art_key} title={subject.album_title ?? subject.title} sizes="4.5rem" />
       </div>
       <div>
+        <a class="back" href={returnTo}>← Back</a>
         <p class="eyebrow">{entityType === 'recording' ? 'Rate track' : `Rate ${subject.type ? (typeLabel(subject.type) === 'EP' ? 'EP' : typeLabel(subject.type).toLowerCase()) : 'album'}`}</p>
         <h1>{subject.title}</h1>
         <p class="muted">
@@ -108,63 +117,49 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
 
     {error && <p class="error" role="alert">{error}</p>}
 
-    <GutScale
-      entityType={entityType}
-      entityId={id}
-      returnTo={returnTo}
-      current={current?.depth === 'gut' ? current.gut_score : null}
-    />
+    {/* One form, every slider on one screen: the gut, then the parts, then
+        impact. Any can be left blank; a blank axis is left out, not zero. */}
+    <form method="post" action="/api/write/rating" class="sheet">
+      <input type="hidden" name="entity_type" value={entityType} />
+      <input type="hidden" name="entity_id" value={id} />
+      <input type="hidden" name="return_to" value={returnTo} />
 
-    <details class="detailed" open={current?.depth === 'detailed' || undefined}>
-      <summary>Full breakdown</summary>
-      <form method="post" action="/api/write/rating">
-        <input type="hidden" name="entity_type" value={entityType} />
-        <input type="hidden" name="entity_id" value={id} />
-        <input type="hidden" name="return_to" value={returnTo} />
+      <div class="gut">
+        <AxisSlider name="gut_score" label="Gut" hint="First instinct." value={current?.gut_score} />
+      </div>
 
-        <p class="muted">
-          Each out of 10, halves allowed. Leave any that do not apply; a blank axis is left out, not counted
-          as zero. A gut score given here too is what calibrates gut scores against considered ones.
-        </p>
+      <fieldset class="axes">
+        <legend class="visually-hidden">The parts, each out of 10</legend>
+        {
+          axes.map((axis) => (
+            <AxisSlider
+              name={axis}
+              label={capitalise(axis)}
+              hint={axisHints[axis]}
+              value={current?.[axis]}
+              canNotApply
+              notApplicable={current?.not_applicable.includes(axis) ?? false}
+            />
+          ))
+        }
+      </fieldset>
 
-        <div class="axes">
-          <AxisSlider name="gut_score" label="Gut score" hint="First instinct." value={current?.gut_score} />
-          {
-            axes.map((axis) => (
-              <AxisSlider
-                name={axis}
-                label={capitalise(axis)}
-                hint={axisHints[axis]}
-                value={current?.[axis]}
-                canNotApply
-                notApplicable={current?.not_applicable.includes(axis) ?? false}
-              />
-            ))
-          }
-        </div>
+      <div class="impact">
+        <AxisSlider name="impact" label="Impact" hint="Rare: life before it and after." value={current?.impact} tone="accent" />
+        <details class="note" open={current?.impact_note ? true : undefined}>
+          <summary>When and what</summary>
+          <label for="impact_note" class="visually-hidden">When and what</label>
+          <textarea class="input" id="impact_note" name="impact_note" rows="2" maxlength="500" aria-describedby="impact-note-hint">{current?.impact_note ?? ''}</textarea>
+          <span class="muted" id="impact-note-hint">Public. A line about where you were.</span>
+        </details>
+      </div>
 
-        <fieldset class="impact">
-          <legend>
-            <span class="legend-title">Impact</span>
-            <span class="muted">
-              Rare on purpose. Not quality: whether there was life before this record and life after.
-            </span>
-          </legend>
-          <AxisSlider name="impact" label="Impact" value={current?.impact} tone="accent" />
-          <div class="field">
-            <label for="impact_note">When and what</label>
-            <textarea class="input" id="impact_note" name="impact_note" rows="2" maxlength="500" aria-describedby="impact-note-hint">{current?.impact_note ?? ''}</textarea>
-            <span class="hint" id="impact-note-hint">Public. A line about where you were.</span>
-          </div>
-        </fieldset>
-
-        <div class="save-row">
-          <button class="button button--primary" type="submit">Save rating</button>
-          <p class="preview" data-preview aria-live="polite"></p>
-        </div>
-        <script is:inline type="application/json" id="rate-preview" set:html={JSON.stringify(previewData)} />
-      </form>
-    </details>
+      <div class="save-row">
+        <button class="button button--primary" type="submit">Save rating</button>
+        <p class="preview" data-preview aria-live="polite"></p>
+      </div>
+      <script is:inline type="application/json" id="rate-preview" set:html={JSON.stringify(previewData)} />
+    </form>
 
     {
       entityType === 'recording' && (
@@ -193,9 +188,9 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
                 <span>
                   {row.gut_score != null && <>Gut {row.gut_score}</>}
                   {row.depth === 'detailed' &&
-                    [...axes]
-                      .filter((axis) => row[axis] != null)
-                      .map((axis) => ` · ${capitalise(axis)} ${row[axis]}`)
+                    givenAxes(row)
+                      .filter((axis) => row[axis as keyof RatingRow] != null)
+                      .map((axis) => ` · ${capitalise(axis)} ${row[axis as keyof RatingRow]}`)
                       .join('')}
                   {row.impact != null && <> · Impact {row.impact}</>}
                 </span>
@@ -210,7 +205,7 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
 
 <script>
   // A live preview of the score this rating gives, by the views' own formula.
-  import { albumComposite, craftComposite, type Weights } from '../../../../lib/scoring';
+  import { ALBUM_KEYS, CRAFT_KEYS, albumComposite, craftComposite, type Weights } from '../../../../lib/scoring';
 
   const data = document.getElementById('rate-preview');
   const out = document.querySelector<HTMLElement>('[data-preview]');
@@ -224,9 +219,7 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
       return Number.isFinite(n) && n >= 0 && n <= 10 ? n : null;
     };
     const update = () => {
-      const axes = Object.fromEntries(
-        ['production', 'songwriting', 'lyrics', 'performance', 'sequencing', 'cohesion', 'ambition'].map((k) => [k, value(k)]),
-      );
+      const axes = Object.fromEntries([...CRAFT_KEYS, ...ALBUM_KEYS].map((k) => [k, value(k)]));
       const composite = entityType === 'recording' ? craftComposite(axes, weights) : albumComposite(axes, weights);
       const gut = value('gut_score');
       const base = composite ?? (gut === null ? null : gut + offset);
@@ -236,12 +229,10 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
       }
       const quality = Math.round(Math.max(0, Math.min(100, base * 10)));
       const impact = value('impact') ?? 0;
-      const how = composite !== null ? 'from the axes' : 'from your gut, calibrated';
-      const mark = impact ? `, with impact ${impact}` : '';
+      const how = composite !== null ? 'from the parts' : 'from your gut, calibrated';
+      const mark = impact ? `, impact ${impact}` : '';
       out.textContent =
-        entityType === 'recording'
-          ? `Gives ${quality}${mark}, ${how}.`
-          : `Album axes give ${quality}${mark}, ${how}; the tracks make up the rest.`;
+        entityType === 'recording' ? `Gives ${quality}${mark}, ${how}.` : `Album axes give ${quality}${mark}; the tracks make up the rest.`;
     };
     form.addEventListener('input', update);
     update();
@@ -249,45 +240,31 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
 </script>
 
 <style>
-  .save-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-4);
-  }
-
-  .preview {
-    color: var(--accent);
-    font-weight: 700;
-  }
-
-  .preview:empty {
-    display: none;
-  }
-
   .page {
     display: grid;
-    gap: var(--space-6);
+    gap: var(--space-4);
     --content-max: 40rem;
   }
 
   .back {
     display: inline-flex;
     align-items: center;
-    min-height: var(--target);
+    min-height: 2rem;
     color: var(--text-muted);
+    font-size: var(--step--1);
   }
 
   .subject {
     display: grid;
-    grid-template-columns: 5rem minmax(0, 1fr);
+    grid-template-columns: 4.5rem minmax(0, 1fr);
     gap: var(--space-4);
     align-items: center;
   }
 
   h1 {
-    font-size: var(--step-2);
+    font-size: var(--step-1);
     font-weight: 800;
+    line-height: 1.15;
   }
 
   h2 {
@@ -306,6 +283,15 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
     color: var(--danger);
   }
 
+  .sheet {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
   fieldset {
     margin: 0;
     padding: 0;
@@ -313,37 +299,15 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
     min-width: 0;
   }
 
-  legend {
-    display: grid;
-    gap: var(--space-1);
-    padding: 0;
-    margin-bottom: var(--space-4);
+  /* The gut stands apart from the parts it is checked against. */
+  .gut {
+    padding-bottom: var(--space-2);
+    border-bottom: 2px solid var(--border);
   }
 
-  .legend-title {
-    font-size: var(--step-1);
-    font-weight: 700;
-  }
-
-  .detailed {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-l);
-    background: var(--surface-1);
-  }
-
-  summary {
-    display: flex;
-    align-items: center;
-    min-height: 3.5rem;
-    padding-inline: var(--space-5);
-    font-weight: 700;
-    cursor: pointer;
-  }
-
-  .detailed form {
-    display: grid;
-    gap: var(--space-5);
-    padding: 0 var(--space-5) var(--space-5);
+  .gut :global(.axis),
+  .impact :global(.axis) {
+    border-bottom: 0;
   }
 
   .axes {
@@ -352,17 +316,37 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
 
   .impact {
     display: grid;
-    gap: var(--space-4);
-    padding-top: var(--space-4);
-    border-top: 1px solid var(--border);
   }
 
-  .narrow {
-    max-width: 8rem;
+  .note summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+    cursor: pointer;
   }
 
-  .detailed button[type='submit'] {
-    justify-self: start;
+  .note[open] {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .save-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .preview {
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  .preview:empty {
+    display: none;
   }
 
   .history ol {
