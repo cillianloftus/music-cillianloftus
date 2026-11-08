@@ -70,15 +70,19 @@ const capitalise = (s: string) => s[0]!.toUpperCase() + s.slice(1);
   </div>
 
   <div class="save-row">
-    <button class="button button--primary" type="submit">Save rating</button>
+    {/* Only without JavaScript: otherwise it saves itself (rating-autosave.ts). */}
+    <button class="button button--primary save" type="submit">Save rating</button>
     <p class="preview" data-preview aria-live="polite"></p>
+    <p class="save-status" data-save-status role="status"></p>
   </div>
 </form>
 
 <script>
+  import { enhanceAutosave } from '../lib/client/rating-autosave';
   import { enhancePreviews } from '../lib/client/rating-preview';
 
   enhancePreviews();
+  enhanceAutosave();
 </script>
 
 <style>
@@ -147,6 +151,24 @@ const capitalise = (s: string) => s[0]!.toUpperCase() + s.slice(1);
   }
 
   .preview:empty {
+    display: none;
+  }
+
+  .sheet[data-autosave] .save {
+    display: none;
+  }
+
+  .save-status {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .save-status[data-tone='error'] {
+    color: var(--danger);
+  }
+
+  .save-status:empty {
     display: none;
   }
 </style>

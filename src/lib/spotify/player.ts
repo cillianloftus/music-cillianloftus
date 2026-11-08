@@ -60,10 +60,24 @@ function explain(error: unknown): never {
   throw error;
 }
 
+type ApiTrack = NonNullable<ApiPlayback['item']>;
+
+function toTrack(item: ApiTrack): NonNullable<NowState['track']> {
+  return {
+    spotifyId: item.id,
+    title: item.name,
+    artists: item.artists.map((a) => a.name),
+    artistIds: item.artists.map((a) => a.id),
+    album: item.album.name,
+    albumSpotifyId: item.album.id,
+    art: [...item.album.images].sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0]?.url ?? null,
+    durationMs: item.duration_ms,
+  };
+}
+
 export function toState(p: ApiPlayback | undefined, now = Date.now()): NowState | null {
   if (!p) return null;
   const item = p.currently_playing_type === 'track' ? p.item : null;
-  const art = item ? ([...item.album.images].sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0]?.url ?? null) : null;
   return {
     playing: p.is_playing,
     progressMs: p.progress_ms ?? 0,
@@ -71,18 +85,24 @@ export function toState(p: ApiPlayback | undefined, now = Date.now()): NowState 
     shuffle: p.shuffle_state,
     repeat: p.repeat_state,
     device: p.device ? { name: p.device.name, type: p.device.type } : null,
-    track: item
-      ? {
-          spotifyId: item.id,
-          title: item.name,
-          artists: item.artists.map((a) => a.name),
-          album: item.album.name,
-          albumSpotifyId: item.album.id,
-          art,
-          durationMs: item.duration_ms,
-        }
-      : null,
+    track: item ? toTrack(item) : null,
   };
+}
+
+/**
+ * The song Spotify will play next, from its queue (which already follows
+ * shuffle, repeat and autoplay), so the page can move on the moment the
+ * current one ends instead of waiting for the next poll.
+ */
+export async function upNext(client: SpotifyClient): Promise<NowState['track']> {
+  try {
+    const { queue } = await client.get<{ queue: (ApiTrack & { type: string })[] }>('/me/player/queue');
+    const next = queue.find((q) => q.type === 'track');
+    return next ? toTrack(next) : null;
+  } catch {
+    // Only a guess; the poll still tells the truth.
+    return null;
+  }
 }
 
 /** What is on now, or null when nothing has played lately. */

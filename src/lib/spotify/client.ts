@@ -222,7 +222,12 @@ export function spotifyFor(userId: string) {
     }
     if (response.status === 204) return undefined as T;
     const text = await response.text();
-    return (text ? JSON.parse(text) : undefined) as T;
+    // The player's commands can answer 200 with a body that isn't JSON; they still worked.
+    try {
+      return (text ? JSON.parse(text) : undefined) as T;
+    } catch {
+      return undefined as T;
+    }
   }
 
   return {

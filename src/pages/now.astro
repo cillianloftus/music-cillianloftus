@@ -74,6 +74,32 @@ const [history, weights, calibration, creditRows] = here
 const credits = new Map<string, { id: string; name: string }[]>();
 for (const c of creditRows?.results ?? []) credits.set(c.label, [...(credits.get(c.label) ?? []), c]);
 
+// Each of Spotify's artists in the catalogue: by Spotify id, else by name among the song's credits.
+const known = song
+  ? (
+      await env.DB.prepare(
+        `SELECT a.id, a.name, a.spotify_id FROM artist a
+         WHERE a.spotify_id IN (SELECT value FROM json_each(?1))
+            OR a.id IN (SELECT artist_id FROM artist_credit WHERE entity_type = 'recording' AND entity_id = ?2)`,
+      )
+        .bind(JSON.stringify(song.artistIds), here?.id ?? null)
+        .all<{ id: string; name: string; spotify_id: string | null }>()
+    ).results
+  : [];
+const fold = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+/** Where the song's names lead, for the titles under the cover (drawn again by the script below). */
+const links = song
+  ? {
+      song: song.spotifyId,
+      track: here ? `/track/${here.id}` : null,
+      album: here?.album_id ? `/album/${here.album_id}` : null,
+      artists: song.artists.map((name, i) => {
+        const a = known.find((k) => k.spotify_id === song.artistIds[i]) ?? known.find((k) => fold(k.name) === fold(name));
+        return { name, href: a ? `/artist/${a.id}` : null };
+      }),
+    }
+  : null;
+
 const time = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -102,14 +128,21 @@ const ICON = {
           <div class="player" data-player hidden={!song}>
             <img class="cover" src={song?.art ?? ''} alt="" width="640" height="640" data-art />
             <div class="titles">
-              <h1 data-title>{song?.title}</h1>
-              <p class="by" data-by>{song?.artists.join(', ')}</p>
-              <p class="album muted" data-album>{song?.album}</p>
+              <h1 data-title>{links?.track ? <a href={links.track}>{song?.title}</a> : song?.title}</h1>
+              <p class="by" data-by>
+                {links?.artists.map((a, i) => (
+                  <>
+                    {i > 0 && ', '}
+                    {a.href ? <a href={a.href}>{a.name}</a> : a.name}
+                  </>
+                ))}
+              </p>
+              <p class="album muted" data-album>{links?.album ? <a href={links.album}>{song?.album}</a> : song?.album}</p>
             </div>
 
             <div class="progress">
               <label for="seek" class="visually-hidden">Position</label>
-              <input id="seek" type="range" min="0" max={song?.durationMs ?? 0} step="1000" value={state?.progressMs ?? 0} data-seek />
+              <input id="seek" type="range" min="0" max={song?.durationMs ?? 0} step="any" value={state?.progressMs ?? 0} data-seek />
               <div class="times tabular muted">
                 <span data-elapsed>{time(state?.progressMs ?? 0)}</span>
                 <span data-length>{time(song?.durationMs ?? 0)}</span>
@@ -143,7 +176,7 @@ const ICON = {
             <p class="muted">Start something in Spotify, or press Listen on any track or album here. This page follows along.</p>
           </section>
 
-          <div id="now-song" class="song" data-song-id={song?.spotifyId ?? ''}>
+          <div id="now-song" class="song" data-song-id={song?.spotifyId ?? ''} data-links={JSON.stringify(links)}>
             {
               song && here && (
                 <>
@@ -208,6 +241,8 @@ const ICON = {
 
 <script>
   import { enhanceAxes } from '../lib/client/axis-slider';
+  import { NowClock, fetchNow, type Track } from '../lib/client/now-clock';
+  import { enhanceAutosave, flushAutosave } from '../lib/client/rating-autosave';
   import { enhancePreviews } from '../lib/client/rating-preview';
   import type { NowState } from '../lib/spotify/now-state';
 
@@ -217,34 +252,42 @@ const ICON = {
     instrumental?: boolean;
   }
 
+  /** Where the song's names lead, rendered with its part of the page (#now-song). */
+  interface Links {
+    song: string;
+    track: string | null;
+    album: string | null;
+    artists: { name: string; href: string | null }[];
+  }
+
   const root = document.querySelector<HTMLElement>('[data-now]');
   const player = root?.querySelector<HTMLElement>('[data-player]');
   if (root && player) {
-    let state = JSON.parse(root.dataset.now || 'null') as NowState | null;
+    const clock = new NowClock(JSON.parse(root.dataset.now || 'null') as NowState | null);
+    // Timed by the server's clock when the page was made; the first poll puts it right.
+    if (clock.state) clock.state.at = Date.now();
+    clock.save();
     const $ = <T extends HTMLElement>(sel: string) => root.querySelector<T>(sel)!;
     const seek = $<HTMLInputElement>('[data-seek]');
     const elapsed = $('[data-elapsed]');
     const length = $('[data-length]');
     const status = $('[data-status]');
     const idle = $('[data-idle]');
+    const art = $<HTMLImageElement>('[data-art]');
     let dragging = false;
 
     const time = (ms: number) => {
       const s = Math.max(0, Math.floor(ms / 1000));
       return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
     };
-    const position = () => {
-      if (!state?.track) return 0;
-      const ms = state.progressMs + (state.playing ? Date.now() - state.at : 0);
-      return Math.min(ms, state.track.durationMs);
-    };
 
     // Lyrics from LRCLIB, timed where it has them.
     let lines: { at: number; el: HTMLLIElement }[] = [];
     const lyricsBox = $('[data-lyrics-box]');
     const lyricsList = $<HTMLOListElement>('[data-lyrics]');
-    async function loadLyrics(track: NonNullable<NowState['track']>) {
+    async function loadLyrics(track: Track) {
       lines = [];
+      lit = -1;
       lyricsList.replaceChildren();
       lyricsBox.hidden = true;
       const params = new URLSearchParams({
@@ -260,7 +303,7 @@ const ICON = {
           res = await fetch(`https://lrclib.net/api/search?${new URLSearchParams({ track_name: track.title, artist_name: track.artists[0] ?? '' })}`);
           found = res.ok ? (((await res.json()) as Lyrics[])[0] ?? null) : null;
         }
-        if (!found || state?.track?.spotifyId !== track.spotifyId) return;
+        if (!found || clock.state?.track?.spotifyId !== track.spotifyId) return;
         const synced = found.syncedLyrics ?? '';
         const plain = found.plainLyrics ?? '';
         if (found.instrumental) {
@@ -298,15 +341,43 @@ const ICON = {
       lyricsList.scrollTo({ top: line.offsetTop - lyricsList.clientHeight / 2 + line.clientHeight / 2, behavior: 'smooth' });
     };
 
+    // The names under the cover, as links once the song's page part says where they lead.
+    const linksFor = (id: string): Links | null => {
+      try {
+        const links = JSON.parse(document.getElementById('now-song')?.dataset.links || 'null') as Links | null;
+        return links?.song === id ? links : null;
+      } catch {
+        return null;
+      }
+    };
+    const linkOrText = (text: string, href: string | null | undefined): Node => {
+      if (!href) return document.createTextNode(text);
+      return Object.assign(document.createElement('a'), { href, textContent: text });
+    };
+    let titlesFor = clock.state?.track ? `${clock.state.track.spotifyId}${linksFor(clock.state.track.spotifyId) ? '+' : ''}` : '';
+    const paintTitles = (track: Track) => {
+      const links = linksFor(track.spotifyId);
+      const key = `${track.spotifyId}${links ? '+' : ''}`;
+      if (key === titlesFor) return;
+      titlesFor = key;
+      $('[data-title]').replaceChildren(linkOrText(track.title, links?.track));
+      const by = $<HTMLElement>('[data-by]');
+      by.replaceChildren();
+      track.artists.forEach((name, i) => {
+        if (i > 0) by.appendChild(document.createTextNode(', '));
+        by.appendChild(linkOrText(name, links?.artists[i]?.href));
+      });
+      $('[data-album]').replaceChildren(linkOrText(track.album, links?.album));
+    };
+
     const paint = () => {
+      const state = clock.state;
       const track = state?.track ?? null;
       player.hidden = !track;
       idle.hidden = Boolean(track);
       if (!track || !state) return;
-      $<HTMLImageElement>('[data-art]').src = track.art ?? '';
-      $('[data-title]').textContent = track.title;
-      $('[data-by]').textContent = track.artists.join(', ');
-      $('[data-album]').textContent = track.album;
+      if (art.getAttribute('src') !== (track.art ?? '')) art.src = track.art ?? '';
+      paintTitles(track);
       $('[data-device]').textContent = state.device ? `On ${state.device.name}` : '';
       seek.max = String(track.durationMs);
       length.textContent = time(track.durationMs);
@@ -318,76 +389,139 @@ const ICON = {
       repeat.dataset.repeat = state.repeat;
       repeat.setAttribute('aria-label', state.repeat === 'track' ? 'Repeat: this song' : state.repeat === 'context' ? 'Repeat: on' : 'Repeat: off');
     };
-    const tick = () => {
-      const ms = position();
-      if (!dragging) seek.value = String(ms);
-      elapsed.textContent = time(dragging ? Number(seek.value) : ms);
-      followLyrics(ms);
-    };
 
-    // A new song: this page again, and its song part swapped in.
+    // A new song: this page again, and its song part swapped in once the
+    // server sees the same song (it may be a moment behind a predicted one).
+    let swapping = '';
     async function swapSong(id: string) {
       const song = document.getElementById('now-song');
-      if (!song || song.dataset.songId === id) return;
-      song.dataset.songId = id;
-      try {
-        const html = await (await fetch('/now', { headers: { accept: 'text/html' } })).text();
-        const fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('now-song');
-        if (!fresh) return;
-        song.innerHTML = fresh.innerHTML;
-        enhanceAxes(song);
-        enhancePreviews(song);
-      } catch {
-        /* The next poll tries again. */
+      if (!song || song.dataset.songId === id || swapping === id) return;
+      swapping = id;
+      // Whatever was being rated is saved before its form goes.
+      flushAutosave(song);
+      for (let attempt = 0; attempt < 5 && clock.state?.track?.spotifyId === id; attempt++) {
+        try {
+          const html = await (await fetch('/now', { headers: { accept: 'text/html' } })).text();
+          const fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('now-song');
+          if (fresh?.dataset.songId === id) {
+            song.innerHTML = fresh.innerHTML;
+            song.dataset.songId = id;
+            song.dataset.links = fresh.dataset.links ?? 'null';
+            enhanceAxes(song);
+            enhancePreviews(song);
+            enhanceAutosave(song);
+            if (clock.state?.track) paintTitles(clock.state.track);
+            break;
+          }
+        } catch {
+          /* Tried again below. */
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1200));
       }
+      if (swapping === id) swapping = '';
     }
 
-    let last = state?.track?.spotifyId ?? '';
+    const songChanged = () => {
+      paint();
+      const track = clock.state?.track;
+      if (!track) return;
+      void loadLyrics(track);
+      void swapSong(track.spotifyId);
+    };
+
+    // Problems show as a toast over the page, never pushing it about, and
+    // only once they last: a hiccup or two from Spotify is shrugged off.
+    let toastTimer: ReturnType<typeof setTimeout> | undefined;
+    const notice = (text: string) => {
+      status.textContent = text;
+      clearTimeout(toastTimer);
+      if (text) toastTimer = setTimeout(() => (status.textContent = ''), 6000);
+    };
+    let failures = 0;
+
+    let polling = false;
     async function poll() {
+      if (polling) return;
+      polling = true;
       try {
-        const res = await fetch('/api/write/player', { headers: { accept: 'application/json' } });
-        const data = (await res.json()) as (NowState & { error?: string }) | null;
-        if (!res.ok) {
-          status.textContent = data?.error ?? '';
+        const answer = await fetchNow(true);
+        if (!answer.ok) {
+          // Three misses in a row (some seconds) before saying so.
+          if (++failures >= 3) notice(answer.error ?? 'Spotify isn’t answering just now.');
           return;
         }
-        status.textContent = '';
-        state = data as NowState | null;
-        paint();
-        const id = state?.track?.spotifyId ?? '';
-        if (id !== last) {
-          last = id;
-          if (state?.track) {
-            void loadLyrics(state.track);
-            void swapSong(id);
-          }
-        }
+        failures = 0;
+        if (status.textContent) notice('');
+        if (clock.accept(answer.state)) songChanged();
+        else paint();
       } catch {
         /* Offline for a moment. */
+      } finally {
+        polling = false;
       }
     }
 
     async function send(body: Record<string, unknown>) {
-      status.textContent = '';
-      const res = await fetch('/api/write/player', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-      if (!res.ok) status.textContent = ((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? 'That did not work.';
-      setTimeout(poll, 500);
-      setTimeout(poll, 1500);
+      try {
+        const res = await fetch('/api/write/player', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        if (!res.ok) {
+          const data = (await res.json().catch(() => null)) as { error?: string; reason?: string } | null;
+          // Something to do about it (reconnect, open Spotify, Premium): say so now.
+          // Anything else may well have worked anyway; the polls below show what happened.
+          if (data?.reason && data.reason !== 'other') notice(data.error ?? '');
+        }
+      } catch {
+        /* Offline for a moment: the polls will tell. */
+      }
+      setTimeout(poll, 700);
+      setTimeout(poll, 2000);
     }
+
+    // Each frame: the bar and the lyrics move smoothly; the clock text once a second.
+    let shownSecond = -1;
+    let lastEnd = 0;
+    const frame = () => {
+      const now = Date.now();
+      // The song ran out: on to the next in Spotify's queue, then check with Spotify.
+      if (clock.ended(now) && now - lastEnd > 1500) {
+        lastEnd = now;
+        if (clock.advance(now)) songChanged();
+        else paint();
+        setTimeout(poll, 400);
+      }
+      const ms = clock.position(now);
+      if (!dragging) seek.value = String(ms);
+      const second = Math.floor((dragging ? Number(seek.value) : ms) / 1000);
+      if (second !== shownSecond) {
+        shownSecond = second;
+        elapsed.textContent = time(second * 1000);
+      }
+      followLyrics(ms);
+      requestAnimationFrame(frame);
+    };
 
     root.querySelectorAll<HTMLButtonElement>('[data-cmd]').forEach((button) =>
       button.addEventListener('click', () => {
         const cmd = button.dataset.cmd!;
+        const state = clock.state;
         if (cmd === 'toggle') {
           // Shown at once; Spotify confirms on the next poll.
-          if (state) state = { ...state, playing: !state.playing, progressMs: position(), at: Date.now() };
+          clock.set({ playing: !state?.playing });
           paint();
-          void send({ action: state?.playing ? 'play' : 'pause' });
+          void send({ action: clock.state?.playing ? 'play' : 'pause' });
         } else if (cmd === 'shuffle') {
-          void send({ action: 'shuffle', on: !state?.shuffle });
+          clock.set({ shuffle: !state?.shuffle });
+          paint();
+          void send({ action: 'shuffle', on: clock.state?.shuffle });
         } else if (cmd === 'repeat') {
           const next = { off: 'context', context: 'track', track: 'off' } as const;
-          void send({ action: 'repeat', mode: next[state?.repeat ?? 'off'] });
+          clock.set({ repeat: next[state?.repeat ?? 'off'] });
+          paint();
+          void send({ action: 'repeat', mode: clock.state?.repeat });
+        } else if (cmd === 'next') {
+          // The queue says what comes next, so it can show before Spotify gets there.
+          if (clock.advance()) songChanged();
+          void send({ action: 'next' });
         } else {
           void send({ action: cmd });
         }
@@ -395,12 +529,11 @@ const ICON = {
     );
     seek.addEventListener('input', () => {
       dragging = true;
-      elapsed.textContent = time(Number(seek.value));
     });
     seek.addEventListener('change', () => {
       dragging = false;
-      if (state) state = { ...state, progressMs: Number(seek.value), at: Date.now() };
-      void send({ action: 'seek', positionMs: Number(seek.value) });
+      clock.set({ progressMs: Number(seek.value) });
+      void send({ action: 'seek', positionMs: Math.round(Number(seek.value)) });
     });
 
     // Import the album of a song not in the library yet.
@@ -419,8 +552,9 @@ const ICON = {
     });
 
     paint();
-    if (state?.track) void loadLyrics(state.track);
-    setInterval(tick, 500);
+    if (clock.state?.track) void loadLyrics(clock.state.track);
+    requestAnimationFrame(frame);
+    void poll();
     // Every few seconds while the page is in view; at once on coming back to it.
     setInterval(() => document.visibilityState === 'visible' && poll(), 5000);
     document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && poll());
@@ -455,6 +589,7 @@ const ICON = {
     border-radius: var(--radius-l);
     background: var(--surface-2);
     box-shadow: var(--shadow);
+    margin-bottom: var(--space-3);
   }
 
   .titles {
@@ -462,6 +597,19 @@ const ICON = {
     gap: 2px;
     min-width: 0;
     width: 100%;
+  }
+
+  /* The names lead to their pages, but read as titles, not a row of links. */
+  .titles :global(a) {
+    color: inherit;
+    text-decoration: none;
+    border-radius: var(--radius-s);
+  }
+
+  .titles :global(a:hover) {
+    text-decoration: underline;
+    text-decoration-thickness: from-font;
+    text-underline-offset: 0.15em;
   }
 
   h1 {
@@ -590,9 +738,25 @@ const ICON = {
     display: none;
   }
 
+  /* A toast above the tab bar (or the foot of the screen), over the page. */
   .status {
+    position: fixed;
+    z-index: 46;
+    left: 50%;
+    bottom: calc(var(--tabbar-space, 0px) + var(--space-3));
+    translate: -50% 0;
+    width: max-content;
+    max-width: calc(100vw - 2 * var(--gutter));
+    margin: 0;
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+    box-shadow: 0 10px 28px -10px rgb(0 0 0 / 0.55);
     color: var(--danger);
     font-size: var(--step--1);
+    font-weight: 600;
+    text-align: center;
   }
 
   .empty {

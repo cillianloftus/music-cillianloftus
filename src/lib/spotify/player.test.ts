@@ -54,6 +54,7 @@ describe('now playing', () => {
         spotifyId: 'x'.repeat(22),
         title: 'ice the bruise',
         artists: ['Dev Lemons'],
+        artistIds: ['a'],
         album: 'hunting what we already killed',
         albumSpotifyId: 'y'.repeat(22),
         art: 'large',

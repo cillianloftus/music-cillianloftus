@@ -97,7 +97,22 @@
 /* Everything is sized in rem, so the root size scales the whole site:
    smaller on phones, where every line counts, and times the size the
    visitor chose on Manage (--ui-scale, set before first paint). */
+/* Moving between pages is a quick cross-fade, as in an app, rather than a
+   blank flash; the tab bar and mini player (named where they are drawn)
+   stay put through it. Browsers without it just navigate. */
+@media (prefers-reduced-motion: no-preference) {
+  @view-transition {
+    navigation: auto;
+  }
+
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 0.16s;
+  }
+}
+
 html {
+  background: var(--bg);
   font-size: calc(100% * var(--ui-scale, 1));
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;

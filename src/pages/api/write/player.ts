@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { z } from 'zod';
 import { ReauthorizationRequired, SpotifyNotConfigured, spotifyFor } from '../../../lib/spotify/client';
-import { control, nowPlaying, PlayerError, type PlayerCommand } from '../../../lib/spotify/player';
+import { control, nowPlaying, PlayerError, upNext, type PlayerCommand } from '../../../lib/spotify/player';
 
 /**
  * Now playing, for the signed-in listener: GET is what Spotify is playing,
@@ -30,11 +30,15 @@ function failure(error: unknown): Response {
   return Response.json({ error: 'Spotify could not be reached.', reason: 'other' }, { status: 502 });
 }
 
-export const GET: APIRoute = async ({ locals }) => {
+export const GET: APIRoute = async ({ locals, url }) => {
   const user = locals.user;
   if (!user) return new Response(null, { status: 401 });
   try {
-    return Response.json(await nowPlaying(spotifyFor(user.id)), { headers: { 'cache-control': 'no-store' } });
+    const client = spotifyFor(user.id);
+    // ?next=1 also asks Spotify's queue, side by side so it costs no time.
+    const [state, next] = await Promise.all([nowPlaying(client), url.searchParams.has('next') ? upNext(client) : undefined]);
+    if (state && next !== undefined) state.next = next;
+    return Response.json(state, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
     return failure(error);
   }

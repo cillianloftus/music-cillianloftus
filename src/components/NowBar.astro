@@ -34,7 +34,29 @@ const onNow = Astro.url.pathname === '/now';
   <span class="nb-progress" aria-hidden="true"><span data-nb-fill></span></span>
 </now-bar>
 
+<script is:inline>
+  // Drawn from the last known state before the page paints, so moving
+  // between pages doesn't make the bar vanish and pop back in.
+  (function () {
+    var bar = document.currentScript && document.currentScript.previousElementSibling;
+    try {
+      var s = JSON.parse(sessionStorage.getItem('now-state') || 'null');
+      if (!bar || bar.hasAttribute('data-on-now') || !s || !s.track || !(s.playing || s.progressMs > 0)) return;
+      var pos = Math.min(s.progressMs + (s.playing ? Date.now() - s.at : 0), s.track.durationMs);
+      if (s.playing && pos >= s.track.durationMs) return; // Ended since: wait for the poll.
+      bar.querySelector('[data-nb-art]').src = s.track.art || '';
+      bar.querySelector('[data-nb-title]').textContent = s.track.title;
+      bar.querySelector('[data-nb-by]').textContent = s.track.artists.join(', ');
+      bar.querySelector('[data-nb-fill]').style.width = (pos / s.track.durationMs) * 100 + '%';
+      bar.classList.toggle('is-playing', !!s.playing);
+      bar.hidden = false;
+      document.documentElement.setAttribute('data-nowbar', '');
+    } catch (e) {}
+  })();
+</script>
+
 <script>
+  import { NowClock, STORE_KEY, fetchNow } from '../lib/client/now-clock';
   import type { NowState } from '../lib/spotify/now-state';
 
   // How long to stop asking after Spotify says it can't be read (not connected, no scope).
@@ -51,20 +73,30 @@ const onNow = Astro.url.pathname === '/now';
       sessionStorage.setItem(QUIET_KEY, String(Date.now() + 10 * 60_000));
     } catch {}
   };
+  const stored = (): NowState | null => {
+    try {
+      return JSON.parse(sessionStorage.getItem(STORE_KEY) || 'null') as NowState | null;
+    } catch {
+      return null;
+    }
+  };
 
   class NowBar extends HTMLElement {
-    state: NowState | null = null;
+    clock = new NowClock(stored());
+    lastEnd = 0;
 
     connectedCallback() {
       const onNow = this.hasAttribute('data-on-now');
       this.querySelector('[data-nb-toggle]')!.addEventListener('click', () => {
-        if (!this.state) return;
-        const playing = !this.state.playing;
-        this.state = { ...this.state, playing, progressMs: this.position(), at: Date.now() };
+        if (!this.clock.state) return;
+        this.clock.set({ playing: !this.clock.state.playing });
         this.paint();
-        void this.send({ action: playing ? 'play' : 'pause' });
+        void this.send({ action: this.clock.state.playing ? 'play' : 'pause' });
       });
-      this.querySelector('[data-nb-next]')!.addEventListener('click', () => void this.send({ action: 'next' }));
+      this.querySelector('[data-nb-next]')!.addEventListener('click', () => {
+        if (this.clock.advance()) this.paint();
+        void this.send({ action: 'next' });
+      });
 
       // Listen links start playback here rather than leaving for Spotify.
       document.addEventListener('click', async (event) => {
@@ -81,25 +113,34 @@ const onNow = Astro.url.pathname === '/now';
       void this.poll();
       setInterval(() => document.visibilityState === 'visible' && this.poll(), 15_000);
       document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && this.poll());
-      setInterval(() => this.paintProgress(), 1000);
+      setInterval(() => this.tick(), 1000);
     }
 
-    position() {
-      const s = this.state;
-      if (!s?.track) return 0;
-      return Math.min(s.progressMs + (s.playing ? Date.now() - s.at : 0), s.track.durationMs);
+    tick() {
+      const now = Date.now();
+      // The song ran out: on to the next in Spotify's queue, then check with Spotify.
+      if (this.clock.ended(now) && now - this.lastEnd > 1500) {
+        this.lastEnd = now;
+        this.clock.advance(now);
+        this.paint();
+        setTimeout(() => this.poll(), 400);
+      }
+      this.paintProgress();
     }
 
     async poll() {
-      if (quiet() && !this.state) return;
+      if (quiet() && !this.clock.state) return;
       try {
-        const res = await fetch('/api/write/player', { headers: { accept: 'application/json' } });
-        if (!res.ok) {
-          hush();
-          this.show(null);
-          return;
-        }
-        this.show((await res.json()) as NowState | null);
+        // The queue only matters near the end of a song.
+        const answer = await fetchNow(this.clock.wantsNext());
+        if (!answer.ok) {
+          // Only a missing connection hides the bar; a hiccup leaves it counting on.
+          if (answer.reason === 'scope') {
+            hush();
+            this.clock.accept(null);
+          }
+        } else this.clock.accept(answer.state);
+        this.paint();
       } catch {
         /* Offline for a moment. */
       }
@@ -123,31 +164,27 @@ const onNow = Astro.url.pathname === '/now';
       }
     }
 
-    show(state: NowState | null) {
-      this.state = state;
+    paint() {
+      const state = this.clock.state;
       // Shown while a song is on, or paused part-way (it can be resumed from here).
       const visible = Boolean(state?.track && (state.playing || state.progressMs > 0));
       this.hidden = !visible;
       document.documentElement.toggleAttribute('data-nowbar', visible);
-      this.paint();
-    }
-
-    paint() {
-      const track = this.state?.track;
+      const track = state?.track;
       if (!track) return;
       const art = this.querySelector<HTMLImageElement>('[data-nb-art]')!;
-      if (art.src !== track.art) art.src = track.art ?? '';
+      if (art.getAttribute('src') !== (track.art ?? '')) art.src = track.art ?? '';
       this.querySelector('[data-nb-title]')!.textContent = track.title;
       this.querySelector('[data-nb-by]')!.textContent = track.artists.join(', ');
-      this.classList.toggle('is-playing', Boolean(this.state?.playing));
-      this.querySelector('[data-nb-toggle]')!.setAttribute('aria-label', this.state?.playing ? 'Pause' : 'Play');
+      this.classList.toggle('is-playing', Boolean(state?.playing));
+      this.querySelector('[data-nb-toggle]')!.setAttribute('aria-label', state?.playing ? 'Pause' : 'Play');
       this.paintProgress();
     }
 
     paintProgress() {
-      const track = this.state?.track;
+      const track = this.clock.state?.track;
       if (!track || this.hidden) return;
-      this.querySelector<HTMLElement>('[data-nb-fill]')!.style.width = `${(this.position() / track.durationMs) * 100}%`;
+      this.querySelector<HTMLElement>('[data-nb-fill]')!.style.width = `${(this.clock.position() / track.durationMs) * 100}%`;
     }
   }
   customElements.define('now-bar', NowBar);
@@ -157,6 +194,8 @@ const onNow = Astro.url.pathname === '/now';
   now-bar {
     position: fixed;
     z-index: 44;
+    /* Held still while pages cross-fade (global.css). */
+    view-transition-name: nowbar;
     left: var(--tabbar-inset, 0.6rem);
     right: var(--tabbar-inset, 0.6rem);
     bottom: calc(var(--tabbar-space) + 0.1rem);

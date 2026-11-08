@@ -358,6 +358,8 @@ const next = theme === 'dark' ? 'light' : 'dark';
       position: fixed;
       inset: auto var(--tabbar-inset) calc(var(--tabbar-inset) + env(safe-area-inset-bottom));
       z-index: 45;
+      /* Held still while pages cross-fade (global.css). */
+      view-transition-name: tabbar;
       border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
       border-radius: 1.5rem;
       background: var(--surface-1);
