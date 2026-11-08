@@ -36,9 +36,16 @@ export async function libraryStamp(userId: string | null): Promise<string> {
   return Object.values(row ?? {}).join(':');
 }
 
+declare const __BUILD_ID__: string | undefined;
+/**
+ * This deploy (set at build, see astro.config.mjs). In every key, so a value
+ * worked out by older code, in an older shape, is never read by newer code.
+ */
+const BUILD = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'test';
+
 /** The value under name for this library state, worked out and kept when missing. */
 export async function byLibrary<T>(name: string, userId: string | null, work: () => Promise<T>): Promise<T> {
-  const key = `lib:${name}:${userId ?? '-'}:${await libraryStamp(userId)}`;
+  const key = `lib:${BUILD}:${name}:${userId ?? '-'}:${await libraryStamp(userId)}`;
   try {
     const hit = await env.CACHE.get<{ value: T }>(key, 'json');
     if (hit) return hit.value;

@@ -80,7 +80,9 @@ albums AS (
     g.title,
     g.type,
     g.created_at,
-    s.rated_track_count,
+    -- Counted apart and passed in (?7): v_release_score joined here, beside
+    -- everything else, is more than D1 lets one statement expand.
+    json_extract(?7, '$."' || g.id || '"') AS rated_track_count,
     (SELECT a.name FROM artist_credit c JOIN artist a ON a.id = c.artist_id
      WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary'
      ORDER BY c.position LIMIT 1) AS artist_name,
@@ -91,7 +93,6 @@ albums AS (
      JOIN v_release_group_canonical cc ON cc.release_id = t.release_id
      WHERE cc.release_group_id = g.id AND p.user_id = ?1) AS plays
   FROM release_group g
-  LEFT JOIN v_release_score s ON s.release_group_id = g.id AND s.user_id = ?1
   WHERE g.status = 'released'
     -- Bootlegs waiting to be cleared are not worth a rating.
     AND (coalesce(g.official, 1) = 1 OR g.keep_unofficial = 1)
@@ -160,6 +161,12 @@ function reasonFor(row: Row): QueueReason {
 }
 
 export async function ratingQueue(userId: string): Promise<QueueEntry[]> {
+  const { results: partial } = await env.DB.prepare(
+    'SELECT release_group_id, rated_track_count FROM v_release_score WHERE user_id = ? AND rated_track_count > 0',
+  )
+    .bind(userId)
+    .all<{ release_group_id: string; rated_track_count: number }>();
+  const ratedCounts = JSON.stringify(Object.fromEntries(partial.map((r) => [r.release_group_id, r.rated_track_count])));
   const { results } = await env.DB.prepare(QUEUE_SQL)
     .bind(
       userId,
@@ -168,6 +175,7 @@ export async function ratingQueue(userId: string): Promise<QueueEntry[]> {
       QUEUE_RULES.examineGutAtLeast,
       QUEUE_RULES.recentDays,
       QUEUE_RULES.handoffHours,
+      ratedCounts,
     )
     .all<Row>();
   // A remix single or EP is a version of a song rated elsewhere, not a record to rate.
