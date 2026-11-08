@@ -93,6 +93,31 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
         true,
       );
 
+      // While the phone's keyboard is up, html[data-keyboard] is set and the
+      // tab bar and mini player step away (as an app's would), rather than
+      // riding up on top of the keys. The keyboard is up when something
+      // that takes typing has focus and the viewport has shrunk for it;
+      // closing the keyboard with Back keeps the focus, hence the height.
+      const typingTarget = (el: Element | null) =>
+        el instanceof HTMLTextAreaElement ||
+        (el instanceof HTMLElement && el.isContentEditable) ||
+        (el instanceof HTMLInputElement && !['range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'color', 'hidden'].includes(el.type));
+      let tallest = window.visualViewport?.height ?? window.innerHeight;
+      const keyboard = () => {
+        const height = window.visualViewport?.height ?? window.innerHeight;
+        if (!typingTarget(document.activeElement)) tallest = Math.max(tallest, height);
+        const up = typingTarget(document.activeElement) && height < tallest * 0.85;
+        document.documentElement.toggleAttribute('data-keyboard', up);
+      };
+      document.addEventListener('focusin', () => requestAnimationFrame(keyboard));
+      document.addEventListener('focusout', () => requestAnimationFrame(keyboard));
+      window.visualViewport?.addEventListener('resize', keyboard);
+      // Turned sideways, "full height" is another number.
+      screen.orientation?.addEventListener('change', () => {
+        tallest = 0;
+        keyboard();
+      });
+
       // Installable as an app (public/sw.js). Not in development, where a
       // worker would outlive code changes.
       if (import.meta.env.PROD && 'serviceWorker' in navigator) {

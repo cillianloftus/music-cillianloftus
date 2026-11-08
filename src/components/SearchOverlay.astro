@@ -651,6 +651,11 @@
       background: var(--surface-1);
     }
 
+    /* Keyboard up: the tab bar has stepped away, so the box sits on the keys. */
+    :global(:root[data-keyboard]) .search-overlay .search-box {
+      padding-bottom: var(--space-2);
+    }
+
     .search-box input {
       font-size: var(--step-0);
     }

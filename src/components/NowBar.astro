@@ -215,6 +215,11 @@ const onNow = Astro.url.pathname === '/now';
     display: none;
   }
 
+  /* Out of the way while the keyboard is up, like the tab bar. */
+  :global(:root[data-keyboard]) now-bar {
+    visibility: hidden;
+  }
+
   /* Wider screens have no tab bar: a card in the bottom left corner. */
   @media (min-width: 40rem) {
     now-bar {

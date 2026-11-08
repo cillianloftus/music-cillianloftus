@@ -400,6 +400,12 @@ const next = theme === 'dark' ? 'light' : 'dark';
       }
     }
 
+    /* The keyboard is up (Base sets this): the bar stays down at the foot
+       of the screen, under the keys, rather than riding up on them. */
+    :global(:root[data-keyboard]) .tabbar {
+      visibility: hidden;
+    }
+
     /* Keep page content clear of the bar. */
     :global(body) {
       padding-bottom: var(--tabbar-space);

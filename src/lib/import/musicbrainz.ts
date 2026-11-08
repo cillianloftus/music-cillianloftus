@@ -313,7 +313,8 @@ export function buildPlan(release: MbRelease, group: MbReleaseGroup): ImportPlan
   // every track on it rather than the album.
   for (const recordingId of recordings.keys()) builder.relations('recording', recordingId, release.relations);
 
-  const label = release['label-info']?.find((info) => info.label)?.label?.name ?? null;
+  // MusicBrainz names self-released records' label "[no label]": that is no label.
+  const label = release['label-info']?.map((info) => info.label?.name).find((name) => name && name !== '[no label]') ?? null;
 
   return {
     source: 'musicbrainz',
