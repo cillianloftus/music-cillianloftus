@@ -113,6 +113,10 @@ html {
     --header-height: 0px;
     /* The phone tab bar (SiteHeader), which content keeps clear of. */
     --tabbar-height: 4rem;
+    /* The bar floats this far in from the screen's edges. */
+    --tabbar-inset: 0.6rem;
+    /* All the room it takes at the bottom of the screen. */
+    --tabbar-space: calc(var(--tabbar-height) + 2 * var(--tabbar-inset) + env(safe-area-inset-bottom));
     scroll-padding-top: var(--space-4);
   }
 }

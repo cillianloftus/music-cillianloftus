@@ -9,38 +9,46 @@ const { theme } = Astro.props;
 const user = Astro.locals.user;
 const path = Astro.url.pathname;
 
-// Icons are SVG path data on a 24px grid, drawn as strokes.
 const links = [
+  { href: '/insights', label: 'Insights' },
   { href: '/diary', label: 'Diary' },
   { href: '/artists', label: 'Artists' },
   { href: '/genres', label: 'Genres' },
   { href: '/playlists', label: 'Playlists' },
 ];
 
-// Phones: one bar along the bottom, in thumb reach, and no header. Five
-// tabs; Browse opens a sheet with the rest of the site.
-const ICONS = {
-  home: 'M4 11l8-7 8 7v9H4z M10 20v-5h4v5',
-  search: 'M10.5 16.5a6 6 0 1 0 0-12 6 6 0 0 0 0 12z M15 15l5 5',
-  playlists: 'M4 6h12M4 12h12M4 18h7M18 15v6M15 18h6',
-  browse: 'M4 4h6.5v6.5H4z M13.5 4H20v6.5h-6.5z M4 13.5h6.5V20H4z M13.5 13.5H20V20h-6.5z',
-  manage: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.5 7.5 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.5 7.5 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.5 7.5 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.5 7.5 0 0 0 2.6-1.5l2.4 1 2-3.4z',
-  signin: 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21a8 8 0 0 1 16 0',
-};
-const browse = [
-  { href: '/insights', label: 'Insights' },
-  { href: '/diary', label: 'Diary' },
-  { href: '/artists', label: 'Artists' },
-  { href: '/genres', label: 'Genres' },
-  ...(user ? [{ href: '/queue', label: 'Rating queue' }] : []),
-];
 const under = (href: string) => path === href || path.startsWith(`${href}/`);
-const inManage = under('/manage') || path.startsWith('/edit/') || path === '/query';
-const inBrowse = browse.some((b) => under(b.href)) || under('/artist') || under('/genre') || under('/year');
+
+/*
+ * Phones: a floating bar of five real places, in thumb reach, and no
+ * header. Library holds the browsable sections (a strip of them across
+ * the top of each section's page) and reopens the one last visited.
+ */
+const LIBRARY = [
+  { href: '/artists', label: 'Artists', owns: '/artist' },
+  { href: '/genres', label: 'Genres', owns: '/genre' },
+  { href: '/playlists', label: 'Playlists', owns: '/playlist' },
+  { href: '/diary', label: 'Diary', owns: '/year' },
+];
+const section = LIBRARY.find((s) => under(s.href) || under(s.owns));
+const inLibrary = Boolean(section) || under('/album') || under('/track');
+const onSectionPage = LIBRARY.some((s) => path === s.href);
+const inYou = under('/manage') || under('/edit') || path === '/queue' || path === '/query';
+
+// 24px grid, drawn as strokes.
+const ICONS = {
+  home: 'M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z',
+  library: 'M5 4.5v15 M9.5 4.5v15 M14 5.2l4.6 14.3',
+  search: 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13z M15.3 15.3 20 20',
+  insights: 'M5 19.5v-5 M10 19.5v-9 M15 19.5v-6 M20 19.5V5',
+  signin: 'M12 11.5a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4.5 20.5a7.5 7.5 0 0 1 15 0',
+};
+const initial = (user?.display_name || user?.email || '?').trim().charAt(0).toUpperCase();
 const tabs = [
-  { href: '/', label: 'Home', icon: ICONS.home, current: path === '/' || under('/album') || under('/track') },
-  { href: '/search', label: 'Search', icon: ICONS.search, current: path === '/search' },
-  { href: '/playlists', label: 'Playlists', icon: ICONS.playlists, current: under('/playlists') || under('/playlist') },
+  { href: '/', label: 'Home', icon: ICONS.home, current: path === '/' },
+  { href: section?.href ?? '/artists', label: 'Library', icon: ICONS.library, current: inLibrary, library: true },
+  { href: '/search', label: 'Search', icon: ICONS.search, current: path === '/search', search: true },
+  { href: '/insights', label: 'Insights', icon: ICONS.insights, current: under('/insights') },
 ];
 
 // Cillian's own tools, in one menu.
@@ -48,24 +56,13 @@ const tools = user
   ? [
       { href: '/queue', label: 'Rating queue' },
       { href: '/manage/import', label: 'Import' },
-      { href: '/insights', label: 'Insights' },
       { href: '/manage', label: 'Manage' },
     ]
   : [];
-const inTools = tools.some((t) => (t.href === '/manage' ? path === '/manage' || path.startsWith('/manage/') || path.startsWith('/edit/') : path === t.href));
+const inTools = tools.some((t) => (t.href === '/manage' ? inYou : path === t.href));
 
-// The most specific matching link is current, so /queue marks Queue,
-// not Manage (/edit).
-// Detail pages belong to their section: an album to Albums, a playlist to Playlists.
-const SECTION_OF: Record<string, string> = { '/album': '/', '/artist': '/artists', '/playlist': '/playlists' };
-const section = Object.entries(SECTION_OF).find(([prefix]) => path.startsWith(`${prefix}/`))?.[1];
-const matches = (href: string) =>
-  href === section || (href === '/' ? path === '/' : path === href || path.startsWith(`${href}/`));
-const currentHref = links
-  .map((link) => link.href)
-  .filter(matches)
-  .sort((a, b) => b.length - a.length)[0];
-const isCurrent = (href: string) => href === currentHref;
+// Detail pages belong to their section: an artist to Artists, a playlist to Playlists.
+const isCurrent = (href: string) => under(href) || (section?.href === href);
 const next = theme === 'dark' ? 'light' : 'dark';
 ---
 
@@ -143,47 +140,68 @@ const next = theme === 'dark' ? 'light' : 'dark';
   </div>
 </header>
 
-<nav class="tabbar" aria-label="Main">
+<nav class="tabbar" aria-label="Main" data-library-here={section?.href}>
   <ul>
     {
       tabs.map((tab) => (
         <li>
           <a
             href={tab.href}
-            class:list={[{ 'search-link': tab.href === '/search' }]}
+            class:list={[{ 'search-link': tab.search }]}
             aria-current={tab.current ? 'page' : undefined}
+            data-library-tab={tab.library ? '' : undefined}
           >
-            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d={tab.icon}></path></svg>
-            {tab.label}
+            <span class="glyph">
+              <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d={tab.icon}></path></svg>
+            </span>
+            <span class="tab-label">{tab.label}</span>
           </a>
         </li>
       ))
     }
     <li>
-      <details class="browse" data-menu>
-        <summary data-current={inBrowse ? 'true' : undefined}>
-          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d={ICONS.browse}></path></svg>
-          Browse
-        </summary>
-        <ul class="sheet" role="list">
-          {browse.map((b) => (
-            <li>
-              <a href={b.href} aria-current={under(b.href) ? 'page' : undefined}>{b.label}</a>
-            </li>
-          ))}
-        </ul>
-      </details>
-    </li>
-    <li>
-      <a href="/manage" aria-current={inManage ? 'page' : undefined}>
-        <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d={user ? ICONS.manage : ICONS.signin}></path></svg>
-        {user ? 'Manage' : 'Sign in'}
+      <a href="/manage" aria-current={inYou ? 'page' : undefined}>
+        <span class="glyph">
+          {
+            user ? (
+              <span class="avatar" aria-hidden="true">{initial}</span>
+            ) : (
+              <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d={ICONS.signin}></path></svg>
+            )
+          }
+        </span>
+        <span class="tab-label">{user ? 'You' : 'Sign in'}</span>
       </a>
     </li>
   </ul>
 </nav>
 
+{
+  onSectionPage && (
+    <nav class="library" aria-label="Library">
+      <ul role="list">
+        {LIBRARY.map((s) => (
+          <li>
+            <a href={s.href} aria-current={path === s.href ? 'page' : undefined}>
+              {s.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  )
+}
+
 <script>
+  // Library reopens the section last visited.
+  try {
+    const here = document.querySelector<HTMLElement>('[data-library-here]')?.dataset.libraryHere;
+    if (here) localStorage.setItem('library-section', here);
+    const last = localStorage.getItem('library-section');
+    const tab = document.querySelector<HTMLAnchorElement>('[data-library-tab]');
+    if (tab && last?.startsWith('/') && !here) tab.href = last;
+  } catch {}
+
   // Progressive enhancement: without JS the form posts and reloads.
   const form = document.querySelector<HTMLFormElement>('[data-theme-toggle]');
   form?.addEventListener('submit', (event) => {
@@ -320,7 +338,8 @@ const next = theme === 'dark' ? 'light' : 'dark';
   }
 
   /* Phones: no header at all; the tab bar does the navigating. */
-  .tabbar {
+  .tabbar,
+  .library {
     display: none;
   }
 
@@ -329,19 +348,43 @@ const next = theme === 'dark' ? 'light' : 'dark';
       display: none;
     }
 
+    /* Floats clear of the screen edge, frosted so the page shows through
+       faintly; solid where blur is missing or transparency turned down. */
     .tabbar {
       display: block;
       position: fixed;
-      inset: auto 0 0 0;
+      inset: auto var(--tabbar-inset) calc(var(--tabbar-inset) + env(safe-area-inset-bottom));
       z-index: 45;
-      padding-bottom: env(safe-area-inset-bottom);
-      border-top: 1px solid var(--border);
+      border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+      border-radius: 1.5rem;
       background: var(--surface-1);
+      box-shadow:
+        0 1px 0 color-mix(in srgb, var(--text) 6%, transparent) inset,
+        0 12px 32px -8px rgb(0 0 0 / 0.55);
+    }
+
+    @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+      .tabbar {
+        background: color-mix(in srgb, var(--surface-1) 80%, transparent);
+        -webkit-backdrop-filter: blur(18px) saturate(1.6);
+        backdrop-filter: blur(18px) saturate(1.6);
+      }
+    }
+
+    @media (prefers-reduced-transparency: reduce) {
+      .tabbar {
+        background: var(--surface-1);
+      }
     }
 
     /* Keep page content clear of the bar. */
     :global(body) {
-      padding-bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom));
+      padding-bottom: var(--tabbar-space);
+    }
+
+    .library {
+      display: block;
+      padding-top: var(--space-2);
     }
   }
 
@@ -349,30 +392,48 @@ const next = theme === 'dark' ? 'light' : 'dark';
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     margin: 0;
-    padding: 0;
+    padding: 0 var(--space-1);
     list-style: none;
   }
 
-  .tabbar > ul > li > a,
-  .browse summary {
+  .tabbar a {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3px;
+    gap: 2px;
     min-height: var(--tabbar-height);
     color: var(--text-muted);
-    font-size: 0.8125rem;
+    font-size: 0.75rem;
     font-weight: 600;
+    letter-spacing: 0.01em;
     text-decoration: none;
-    cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
 
-  .tabbar a[aria-current='page'],
-  .browse summary[data-current='true'],
-  .browse[open] summary {
+  /* The place you are: its icon sits in a soft pill of the accent. */
+  .glyph {
+    display: grid;
+    place-items: center;
+    width: 3.4rem;
+    height: 2rem;
+    border-radius: 999px;
+    transition:
+      background-color 0.2s ease,
+      transform 0.2s ease;
+  }
+
+  .tabbar a[aria-current='page'] {
+    color: var(--text);
+  }
+
+  .tabbar a[aria-current='page'] .glyph {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
     color: var(--accent);
+  }
+
+  .tabbar a:active .glyph {
+    transform: scale(0.92);
   }
 
   /* While the search panel is open, Search is where you are. */
@@ -380,13 +441,23 @@ const next = theme === 'dark' ? 'light' : 'dark';
     color: var(--text-muted);
   }
 
+  :global(:root[data-searching]) .tabbar a[aria-current='page'] .glyph {
+    background: none;
+    color: inherit;
+  }
+
   :global(:root[data-searching]) .tabbar .search-link {
+    color: var(--text);
+  }
+
+  :global(:root[data-searching]) .tabbar .search-link .glyph {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
     color: var(--accent);
   }
 
   .tab-icon {
-    width: 1.75rem;
-    height: 1.75rem;
+    width: 1.5rem;
+    height: 1.5rem;
     fill: none;
     stroke: currentColor;
     stroke-width: 1.8;
@@ -394,43 +465,53 @@ const next = theme === 'dark' ? 'light' : 'dark';
     stroke-linejoin: round;
   }
 
-  .browse summary {
-    list-style: none;
-  }
-
-  .browse summary::-webkit-details-marker {
-    display: none;
-  }
-
-  /* The rest of the site, in a sheet that rises from the bar. */
-  .sheet {
-    position: fixed;
-    inset: auto var(--space-2) calc(var(--tabbar-height) + env(safe-area-inset-bottom) + var(--space-2));
+  .avatar {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-1);
-    margin: 0;
-    padding: var(--space-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-l);
-    background: var(--surface-1);
-    box-shadow: 0 -12px 32px -12px rgb(0 0 0 / 0.45);
-    list-style: none;
+    place-items: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    border: 1.8px solid currentColor;
+    border-radius: 50%;
+    font-size: 0.8rem;
+    font-weight: 800;
+    line-height: 1;
   }
 
-  .sheet a {
+  /* The Library's sections: a row of tabs across the top of each one,
+     quieter than the pills a page uses for its own sorting. */
+  .library ul {
     display: flex;
+    gap: var(--space-5);
+    margin: 0;
+    padding: 0 var(--gutter);
+    overflow-x: auto;
+    scrollbar-width: none;
+    list-style: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .library a {
+    position: relative;
+    display: inline-flex;
     align-items: center;
     min-height: var(--target);
-    padding-inline: var(--space-3);
-    border-radius: var(--radius-m);
-    color: var(--text);
-    font-weight: 600;
+    color: var(--text-muted);
+    font-weight: 650;
     text-decoration: none;
+    white-space: nowrap;
   }
 
-  .sheet a[aria-current='page'] {
-    background: var(--surface-2);
+  .library a[aria-current='page'] {
+    color: var(--text);
+  }
+
+  .library a[aria-current='page']::after {
+    content: '';
+    position: absolute;
+    inset: auto 0 -1px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--accent);
   }
 
   .icon-button,

@@ -28,6 +28,8 @@ export default defineConfig({
   // Identity comes from Cloudflare Access on every request; there is no
   // session state, so no SESSION KV namespace should be provisioned.
   session: false,
+  // Its badge sits over the phone tab bar in every screenshot.
+  devToolbar: { enabled: false },
   // Each build's own id, part of every page-cache key (src/lib/page-cache.ts):
   // a page kept from the last deploy names stylesheets that are gone.
   vite: { define: { __BUILD_ID__: JSON.stringify(Date.now().toString(36)) } },
