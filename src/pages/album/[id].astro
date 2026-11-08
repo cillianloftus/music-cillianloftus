@@ -351,6 +351,12 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                       <span class="track-score">
                         <Score quality={track.quality_score} personal={track.personal_score} size="s" quietWhenEmpty />
                       </span>
+                      {/* A skit is not rated, but keeps the column, so its length lines up. */}
+                      {user && kinds.get(track.recording_id) === 'skit' && (
+                        <span class="rate rate--none" aria-hidden="true">
+                          <svg viewBox="0 0 24 24" />
+                        </span>
+                      )}
                       {user && kinds.get(track.recording_id) !== 'skit' && (
                         <a class="rate" href={rateHref('recording', track.recording_id)} title={`Rate ${track.title}`}>
                           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -848,6 +854,11 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     color: var(--text-subtle);
     text-decoration: none;
     transition: color 0.15s, background-color 0.15s;
+  }
+
+  /* A skit's stand-in: the star's box, empty, so the row lays out as the rest. */
+  .rate--none {
+    visibility: hidden;
   }
 
   .rate svg {

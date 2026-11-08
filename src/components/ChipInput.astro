@@ -1,9 +1,12 @@
 ---
 /**
  * A list of short values (genres) edited as chips: each one a removable
- * tag, with a box beneath that suggests from what already exists and adds
- * on Enter, comma or picking a suggestion. Backspace in an empty box takes
+ * tag, with a box that suggests from what already exists and adds on
+ * Enter, comma or picking a suggestion. Backspace in an empty box takes
  * the last chip off.
+ *
+ * The suggestions are its own list (an ARIA combobox), not a <datalist>:
+ * Chrome on Android draws a datalist as a see-through sheet over the page.
  *
  * Without JavaScript it is the comma-separated text field it enhances,
  * which is also what is submitted either way.
@@ -55,7 +58,13 @@ const hintId = hint ? `${id}-hint` : undefined;
       const entry = document.createElement('input');
       entry.className = 'entry';
       entry.id = label.htmlFor;
-      entry.setAttribute('list', raw.getAttribute('list') ?? '');
+      const options = [...this.querySelectorAll('datalist option')].map((o) => (o as HTMLOptionElement).value);
+      this.querySelector('datalist')?.remove();
+      const listId = `${label.htmlFor}-suggestions`;
+      entry.setAttribute('role', 'combobox');
+      entry.setAttribute('aria-autocomplete', 'list');
+      entry.setAttribute('aria-expanded', 'false');
+      entry.setAttribute('aria-controls', listId);
       // Password managers (NordPass and co.) otherwise offer to fill these.
       for (const [k, v] of [['autocomplete', 'off'], ['data-1p-ignore', ''], ['data-lpignore', 'true'], ['data-bwignore', ''], ['data-form-type', 'other']]) entry.setAttribute(k, v);
       entry.placeholder = this.dataset.placeholder ?? '';
@@ -64,7 +73,19 @@ const hintId = hint ? `${id}-hint` : undefined;
       raw.removeAttribute('list');
       box.appendChild(list);
       box.appendChild(entry);
-      this.insertBefore(box, raw);
+      // The box and its suggestions share a frame, so the list opens just beneath the box.
+      const frame = document.createElement('div');
+      frame.className = 'frame';
+      frame.appendChild(box);
+      this.insertBefore(frame, raw);
+
+      const suggest = document.createElement('ul');
+      suggest.id = listId;
+      suggest.className = 'suggest';
+      suggest.setAttribute('role', 'listbox');
+      suggest.setAttribute('aria-label', `${label.textContent ?? ''} suggestions`);
+      suggest.hidden = true;
+      frame.appendChild(suggest);
 
       const status = document.createElement('span');
       status.className = 'visually-hidden';
@@ -108,22 +129,85 @@ const hintId = hint ? `${id}-hint` : undefined;
         sync();
       };
 
+      // Matches for what is typed: names starting with it first, then containing it.
+      let active = -1;
+      const shown = () => [...suggest.querySelectorAll<HTMLLIElement>('[role="option"]')];
+      const close = () => {
+        suggest.hidden = true;
+        entry.setAttribute('aria-expanded', 'false');
+        entry.removeAttribute('aria-activedescendant');
+        active = -1;
+      };
+      const highlight = (i: number) => {
+        const items = shown();
+        active = items.length ? (i + items.length) % items.length : -1;
+        items.forEach((li, j) => li.setAttribute('aria-selected', String(j === active)));
+        if (active >= 0) {
+          entry.setAttribute('aria-activedescendant', items[active]!.id);
+          items[active]!.scrollIntoView({ block: 'nearest' });
+        }
+      };
+      const refresh = () => {
+        const q = entry.value.trim().toLowerCase();
+        if (!q) return close();
+        const taken = new Set(values.map((v) => v.toLowerCase()));
+        const free = options.filter((o) => !taken.has(o.toLowerCase()));
+        const starts = free.filter((o) => o.toLowerCase().startsWith(q));
+        const contains = free.filter((o) => !o.toLowerCase().startsWith(q) && o.toLowerCase().includes(q));
+        const matches = [...starts, ...contains].slice(0, 8);
+        if (!matches.length) return close();
+        suggest.replaceChildren(
+          ...matches.map((m, i) => {
+            const li = document.createElement('li');
+            li.id = `${listId}-${i}`;
+            li.setAttribute('role', 'option');
+            li.setAttribute('aria-selected', 'false');
+            li.textContent = m;
+            // Pointer down, not click: the box would lose focus first and close the list.
+            li.addEventListener('pointerdown', (event) => {
+              event.preventDefault();
+              add(m);
+              close();
+              entry.focus();
+            });
+            return li;
+          }),
+        );
+        suggest.hidden = false;
+        entry.setAttribute('aria-expanded', 'true');
+        active = -1;
+      };
+      entry.addEventListener('input', refresh);
+      entry.addEventListener('blur', close);
+
       entry.addEventListener('keydown', (event) => {
+        if (!suggest.hidden && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+          event.preventDefault();
+          highlight(active + (event.key === 'ArrowDown' ? 1 : -1));
+          return;
+        }
+        if (event.key === 'Escape' && !suggest.hidden) {
+          event.preventDefault();
+          close();
+          return;
+        }
+        if (event.key === 'Enter' && active >= 0) {
+          event.preventDefault();
+          add(shown()[active]!.textContent ?? '');
+          close();
+          return;
+        }
         if (event.key === 'Enter' || event.key === ',') {
           if (entry.value.trim()) {
             event.preventDefault();
             add(entry.value);
+            close();
           } else if (event.key === ',') event.preventDefault();
         } else if (event.key === 'Backspace' && entry.value === '' && values.length) {
           const v = values.pop()!;
           sync();
           status.textContent = `${v} removed.`;
         }
-      });
-      // Picking from the suggestions fires input with the whole value.
-      entry.addEventListener('input', (event) => {
-        const kind = (event as InputEvent).inputType;
-        if (kind === undefined || kind === 'insertReplacementText') add(entry.value);
       });
       // Whatever is half-typed counts when the form is saved.
       raw.form?.addEventListener('submit', () => entry.value.trim() && add(entry.value));
@@ -198,6 +282,45 @@ const hintId = hint ? `${id}-hint` : undefined;
 
   .chips :global(.chip-remove:hover) {
     color: var(--danger);
+  }
+
+  .chips :global(.frame) {
+    position: relative;
+  }
+
+  /* The suggestions: a solid sheet beneath the box, above what follows. */
+  .chips :global(.suggest) {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + var(--space-1));
+    inset-inline: 0;
+    max-height: 16rem;
+    margin: 0;
+    padding: var(--space-1);
+    overflow-y: auto;
+    list-style: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    box-shadow: 0 10px 28px rgb(0 0 0 / 0.22);
+  }
+
+  .chips :global(.suggest[hidden]) {
+    display: none;
+  }
+
+  .chips :global(.suggest [role='option']) {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-s);
+    cursor: pointer;
+  }
+
+  .chips :global(.suggest [role='option']:hover),
+  .chips :global(.suggest [aria-selected='true']) {
+    background: var(--surface-2);
   }
 
   .chips :global(.entry) {
