@@ -104,6 +104,7 @@ export interface Version {
   art_key: string | null;
   quality_score: number | null;
   personal_score: number | null;
+  year: string | null;
   credits: CreditPart[];
 }
 
@@ -112,7 +113,7 @@ export async function otherVersions(id: string, workId: string | null, viewerId:
   if (!workId) return [];
   const { results } = await env.DB.prepare(
     `SELECT r.id, r.title, ra.release_group_id AS album_id, g.title AS album_title, coalesce(fa.art_key, x.art_key) AS art_key,
-            s.quality_score, s.personal_score
+            s.quality_score, s.personal_score, substr(coalesce(r.first_release_date, g.first_release_date), 1, 4) AS year
      FROM recording r
      LEFT JOIN v_recording_first_art fa ON fa.recording_id = r.id
      LEFT JOIN v_recording_album ra ON ra.recording_id = r.id

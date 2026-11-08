@@ -24,6 +24,7 @@ import BarChart from '../../components/BarChart.astro';
 import { otherVersions, trackAppearances, trackCredits, trackDetail } from '../../lib/pages';
 import { ratingHistory } from '../../lib/ratings';
 import { spotifyLink } from '../../lib/spotify/links';
+import { splitVersion } from '../../lib/versions';
 
 const id = Astro.params.id!;
 const user = Astro.locals.user;
@@ -43,6 +44,15 @@ const [appearances, credits, versions, genres, history, plays] = await Promise.a
   viewerId ? ratingHistory(viewerId, 'recording', id) : Promise.resolve([]),
   user ? playCounts(user.id, [id]) : Promise.resolve(new Map<string, number>()),
 ]);
+// What sets each version apart, said first ("Swisha House remix", "Live at
+// Reading 2017"); plain takes, the song itself elsewhere, come first.
+const VERSIONS_SHOWN = 6;
+const sortedVersions = versions
+  .map((v) => {
+    const kind = splitVersion(v.title).version;
+    return { ...v, kind: kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : null, };
+  })
+  .sort((a, b) => Number(a.kind !== null) - Number(b.kind !== null));
 
 // The album it belongs to (for "4 on …"), and the release it first came out
 // on (for its cover): a single's art when the single came first, the
@@ -239,24 +249,56 @@ function ordinalOf(n: number): string {
     {
       versions.length > 0 && (
         <section aria-labelledby="versions-heading">
-          <h2 id="versions-heading">Other versions</h2>
+          <h2 id="versions-heading">
+            Other versions <span class="count tabular">{versions.length}</span>
+          </h2>
           <ul role="list" class="rows">
-            {versions.map((v) => (
+            {sortedVersions.slice(0, VERSIONS_SHOWN).map((v) => (
               <li>
                 <span class="thumb">
                   <CoverArt artKey={v.art_key} title={v.album_title ?? v.title} sizes="3rem" />
                 </span>
                 <span class="row-text">
-                  <a href={`/track/${v.id}`}>{v.title}</a>
+                  <a href={`/track/${v.id}`}>
+                    {v.kind ?? v.album_title ?? 'Original'}
+                    <span class="visually-hidden">: {v.title}</span>
+                  </a>
                   <span class="muted small">
                     <CreditLine credits={v.credits} />
-                    {v.album_title && ` · ${v.album_title}`}
+                    {v.kind && v.album_title && ` · ${v.album_title}`}
+                    {v.year && ` · ${v.year}`}
                   </span>
                 </span>
                 <Score quality={v.quality_score} personal={v.personal_score} size="m" quietWhenEmpty />
               </li>
             ))}
           </ul>
+          {sortedVersions.length > VERSIONS_SHOWN && (
+            <details class="more-versions">
+              <summary>All {sortedVersions.length} versions</summary>
+              <ul role="list" class="rows">
+                {sortedVersions.slice(VERSIONS_SHOWN).map((v) => (
+                  <li>
+                <span class="thumb">
+                  <CoverArt artKey={v.art_key} title={v.album_title ?? v.title} sizes="3rem" />
+                </span>
+                <span class="row-text">
+                  <a href={`/track/${v.id}`}>
+                    {v.kind ?? v.album_title ?? 'Original'}
+                    <span class="visually-hidden">: {v.title}</span>
+                  </a>
+                  <span class="muted small">
+                    <CreditLine credits={v.credits} />
+                    {v.kind && v.album_title && ` · ${v.album_title}`}
+                    {v.year && ` · ${v.year}`}
+                  </span>
+                </span>
+                <Score quality={v.quality_score} personal={v.personal_score} size="m" quietWhenEmpty />
+              </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </section>
       )
     }
@@ -505,6 +547,21 @@ function ordinalOf(n: number): string {
 
   .lead {
     margin: calc(var(--space-2) * -1) 0 var(--space-3);
+  }
+
+  .count {
+    color: var(--text-muted);
+    font-size: var(--step-0);
+    font-weight: 600;
+  }
+
+  .more-versions summary {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .rows {
