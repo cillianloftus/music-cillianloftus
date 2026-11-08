@@ -1,6 +1,7 @@
 ---
 import JobTray from '../components/JobTray.astro';
 import SearchOverlay from '../components/SearchOverlay.astro';
+import SoftForms from '../components/SoftForms.astro';
 import '../styles/global.css';
 import SiteHeader from '../components/SiteHeader.astro';
 import { THEME_COOKIE, themeFrom } from '../lib/theme';
@@ -54,6 +55,7 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     </main>
     {Astro.locals.user && <JobTray />}
     <SearchOverlay />
+    {Astro.locals.user && <SoftForms />}
     <script>
       // Every pop-up menu (a <details data-menu>) closes on a click or tap
       // anywhere outside it, on Escape, and when another one opens.

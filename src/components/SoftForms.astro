@@ -1,0 +1,166 @@
+---
+/**
+ * Editing should feel like changing the page you came from, not visiting
+ * pages of their own. On edit and manage pages:
+ *
+ * - A form saves in the background, then the page reloads where it is: the
+ *   same place in its history (no entry per save) and the same scroll
+ *   position, rather than back at the top or at an anchor.
+ * - An edit page remembers the page that opened it. Going back there (a
+ *   link to it, or a save that leads there) steps back through history
+ *   instead of adding to it, so a back swipe afterwards goes where it went
+ *   before the edit: album, track, edit track, track, swipe → album.
+ * - A page returned to after a save reloads, so it never shows what it
+ *   said before.
+ *
+ * Without JavaScript the forms post and redirect as they always have.
+ */
+const path = Astro.url.pathname;
+const editing = path.startsWith('/edit/');
+const soft = editing || path === '/manage' || path.startsWith('/manage/') || path === '/queue';
+---
+
+{
+  soft && (
+    <script is:inline define:vars={{ editing }}>
+      // Back where you were after a save, before the page paints.
+      try {
+        const kept = JSON.parse(sessionStorage.getItem('soft-scroll') || 'null');
+        sessionStorage.removeItem('soft-scroll');
+        if (kept && kept.path === location.pathname && Date.now() - kept.at < 30000) {
+          history.scrollRestoration = 'manual';
+          const put = () => window.scrollTo(0, kept.y);
+          put();
+          addEventListener('DOMContentLoaded', put, { once: true });
+          addEventListener('load', put, { once: true });
+        }
+      } catch {}
+      window.__softEditing = editing;
+    </script>
+  )
+}
+
+<script>
+  const here = () => location.pathname + location.search;
+  const pathOf = (url: string) => {
+    const u = new URL(url, location.href);
+    return u.origin === location.origin ? u.pathname + u.search : null;
+  };
+
+  // Any page: if a save happened while it was away, show it fresh.
+  addEventListener('pageshow', (event) => {
+    try {
+      const stale = sessionStorage.getItem('soft-stale');
+      if (!stale || pathOf(stale) !== here()) return;
+      sessionStorage.removeItem('soft-stale');
+      const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+      if (event.persisted || nav?.type === 'back_forward') location.reload();
+    } catch {}
+  });
+
+  // Set by the inline script above, on the pages where forms save softly.
+  const editing = (window as unknown as { __softEditing?: boolean }).__softEditing;
+  if (editing !== undefined) {
+    // Where this edit page was opened from, kept across its own reloads.
+    const fromKey = `soft-from:${location.pathname}`;
+    let from: string | null = (history.state as { editFrom?: string } | null)?.editFrom ?? null;
+    if (editing && !from) {
+      const referrer = document.referrer ? pathOf(document.referrer) : null;
+      from = referrer && !referrer.startsWith('/edit/') ? referrer : sessionStorage.getItem(fromKey);
+      if (from) history.replaceState({ ...(history.state ?? {}), editFrom: from }, '');
+    }
+    if (from) sessionStorage.setItem(fromKey, from);
+
+    /** Leave for `target`: back through history if that is where we came from. */
+    const leave = (target: string, saved: boolean) => {
+      const path = pathOf(target);
+      if (saved && path) sessionStorage.setItem('soft-stale', path);
+      if (editing && from && path && new URL(path, location.href).pathname === new URL(from, location.href).pathname && history.length > 1) {
+        // A query on the way back (?saved=…) is news for the page: let it reload with it.
+        if (path !== from) sessionStorage.setItem('soft-stale', path);
+        history.back();
+        return;
+      }
+      location.replace(target);
+    };
+
+    if (editing) {
+      document.addEventListener('click', (event) => {
+        const link = (event.target as Element).closest?.('a[href]') as HTMLAnchorElement | null;
+        if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        if (link.target || link.hasAttribute('download')) return;
+        const path = pathOf(link.href);
+        if (!path || !from || path.startsWith('/edit/')) return;
+        if (new URL(path, location.href).pathname !== new URL(from, location.href).pathname) return;
+        event.preventDefault();
+        leave(link.href, false);
+      });
+    }
+
+    document.addEventListener('submit', async (event) => {
+      const form = event.target as HTMLFormElement;
+      if (event.defaultPrevented || form.method.toLowerCase() !== 'post' || form.target || form.hasAttribute('data-native')) return;
+      event.preventDefault();
+      const submitter = event.submitter as HTMLButtonElement | HTMLInputElement | null;
+      const body = new FormData(form, submitter);
+      const root = document.documentElement;
+      root.dataset.saving = '';
+      if (submitter) submitter.disabled = true;
+      try {
+        const response = await fetch(form.action, { method: 'POST', body, credentials: 'same-origin' });
+        const landed = pathOf(response.url) ?? here();
+        if (!response.ok && response.status >= 500) throw new Error(String(response.status));
+        if (!(response.headers.get('Content-Type') ?? '').includes('text/html')) throw new Error('not a page');
+        const there = new URL(landed, location.href);
+        if (there.pathname === location.pathname) {
+          sessionStorage.setItem('soft-scroll', JSON.stringify({ path: there.pathname, y: scrollY, at: Date.now() }));
+          if (from) sessionStorage.setItem('soft-stale', from);
+          // The page as it now is, in this page's place in history; the anchor is dropped, the scroll kept.
+          location.replace(there.pathname + there.search);
+        } else {
+          leave(landed, true);
+        }
+      } catch {
+        // Fall back to an ordinary post.
+        delete root.dataset.saving;
+        if (submitter) submitter.disabled = false;
+        if (submitter?.name) {
+          const carry = document.createElement('input');
+          carry.type = 'hidden';
+          carry.name = submitter.name;
+          carry.value = submitter.value;
+          form.append(carry);
+        }
+        HTMLFormElement.prototype.submit.call(form);
+      }
+    });
+  }
+</script>
+
+<style is:global>
+  /* A thin bar along the top while a save is under way. */
+  :root[data-saving] {
+    cursor: progress;
+  }
+
+  :root[data-saving]::before {
+    content: '';
+    position: fixed;
+    inset: 0 0 auto;
+    z-index: 100;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    background-size: 50% 100%;
+    background-repeat: no-repeat;
+    animation: saving 0.9s linear infinite;
+  }
+
+  @keyframes saving {
+    from {
+      background-position: -50% 0;
+    }
+    to {
+      background-position: 150% 0;
+    }
+  }
+</style>
