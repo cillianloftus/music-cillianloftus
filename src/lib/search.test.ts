@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { search, toMatchQuery } from './search';
+import { editDistance, search, toMatchQuery } from './search';
 
 let db: DatabaseSync;
 
@@ -14,9 +14,21 @@ beforeEach(() => {
 });
 
 describe('toMatchQuery', () => {
-  it('quotes each word as a prefix, so typed text is never FTS syntax', () => {
-    expect(toMatchQuery('sigur ros')).toBe('"sigur"* "ros"*');
-    expect(toMatchQuery('NOT a OR "b"*')).toBe('"NOT"* "a"* "OR"* "b"*');
+  it('quotes each word as a prefix, so typed text is never FTS syntax, or the whole squashed', () => {
+    expect(toMatchQuery('sigur')).toBe('"sigur"*');
+    expect(toMatchQuery('sigur ros')).toBe('("sigur"* "ros"*) OR "sigurros"*');
+    expect(toMatchQuery('NOT a OR "b"*')).toBe('("NOT"* "a"* "OR"* "b"*) OR "NOTaORb"*');
+    expect(toMatchQuery('a$ap')).toBe('("a"* "ap"*) OR "asap"*');
+  });
+});
+
+describe('editDistance', () => {
+  it('counts typos, a swapped pair as one', () => {
+    expect(editDistance('quadeca', 'quadeca')).toBe(0);
+    expect(editDistance('quadecca', 'quadeca')).toBe(1);
+    expect(editDistance('qaudeca', 'quadeca')).toBe(1);
+    expect(editDistance('kitten', 'sitting')).toBe(3);
+    expect(editDistance('abc', 'xyzabc', 2)).toBe(3);
   });
 
   it('needs at least two characters', () => {
@@ -50,6 +62,34 @@ describe('search', () => {
     for (const query of ['didnt', "didn't", 'didn’t mean']) {
       expect((await search(query, null)).albums.map((a) => a.id), query).toEqual(['rg-d']);
     }
+  });
+
+  it('finds names however they are punctuated', async () => {
+    insert(db, 'artist', [
+      { id: 'art-k', name: 'K.A.A.N.', sort_name: 'K.A.A.N.', source: 'manual' },
+      { id: 'art-acdc', name: 'AC/DC', sort_name: 'AC/DC', source: 'manual' },
+      { id: 'art-asap', name: 'A$AP Rocky', sort_name: 'A$AP Rocky', source: 'manual' },
+    ]);
+    for (const [query, id] of [
+      ['kaan', 'art-k'],
+      ['KAA', 'art-k'],
+      ['k.a.a.n', 'art-k'],
+      ['acdc', 'art-acdc'],
+      ['ac dc', 'art-acdc'],
+      ['asap', 'art-asap'],
+      ['asap rocky', 'art-asap'],
+      ['rocky', 'art-asap'],
+    ]) {
+      expect((await search(query!, null)).artists.map((a) => a.id), query).toContain(id);
+    }
+  });
+
+  it('forgives a typo when nothing matches exactly', async () => {
+    insert(db, 'artist', [{ id: 'art-q', name: 'Quadeca', sort_name: 'Quadeca', source: 'manual' }]);
+    expect((await search('quadecca', null)).artists.map((a) => a.id)).toEqual(['art-q']);
+    expect((await search('quadeka', null)).artists.map((a) => a.id)).toEqual(['art-q']);
+    // Too far off to be a typo.
+    expect((await search('quarterly', null)).artists).toEqual([]);
   });
 
   it('follows renames', async () => {

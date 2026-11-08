@@ -1,13 +1,39 @@
 /**
  * What is worth listening to today: birthdays of artists in the library,
  * albums and singles turning a year older, groups' anniversaries, and
- * something not rated yet. Today is Dublin's today; the picks look a week
- * ahead, and a day's unrated pick stays the same all day.
+ * something not rated yet. Today is Dublin's today; the picks look two weeks
+ * ahead, ordered by how much they are likely to matter (care), and a day's
+ * unrated pick stays the same all day.
  */
 
 import { env } from 'cloudflare:workers';
 
-export const WINDOW_DAYS = 7;
+/** Two weeks ahead: a big anniversary is worth knowing of before the day. */
+export const WINDOW_DAYS = 14;
+/** The calendar's picks kept, by how much they are likely to matter (care below). */
+export const MAX_CALENDAR_PICKS = 24;
+
+/** A version of something rather than the thing: remixes, edits, live takes. */
+const VERSION = /\b(remix(es|ed)?|mix|edit|version|live|acoustic|instrumental|sped[ -]?up|slowed|reverb|remaster(ed)?|demo|rework|flip|bootleg)\b/i;
+
+/**
+ * How much Cillian is likely to care about a calendar pick, for its place
+ * in the row. What it is (an album over a single, a single over a remix; a
+ * birthday counts like an album), how he rated it, how much its artist
+ * matters to him, and how soon: today is worth a lot, and each day further
+ * off a little less. So a single out today edges a loved album two weeks
+ * off, and loses to it once it is a few days away.
+ */
+export function care(p: Pick & { score?: number | null }): number {
+  const what =
+    p.kind === 'birthday' || p.kind === 'formed'
+      ? 1.5
+      : ({ album: 2, mixtape: 1.8, ep: 1.5, single: 0.5 } as Record<string, number>)[p.type ?? ''] ?? 0.8;
+  const version = p.kind === 'anniversary' && VERSION.test(p.title) ? -1.5 : 0;
+  const loved = p.score == null ? 0 : (Math.max(0, p.score - 70) / 10) * 1.2;
+  const soon = p.daysAway === 0 ? 3 : p.daysAway === 1 ? 1.5 : -p.daysAway * 0.2;
+  return what + version + loved + (p.affinity ?? 0) * 0.5 + soon + (p.milestone ? 1 : 0);
+}
 const ZONE = 'Europe/Dublin';
 
 export type PickKind = 'birthday' | 'formed' | 'anniversary' | 'unrated' | 'month' | 'revisit' | 'favourite' | 'artist' | 'genre';
@@ -145,7 +171,7 @@ export async function todayPicks(
 
   type Row = Record<string, string | null>;
   const picks: Pick[] = [];
-  const care = new Map(
+  const artistCare = new Map(
     ((stats?.results ?? []) as { id: string; average: number | null; rated: number; releases: number }[]).map((a) => [a.id, affinity(a)]),
   );
 
@@ -161,7 +187,7 @@ export async function todayPicks(
       years,
       daysAway: days,
       milestone: birthday ? years % 10 === 0 : isMilestone(years),
-      affinity: care.get(p.id!) ?? 0,
+      affinity: artistCare.get(p.id!) ?? 0,
       artKey: p.art_key,
       imageKey: p.image_key,
       spotifyId: p.spotify_id,
@@ -184,15 +210,32 @@ export async function todayPicks(
       imageKey: null,
       spotifyId: a.spotify_id,
       type: a.type,
-      affinity: care.get(a.artist_id ?? '') ?? 0,
+      affinity: artistCare.get(a.artist_id ?? '') ?? 0,
     });
   }
 
-  // The artists that matter most first; then sooner, round numbers and
-  // birthdays break near-ties. A day further off costs less than a little
-  // more affection is worth.
-  const weight = (p: Pick) => (p.affinity ?? 0) - p.daysAway * 0.25 + (p.milestone ? 0.75 : 0) + (p.kind === 'birthday' ? 0.25 : 0);
-  picks.sort((x, y) => weight(y) - weight(x));
+  // How each release in the window was rated: only those, not every album.
+  const releaseIds = picks.filter((p) => p.kind === 'anniversary').map((p) => p.id);
+  const scored = releaseIds.length
+    ? (
+        await env.DB.prepare(
+          `SELECT release_group_id AS id, quality_score AS score FROM v_release_score
+           WHERE user_id = ?1 AND release_group_id IN (SELECT value FROM json_each(?2))`,
+        )
+          .bind(viewerId, JSON.stringify(releaseIds))
+          .all<{ id: string; score: number | null }>()
+      ).results
+    : [];
+  const scores = new Map(scored.map((r) => [r.id, r.score]));
+
+  // Most likely to matter first (care, above); only the best of them kept.
+  const ranked = picks
+    .map((p) => ({ p, weight: care({ ...p, score: scores.get(p.id) ?? null }) }))
+    .sort((x, y) => y.weight - x.weight)
+    .slice(0, MAX_CALENDAR_PICKS)
+    .map((x) => x.p);
+  picks.length = 0;
+  picks.push(...ranked);
 
   // One thing each: an album marked twice (an anniversary and unrated) shows once.
   const seen = new Set(picks.map((p) => p.id));
@@ -366,12 +409,13 @@ async function fillers(viewerId: string | null, today: string): Promise<Pick[]> 
   return out;
 }
 
-/** "today", "tomorrow", "on Friday": within the week, a weekday reads best. */
+/** "today", "tomorrow", "on Friday" within the week; past it, the date: "on 19 November". */
 export function whenText(daysAway: number, now: Date = new Date()): string {
   if (daysAway === 0) return 'today';
   if (daysAway === 1) return 'tomorrow';
   const day = new Date(now.getTime() + daysAway * 86_400_000);
-  return `on ${new Intl.DateTimeFormat('en-GB', { weekday: 'long', timeZone: ZONE }).format(day)}`;
+  const format = daysAway < 7 ? { weekday: 'long' as const } : { day: 'numeric' as const, month: 'long' as const };
+  return `on ${new Intl.DateTimeFormat('en-GB', { ...format, timeZone: ZONE }).format(day)}`;
 }
 
 export const ordinal = (n: number) => {

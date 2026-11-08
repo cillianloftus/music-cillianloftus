@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { migratedDb, seedLibrary } from '../test/db';
-import { isMilestone, nextOccurrence, ordinal, todayIn, todayPicks, whenText } from './today';
+import { care, isMilestone, nextOccurrence, ordinal, todayIn, todayPicks, whenText, type Pick } from './today';
 
 let db: DatabaseSync;
 
@@ -70,5 +70,39 @@ describe('filling a quiet day', () => {
     expect(new Set(picks.map((p) => p.id)).size).toBe(picks.length);
     expect(picks.filter((p) => p.kind === 'unrated').length).toBeLessThanOrEqual(1);
     expect(picks.filter((p) => p.reason).every((p) => p.reason!.length > 0)).toBe(true);
+  });
+});
+
+describe('care', () => {
+  const pick = (over: Partial<Pick> & { score?: number | null }): Pick & { score?: number | null } => ({
+    kind: 'anniversary',
+    id: 'x',
+    title: 'Something',
+    by: null,
+    years: 3,
+    daysAway: 0,
+    milestone: false,
+    artKey: null,
+    imageKey: null,
+    spotifyId: null,
+    type: 'album',
+    affinity: 4,
+    ...over,
+  });
+
+  it('puts an album or EP above a single, and a single above its remix', () => {
+    expect(care(pick({ type: 'album' }))).toBeGreaterThan(care(pick({ type: 'single' })));
+    expect(care(pick({ type: 'ep' }))).toBeGreaterThan(care(pick({ type: 'single' })));
+    expect(care(pick({ type: 'single', title: 'Love Me Again' }))).toBeGreaterThan(care(pick({ type: 'single', title: 'Love Me Again (Zac Samuel remix)' })));
+  });
+
+  it('puts a loved album first, then the rest', () => {
+    expect(care(pick({ score: 100, daysAway: 2 }))).toBeGreaterThan(care(pick({ score: null, daysAway: 2 })));
+  });
+
+  it('weighs today against what matters more: a single today beats an album two weeks off, not one in a few days', () => {
+    const singleToday = care(pick({ type: 'single', daysAway: 0 }));
+    expect(singleToday).toBeGreaterThan(care(pick({ type: 'album', daysAway: 13 })));
+    expect(singleToday).toBeLessThan(care(pick({ type: 'album', daysAway: 3, score: 95 })));
   });
 });

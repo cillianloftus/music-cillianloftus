@@ -128,8 +128,13 @@ const best = [
   { key: 'mixtapes', heading: 'Best mixtapes', items: topMixtapes },
 ].filter((b) => b.items.length > 1);
 
-/** For today, read at a glance: the first few, as a list rather than a shelf. */
-const todays = picks.slice(0, 6);
+/** A pick's one action, drawn small: Spotify's waves, a pencil, a list. */
+const ICON_SPOTIFY = 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M7.5 9.5c3-1 6.5-.7 9 .8 M8 12.6c2.5-.7 5.3-.4 7.4.8 M8.6 15.4c2-.5 4-.3 5.6.6';
+const ICON_RATE = 'M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4';
+const ICON_LIST = 'M5 7h14 M5 12h14 M5 17h9';
+
+/** For today: every pick, three to a column, the columns scrolling sideways. */
+const todays = picks;
 
 const statItems = [
   { value: stats.albums, label: stats.albums === 1 ? 'album' : 'albums' },
@@ -198,7 +203,7 @@ const statItems = [
             <h2 id="today-heading">For today</h2>
             <span class="muted date">{todayLabel}</span>
           </div>
-          <ul role="list" class="picks">
+          <ul role="list" class="picks" tabindex="0" aria-label="Today’s picks, scrolling sideways">
             {todays.map((p) => {
               const action = pickAction(p);
               const href = p.href ?? (p.kind === 'birthday' || p.kind === 'formed' ? `/artist/${p.id}` : `/album/${p.id}`);
@@ -227,9 +232,14 @@ const statItems = [
                     )}
                   </span>
                   {action && (
-                    <a class="pick-action" href={action.href} {...(action.external ? { target: '_blank', rel: 'noopener' } : {})}>
-                      {action.label}
-                      {action.external && <span class="visually-hidden"> (opens in a new tab)</span>}
+                    <a class="pick-action" href={action.href} title={action.label} {...(action.external ? { target: '_blank', rel: 'noopener' } : {})}>
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d={/spotify/i.test(action.label) ? ICON_SPOTIFY : /rate/i.test(action.label) ? ICON_RATE : ICON_LIST} />
+                      </svg>
+                      <span class="visually-hidden">
+                        {action.label}
+                        {action.external && ' (opens in a new tab)'}
+                      </span>
                     </a>
                   )}
                 </li>
@@ -499,6 +509,8 @@ const statItems = [
 <style>
   .home {
     display: grid;
+    /* One column the page's width: a sideways list inside scrolls, never widens it. */
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-7);
   }
 
@@ -662,25 +674,46 @@ const statItems = [
     font-size: var(--step--1);
   }
 
-  /* For today: a list read at a glance, each pick a row (two or three
-     columns on wider screens): picture, what it marks and what it is, and
-     one thing to do with it at the end. */
+  /* For today: each pick a row (picture, what it marks and what it is, one
+     thing to do with it), three rows to a column, and the columns scroll
+     sideways, so every pick is there however many, in the height of three.
+     The next column peeks in at the edge to say there is more. */
   .picks {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+    grid-auto-flow: column;
+    grid-template-rows: repeat(3, auto);
+    /* Sized by the list's own width (not vw, which a wide page feeds back into). */
+    grid-auto-columns: min(calc(100% - 2.5rem), 24rem);
     gap: var(--space-2) var(--space-3);
-    margin: 0;
-    padding: 0;
+    /* Edge to edge, the first and last columns lined up with the page. */
+    margin: 0 calc(var(--gutter) * -1);
+    padding: 0 var(--gutter) var(--space-1);
+    overflow-x: auto;
+    /* Positioned, so the screen-reader-only labels inside (absolutely
+       placed) are clipped with it rather than stretching the page. */
+    position: relative;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: var(--gutter);
+    scrollbar-width: none;
     list-style: none;
+  }
+
+  .picks::-webkit-scrollbar {
+    display: none;
+  }
+
+  .picks > li {
+    scroll-snap-align: start;
   }
 
   .pick {
     display: grid;
-    grid-template-columns: 4.5rem minmax(0, 1fr) auto;
+    grid-template-columns: 3.5rem minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--space-3);
     padding: var(--space-2);
-    padding-right: var(--space-3);
+    padding-right: var(--space-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-m);
     background: color-mix(in srgb, var(--surface-1) 80%, transparent);
@@ -694,7 +727,7 @@ const statItems = [
 
   .pick-art {
     display: block;
-    width: 4.5rem;
+    width: 3.5rem;
     aspect-ratio: 1;
     overflow: hidden;
     border-radius: var(--radius-s);
@@ -729,17 +762,17 @@ const statItems = [
     white-space: nowrap;
   }
 
-  /* Lines wrap rather than cut off; a long title gets two lines. */
-  .pick-title {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+  /* One line each, so every row is the same short height. */
+  .pick-title,
+  .pick-line {
     overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .pick-line {
     color: var(--accent);
-    font-size: var(--step--1);
+    font-size: 0.78rem;
     font-weight: 700;
   }
 
@@ -756,21 +789,26 @@ const statItems = [
     font-size: var(--step--1);
   }
 
-  /* The one thing to do, as a small button at the row's end. */
+  /* The one thing to do, as a small round icon at the row's end (its words
+     for screen readers and as a tooltip), so the title has the width. */
   .pick-action {
-    display: inline-flex;
-    align-items: center;
-    max-width: 7rem;
-    min-height: 2.25rem;
-    padding: 0 var(--space-3);
+    display: grid;
+    place-items: center;
+    width: var(--target);
+    height: var(--target);
     border: 1px solid var(--border);
-    border-radius: 999px;
+    border-radius: 50%;
     color: var(--text-muted);
-    font-size: 0.78rem;
-    font-weight: 650;
-    line-height: 1.15;
-    text-align: center;
-    text-decoration: none;
+  }
+
+  .pick-action svg {
+    width: 1.15rem;
+    height: 1.15rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .pick-action:hover {
