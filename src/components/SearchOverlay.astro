@@ -596,12 +596,13 @@
     grid-template-rows: auto;
   }
 
-  /* Phones: a panel filling the screen above the tab bar, the box at the
-     bottom, everything else scrolling above it. */
+  /* Phones: a panel filling the whole screen, the box at the bottom with its
+     surface running on down behind the floating tab bar (so no page shows
+     through around the bar), everything else scrolling above it. */
   @media (max-width: 39.99rem) {
     .search-overlay {
       position: fixed;
-      inset: 0 0 var(--tabbar-space);
+      inset: 0;
       z-index: 44;
       width: auto;
       max-width: none;
@@ -632,7 +633,7 @@
     .search-box,
     .search-overlay:has(.results:empty) .search-box {
       order: 2;
-      padding: var(--space-2) var(--gutter);
+      padding: var(--space-2) var(--gutter) calc(var(--space-2) + var(--tabbar-space));
       border-top: 1px solid var(--border);
       border-bottom: 0;
       background: var(--surface-1);
