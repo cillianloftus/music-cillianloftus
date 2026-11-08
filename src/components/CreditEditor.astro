@@ -47,6 +47,7 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
     }
   </div>
 
+  <div data-credit-list>
   {
     credits.length === 0 ? (
       <p class="muted">No credits.</p>
@@ -75,14 +76,31 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
       </dl>
     )
   }
+  </div>
 
-  <form method="post" action="/api/write/credits" class="add">
+  <form method="post" action="/api/write/credits" class="add" data-credit-add>
     <input type="hidden" name="entity" value={entity} />
     <input type="hidden" name="id" value={id} />
     <input type="hidden" name="intent" value="add_credit" />
     <div class="field">
       <label for={`credit-role-${entity}`}>Role</label>
-      <select class="input" id={`credit-role-${entity}`} name="role">
+      {/* Typed into and searched (the script below); the list stays for no-JS and as the value sent. */}
+      <input
+        class="input role-search"
+        id={`credit-role-search-${entity}`}
+        list={`credit-roles-${entity}`}
+        value={roleLabel(defaultRole)}
+        hidden
+        autocomplete="off"
+        spellcheck="false"
+        data-role-search
+        data-1p-ignore
+        data-lpignore="true"
+        data-bwignore
+        data-form-type="other"
+      />
+      <datalist id={`credit-roles-${entity}`}>{roles.map((r) => <option value={r.label} />)}</datalist>
+      <select class="input" id={`credit-role-${entity}`} name="role" data-role-select>
         {families.map((f) => (
           <optgroup label={f.name}>
             {f.roles.map((r) => (
@@ -113,6 +131,7 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
     </div>
     <button class="button button--primary" type="submit">Add</button>
     <span class="hint" id={`credit-hint-${entity}`}>Anyone new is added as typed.</span>
+    <span class="add-status" role="status" data-credit-status></span>
   </form>
 
   {!artistsOnly && <details class="roles">
@@ -162,7 +181,158 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
   <datalist id={listId}>{names.map((a) => <option value={a.name} />)}</datalist>
 </section>
 
+<script>
+  /**
+   * Credits are added and removed in place, so a whole sleeve can be
+   * entered one after another without the page reloading each time:
+   *
+   * - The role is typed and searched ("guit" finds the guitars) rather
+   *   than scrolled for; the select underneath is still what is sent.
+   * - Add posts in the background and the list is redrawn from the page
+   *   the server answers with; Who empties and the role is ready to retype.
+   * - The X takes the credit out at once, then the list is redrawn too.
+   *
+   * Without JavaScript every form posts and the page reloads, as before.
+   */
+  for (const form of document.querySelectorAll<HTMLFormElement>('form[data-credit-add]')) {
+    const search = form.querySelector<HTMLInputElement>('[data-role-search]');
+    // (Cast: this project's DOM types trip over HTMLSelectElement's own remove().)
+    const select = form.querySelector('[data-role-select]') as unknown as HTMLSelectElement | null;
+    if (!search || !select) continue;
+    const label = form.querySelector<HTMLLabelElement>(`label[for="${select.id}"]`);
+    search.hidden = false;
+    select.hidden = true;
+    if (label) label.htmlFor = search.id;
+    const byLabel = new Map([...select.options].map((o) => [o.text.trim().toLowerCase(), o.value]));
+    const match = () => {
+      const role = byLabel.get(search.value.trim().toLowerCase());
+      if (role) select.value = role;
+      search.setCustomValidity(role ? '' : 'Pick a role from the list, or add it below as a new one.');
+      return Boolean(role);
+    };
+    match();
+    search.addEventListener('input', match);
+    search.addEventListener('change', match);
+    // Focused, the old role is selected, so typing replaces it.
+    search.addEventListener('focus', () => search.select());
+  }
+
+  const swapList = (card: Element, html: string) => {
+    const cards = [...document.querySelectorAll('.credits-card')];
+    const fresh = new DOMParser().parseFromString(html, 'text/html').querySelectorAll('.credits-card')[cards.indexOf(card)];
+    if (!fresh) return false;
+    for (const part of ['[data-credit-list]', '.section-head']) {
+      const now = card.querySelector(part);
+      const next = fresh.querySelector(part);
+      if (now && next) now.innerHTML = next.innerHTML;
+    }
+    return true;
+  };
+
+  /** Posts a credits form; the page it lands on, and what it said. */
+  async function post(form: HTMLFormElement) {
+    const res = await fetch(form.action, { method: 'POST', body: new FormData(form) });
+    const params = new URL(res.url).searchParams;
+    const ok = res.ok && !params.get('error');
+    // The page this edit was opened from shows the change when gone back to (SoftForms).
+    const from = (history.state as { editFrom?: string } | null)?.editFrom;
+    if (ok && from) {
+      try {
+        sessionStorage.setItem('soft-stale', from);
+      } catch {}
+    }
+    return { ok, html: await res.text(), error: params.get('error'), done: params.get('done') };
+  }
+
+  // Before the page's own soft saving (SoftForms) can take the submit.
+  document.addEventListener(
+    'submit',
+    async (event) => {
+      const form = event.target as HTMLFormElement;
+      const card = form.closest('.credits-card');
+      const intent = form.querySelector<HTMLInputElement>('input[name="intent"]')?.value;
+      if (!card || (intent !== 'add_credit' && intent !== 'remove_credit')) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const status = card.querySelector<HTMLElement>('[data-credit-status]');
+      const say = (text: string, error = false) => {
+        if (!status) return;
+        status.textContent = text;
+        status.classList.toggle('is-error', error);
+      };
+
+      if (intent === 'remove_credit') {
+        // Gone at once; the list is redrawn when the server agrees.
+        const row = form.closest('dd');
+        const group = row?.closest('.group');
+        if (row) row.hidden = true;
+        if (group && ![...group.querySelectorAll('dd')].some((d) => !d.hidden)) (group as HTMLElement).hidden = true;
+        try {
+          const result = await post(form);
+          if (!result.ok) throw new Error(result.error ?? 'That could not be removed.');
+          swapList(card, result.html);
+          say('Removed.');
+        } catch (error) {
+          if (row) row.hidden = false;
+          if (group) (group as HTMLElement).hidden = false;
+          say(error instanceof Error ? error.message : 'That could not be removed.', true);
+        }
+        return;
+      }
+
+      const search = form.querySelector<HTMLInputElement>('[data-role-search]');
+      const who = form.querySelector<HTMLInputElement>('input[name="who"]');
+      if (search && !search.checkValidity()) {
+        search.reportValidity();
+        return;
+      }
+      const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (button) button.disabled = true;
+      say('Adding…');
+      try {
+        const result = await post(form);
+        if (!result.ok) throw new Error(result.error ?? 'That could not be saved.');
+        swapList(card, result.html);
+        say(result.done ?? 'Added.');
+        if (who) who.value = '';
+        // Ready for the next: the role, selected, to type over.
+        (search ?? who)?.focus();
+        search?.select();
+      } catch (error) {
+        say(error instanceof Error ? error.message : 'That could not be saved.', true);
+      } finally {
+        if (button) button.disabled = false;
+      }
+    },
+    true,
+  );
+</script>
+
 <style>
+  .add-status {
+    flex-basis: 100%;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .add-status:empty {
+    display: none;
+  }
+
+  .add-status.is-error {
+    color: var(--danger);
+  }
+
+  .group[hidden],
+  dd[hidden],
+  .add [hidden] {
+    display: none;
+  }
+
+  .role-search {
+    min-width: 12rem;
+  }
+
   .card {
     display: grid;
     gap: var(--space-3);
