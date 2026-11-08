@@ -11,7 +11,7 @@
 
 import { env } from 'cloudflare:workers';
 import { normaliseName, normaliseTitle } from './text';
-import { versionPairs } from './versions';
+import { splitVersion, versionPairs } from './versions';
 
 export type AnomalyKind =
   | 'duplicate_artist_name'
@@ -465,21 +465,24 @@ export async function linkWork(id: string): Promise<string> {
   return workId;
 }
 
+/** Open version pairs whose titles name the version: the ones "Link all" takes. */
+export async function linkableVersions(): Promise<{ id: string; title: string }[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT a.id, r.title FROM anomaly a JOIN recording r ON r.id = a.entity_b
+     WHERE a.kind = 'version_of_recording' AND a.status = 'open' ORDER BY a.detected_at, a.id`,
+  ).all<{ id: string; title: string }>();
+  return results.filter((r) => splitVersion(r.title).version !== null);
+}
+
 /**
- * Links every open "another version" pair as versions of one song, until
- * the budget runs out. Each is one person's standing decision ("these are
- * all versions"), taken from the button that says so.
+ * Links every open "another version" pair whose title names the version
+ * (a remix, a live take) as versions of one song, until the budget runs
+ * out. Two takes under one plain title are left to be judged one by one.
  */
 export async function linkAllVersions({ budgetMs }: { budgetMs: number }): Promise<{ merged: number; left: number }> {
   const stop = Date.now() + budgetMs;
-  const open = async () =>
-    (
-      await env.DB.prepare(`SELECT id FROM anomaly WHERE kind = 'version_of_recording' AND status = 'open' ORDER BY detected_at, id`).all<{
-        id: string;
-      }>()
-    ).results;
   let merged = 0;
-  for (const { id } of await open()) {
+  for (const { id } of await linkableVersions()) {
     if (Date.now() > stop || merged >= 300) break;
     try {
       await linkWork(id);
@@ -490,7 +493,7 @@ export async function linkAllVersions({ budgetMs }: { budgetMs: number }): Promi
       await env.DB.prepare(`UPDATE anomaly SET skipped_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`).bind(id).run();
     }
   }
-  return { merged, left: (await open()).length };
+  return { merged, left: (await linkableVersions()).length };
 }
 
 export interface ReviewFact {

@@ -283,4 +283,16 @@ describe('versions of a song', () => {
     expect(works).toHaveLength(1);
     expect(works[0]!.work_id).not.toBeNull();
   });
+
+  it('"Link all" leaves a second plain take to be judged by hand', async () => {
+    seedRemixes();
+    db.exec(`UPDATE recording SET length_ms = 200000 WHERE id = 'a2'`);
+    insert(db, 'recording', [{ id: 'a2-take', title: 'Song A2', length_ms: 240000, source: 'manual' }]);
+    insert(db, 'track', [{ id: 't-take', release_id: 'r-a', recording_id: 'a2-take', position: 9 }]);
+    insert(db, 'artist_credit', [credit('recording', 'a2-take', 'art-x')]);
+    await detectAnomalies();
+    expect((await openAnomalies('version_of_recording')).map((a) => a.entity_b).sort()).toEqual(['a2-take', 'aa-sped', 'zz-remix']);
+    await linkAllVersions({ budgetMs: 10_000 });
+    expect((await openAnomalies('version_of_recording')).map((a) => a.entity_b)).toEqual(['a2-take']);
+  });
 });

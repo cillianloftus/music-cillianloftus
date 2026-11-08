@@ -10,7 +10,7 @@ import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import { missingInfo } from '../../lib/gaps';
-import { matchingAlbumPairs, matchingTrackPairs, openAnomalies, openCounts, reviewEntities, type Anomaly, type AnomalyKind } from '../../lib/review';
+import { linkableVersions, matchingAlbumPairs, matchingTrackPairs, openAnomalies, openCounts, reviewEntities, type Anomaly, type AnomalyKind } from '../../lib/review';
 
 const PAGE = 25;
 /** The order they are offered in: the quick, important ones first. */
@@ -80,7 +80,7 @@ const [entities, gaps, matching] = await Promise.all([
     : kind === 'near_duplicate_release_group'
       ? matchingAlbumPairs()
       : kind === 'version_of_recording'
-        ? Promise.resolve(Array.from({ length: counts.get('version_of_recording')?.open ?? 0 }))
+        ? linkableVersions()
         : Promise.resolve([]),
 ]);
 const total = [...counts.values()].reduce((n, c) => n + c.open, 0);

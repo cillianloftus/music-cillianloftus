@@ -48,7 +48,23 @@ export interface VersionCandidate {
   work_id: string | null;
   /** On an official non-live release. */
   studio: number;
+  length_ms?: number | null;
 }
+
+/**
+ * Two takes under one plain title, both on studio releases, are versions
+ * when they differ by more than a near-duplicate would (REVIEW_RULES
+ * .lengthGapMs) but not so much that they are plainly different pieces
+ * sharing a name; and only where the title turns up two or three times,
+ * not a run of tracks all called "Window".
+ */
+export const PLAIN_TWINS = { minGapMs: 10_000, maxShare: 0.35, maxTakes: 3 } as const;
+
+const twins = (a: VersionCandidate, b: VersionCandidate) => {
+  if (!a.studio || !b.studio || a.length_ms == null || b.length_ms == null) return false;
+  const gap = Math.abs(a.length_ms - b.length_ms);
+  return gap > PLAIN_TWINS.minGapMs && gap / Math.max(a.length_ms, b.length_ms) < PLAIN_TWINS.maxShare;
+};
 
 /**
  * Each version paired with the song as first released, by the same
@@ -72,12 +88,14 @@ export function versionPairs(rows: VersionCandidate[], generic: RegExp): [string
   for (const members of byKey.values()) {
     const originals = members.filter((m) => m.version === null).map((m) => m.row);
     const versions = members.filter((m) => m.version !== null).map((m) => m.row);
-    if (originals.length === 0 || versions.length === 0) continue;
+    if (originals.length === 0) continue;
     // One anchor: already part of a work, then on a studio release, then the earliest id.
     const anchor = [...originals].sort(
       (a, b) => Number(b.work_id !== null) - Number(a.work_id !== null) || b.studio - a.studio || a.id.localeCompare(b.id),
     )[0]!;
-    for (const v of versions) {
+    // The same plain title again at a different length: another take.
+    const plain = originals.length <= PLAIN_TWINS.maxTakes ? originals.filter((o) => o.id !== anchor.id && twins(anchor, o)) : [];
+    for (const v of [...versions, ...plain]) {
       if (v.id === anchor.id) continue;
       if (v.work_id !== null && anchor.work_id !== null) continue;
       const key = `${anchor.id}\u0000${v.id}`;

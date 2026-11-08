@@ -51,4 +51,15 @@ describe('versionPairs', () => {
     const pairs = versionPairs([rec('a', 'Song'), rec('b', 'Song', { work_id: 'w' }), rec('r', 'Song (Remix)')], generic);
     expect(pairs).toEqual([['b', 'r']]);
   });
+
+  it('pairs a second take under the same plain title, when the lengths say version, not duplicate or another piece', () => {
+    const at = (id: string, seconds: number) => rec(id, 'Song', { length_ms: seconds * 1000 });
+    expect(versionPairs([at('a', 200), at('b', 240)], generic)).toEqual([['a', 'b']]);
+    // Within ten seconds: a duplicate, which the merge rule asks about.
+    expect(versionPairs([at('a', 200), at('b', 205)], generic)).toEqual([]);
+    // Half the length: more likely another piece with the same name.
+    expect(versionPairs([at('a', 200), at('b', 90)], generic)).toEqual([]);
+    // A run of tracks all called the same: no.
+    expect(versionPairs([at('a', 200), at('b', 230), at('c', 240), at('d', 250)], generic)).toEqual([]);
+  });
 });
