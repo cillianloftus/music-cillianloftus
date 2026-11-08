@@ -1,8 +1,10 @@
 ---
 /**
- * The front page: one album up front (the latest one rated highly), the
- * shape of the library, what is rated highest, what was rated lately with
- * the notes that say why, and what arrived most recently.
+ * The front page, in order: one album up front (the latest one rated
+ * highly) with the shape of the library; what today brings; albums half
+ * rated; what the ratings show; favourite tracks and artists; the best
+ * albums, singles, EPs and mixtapes; the diary of recent ratings; and the
+ * rest (played but unrated, genres, recently added).
  */
 import Base from '../layouts/Base.astro';
 import Findings from '../components/Findings.astro';
@@ -31,18 +33,20 @@ const isOwner = Boolean(Astro.locals.user);
 // Everything here changes only when the library does (or, for the picks, the
 // day), so it is worked out once per change and kept: a dozen queries that
 // D1 runs one after another, about 0.7s, become one cache read.
-const [[recent, top, ratings, stats, picks, topSingles, favourites, started, artistsLoved, genresLoved, unplayed], facts] = await Promise.all([
-  byLibrary(`home:v1:${todayIn()}:${isOwner ? 'owner' : 'public'}`, viewerId, () =>
+const [[recent, top, ratings, stats, picks, topSingles, topEps, topMixtapes, favourites, started, artistsLoved, genresLoved, unplayed], facts] = await Promise.all([
+  byLibrary(`home:v2:${todayIn()}:${isOwner ? 'owner' : 'public'}`, viewerId, () =>
     Promise.all([
       recentReleaseGroups(viewerId, 12),
-      topByType(viewerId, ['album', 'mixtape'], 10),
+      topByType(viewerId, ['album'], 10),
       recentRatings(viewerId, 8),
       libraryStats(viewerId),
       todayPicks(viewerId, { includeUnrated: isOwner }),
-      topByType(viewerId, ['single', 'ep'], 10),
-      topTracks(viewerId, 12),
+      topByType(viewerId, ['single'], 10),
+      topByType(viewerId, ['ep'], 10),
+      topByType(viewerId, ['mixtape'], 10),
+      topTracks(viewerId, 10),
       isOwner && viewerId ? inProgress(viewerId, 10) : Promise.resolve([]),
-      lovedArtists(viewerId, 12),
+      lovedArtists(viewerId, 10),
       lovedGenres(viewerId, 12),
       isOwner && viewerId ? playedNotRated(viewerId, 10) : Promise.resolve([]),
     ]),
@@ -121,6 +125,17 @@ if (lovedRating) {
   featuredWhen = lovedRating.rated_at;
 }
 
+/** The best of each kind of release, one ranked shelf each (shown with two or more). */
+const best = [
+  { key: 'albums', heading: 'Best albums', items: top },
+  { key: 'singles', heading: 'Best singles', items: topSingles },
+  { key: 'eps', heading: 'Best EPs', items: topEps },
+  { key: 'mixtapes', heading: 'Best mixtapes', items: topMixtapes },
+].filter((b) => b.items.length > 1);
+
+/** For today, read at a glance: the first few, as a list rather than a shelf. */
+const todays = picks.slice(0, 6);
+
 const statItems = [
   { value: stats.albums, label: stats.albums === 1 ? 'album' : 'albums' },
   { value: stats.tracks, label: stats.tracks === 1 ? 'track' : 'tracks' },
@@ -182,64 +197,50 @@ const statItems = [
     }
 
     {
-      noticed.length > 0 && (
-        <section aria-labelledby="noticed-heading">
-          <div class="section-head">
-            <h2 id="noticed-heading">You might not have noticed</h2>
-            <a href="/insights#patterns-heading">More</a>
-          </div>
-          <Findings findings={noticed} />
-        </section>
-      )
-    }
-
-    {
-      picks.length > 0 && (
+      todays.length > 0 && (
         <section aria-labelledby="today-heading">
           <div class="section-head">
             <h2 id="today-heading">For today</h2>
             <span class="muted date">{todayLabel}</span>
           </div>
-          <Shelf label="today’s picks" item="min(19rem, 82vw)">
-            <ul role="list">
-              {picks.map((p) => {
-                const action = pickAction(p);
-                const href = p.href ?? (p.kind === 'birthday' || p.kind === 'formed' ? `/artist/${p.id}` : `/album/${p.id}`);
-                return (
-                  <li class:list={['pick', { milestone: p.milestone }]}>
-                    <span class:list={['pick-art', { genre: p.kind === 'genre' }]} style={p.kind === 'genre' ? `--h: ${hueOf(p.title)}` : undefined}>
-                      {p.kind === 'genre' ? (
-                        <span class="genre-mark" aria-hidden="true">{p.title.slice(0, 1).toUpperCase()}</span>
-                      ) : p.imageKey ? (
-                        <img src={`/${p.imageKey}`} alt="" width="160" height="160" loading="lazy" decoding="async" />
-                      ) : (
-                        <CoverArt artKey={p.artKey} title={p.title} sizes="5rem" />
-                      )}
-                    </span>
-                    <span class="pick-text">
-                      <span class="pick-line">{pickLine(p)}</span>
-                      <a class="pick-title" href={href}>
-                        {p.title}
-                      </a>
-                      {pickCredits(p) ? (
-                        <span class="muted small">
-                          <CreditLine credits={pickCredits(p)!} />
-                        </span>
-                      ) : (
-                        p.by && <span class="muted small">{p.by}</span>
-                      )}
-                      {action && (
-                        <a class="pick-action" href={action.href} {...(action.external ? { target: '_blank', rel: 'noopener' } : {})}>
-                          {action.label}
-                          {action.external && <span class="visually-hidden"> (opens in a new tab)</span>}
-                        </a>
-                      )}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          </Shelf>
+          <ul role="list" class="picks">
+            {todays.map((p) => {
+              const action = pickAction(p);
+              const href = p.href ?? (p.kind === 'birthday' || p.kind === 'formed' ? `/artist/${p.id}` : `/album/${p.id}`);
+              return (
+                <li class:list={['pick', { milestone: p.milestone, round: p.kind === 'birthday' || p.kind === 'formed' || p.kind === 'artist' }]}>
+                  <span class:list={['pick-art', { genre: p.kind === 'genre' }]} style={p.kind === 'genre' ? `--h: ${hueOf(p.title)}` : undefined}>
+                    {p.kind === 'genre' ? (
+                      <span class="genre-mark" aria-hidden="true">{p.title.slice(0, 1).toUpperCase()}</span>
+                    ) : p.imageKey ? (
+                      <img src={`/${p.imageKey}`} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                    ) : (
+                      <CoverArt artKey={p.artKey} title={p.title} sizes="4.5rem" />
+                    )}
+                  </span>
+                  <span class="pick-text">
+                    <span class="pick-line">{pickLine(p)}</span>
+                    <a class="pick-title" href={href}>
+                      {p.title}
+                    </a>
+                    {pickCredits(p) ? (
+                      <span class="muted small pick-by">
+                        <CreditLine credits={pickCredits(p)!} />
+                      </span>
+                    ) : (
+                      p.by && <span class="muted small pick-by">{p.by}</span>
+                    )}
+                  </span>
+                  {action && (
+                    <a class="pick-action" href={action.href} {...(action.external ? { target: '_blank', rel: 'noopener' } : {})}>
+                      {action.label}
+                      {action.external && <span class="visually-hidden"> (opens in a new tab)</span>}
+                    </a>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </section>
       )
     }
@@ -251,21 +252,21 @@ const statItems = [
             <h2 id="started-heading">Pick up where you left off</h2>
             <a href="/queue">Queue</a>
           </div>
-          <Shelf label="albums in progress" item="min(15rem, 70vw)">
+          <Shelf label="albums in progress" item="min(17rem, 78vw)">
             <ul role="list">
               {started.map((s) => (
                 <li class="progress-card">
                   <a class="progress-art" href={`/album/${s.album.id}`} tabindex="-1" aria-hidden="true">
-                    <CoverArt artKey={s.album.art_key} title={s.album.title} sizes="15rem" />
+                    <CoverArt artKey={s.album.art_key} title={s.album.title} sizes="4.5rem" />
                   </a>
-                  <a class="progress-title" href={`/album/${s.album.id}`}>{s.album.title}</a>
-                  <span class="muted small"><CreditLine credits={s.album.credits} /></span>
-                  <span class="progress-bar" aria-hidden="true"><span style={`inline-size: ${Math.round((s.rated / s.total) * 100)}%`} /></span>
-                  <span class="progress-line small">
-                    <span class="tabular">{s.rated} of {s.total} rated</span>
-                    {s.nextId && (
-                      <a href={`/edit/rate/recording/${s.nextId}?return_to=/`}>Rate the next</a>
-                    )}
+                  <span class="progress-text">
+                    <a class="progress-title" href={`/album/${s.album.id}`}>{s.album.title}</a>
+                    <span class="muted small progress-by"><CreditLine credits={s.album.credits} /></span>
+                    <span class="progress-bar" aria-hidden="true"><span style={`inline-size: ${Math.round((s.rated / s.total) * 100)}%`} /></span>
+                    <span class="progress-line small">
+                      <span class="tabular">{s.rated} of {s.total}</span>
+                      {s.nextId && <a href={`/edit/rate/recording/${s.nextId}?return_to=/`}>Rate the next</a>}
+                    </span>
                   </span>
                 </li>
               ))}
@@ -276,24 +277,13 @@ const statItems = [
     }
 
     {
-      top.length > 1 && (
-        <section aria-labelledby="top-heading">
+      noticed.length > 0 && (
+        <section aria-labelledby="noticed-heading">
           <div class="section-head">
-            <h2 id="top-heading">Best albums</h2>
-            <a href="/insights">Insights</a>
+            <h2 id="noticed-heading">You might not have noticed</h2>
+            <a href="/insights#patterns-heading">More</a>
           </div>
-          <Shelf label="best albums">
-            <ol role="list">
-              {top.map((album, i) => (
-                <li class="ranked">
-                  <span class="rank tabular" aria-hidden="true">
-                    {i + 1}
-                  </span>
-                  <AlbumCard album={album} />
-                </li>
-              ))}
-            </ol>
-          </Shelf>
+          <Findings findings={noticed} />
         </section>
       )
     }
@@ -330,38 +320,19 @@ const statItems = [
     }
 
     {
-      topSingles.length > 1 && (
-        <section aria-labelledby="singles-heading">
-          <div class="section-head">
-            <h2 id="singles-heading">Best singles and EPs</h2>
-          </div>
-          <Shelf label="best singles and EPs">
-            <ol role="list">
-              {topSingles.map((album, i) => (
-                <li class="ranked">
-                  <span class="rank tabular" aria-hidden="true">
-                    {i + 1}
-                  </span>
-                  <AlbumCard album={album} />
-                </li>
-              ))}
-            </ol>
-          </Shelf>
-        </section>
-      )
-    }
-
-    {
       artistsLoved.length > 1 && (
         <section aria-labelledby="artists-heading">
           <div class="section-head">
-            <h2 id="artists-heading">Artists you love</h2>
+            <h2 id="artists-heading">Favourite artists</h2>
             <a href="/artists">All artists</a>
           </div>
-          <Shelf label="artists you love" item="min(9rem, 36vw)">
-            <ul role="list">
-              {artistsLoved.map((a) => (
-                <li class="face-card">
+          <Shelf label="favourite artists" item="min(9rem, 36vw)">
+            <ol role="list">
+              {artistsLoved.map((a, i) => (
+                <li class="face-card ranked">
+                  <span class="rank tabular" aria-hidden="true">
+                    {i + 1}
+                  </span>
                   <a href={`/artist/${a.id}`}>
                     <span class="face">
                       {a.image_key ? (
@@ -377,38 +348,33 @@ const statItems = [
                   </span>
                 </li>
               ))}
-            </ul>
+            </ol>
           </Shelf>
         </section>
       )
     }
 
     {
-      unplayed.length > 0 && (
-        <section aria-labelledby="unplayed-heading">
+      best.map((b) => (
+        <section aria-labelledby={`best-${b.key}-heading`}>
           <div class="section-head">
-            <h2 id="unplayed-heading">Played a lot, never rated</h2>
-            <a href="/manage/history">History</a>
+            <h2 id={`best-${b.key}-heading`}>{b.heading}</h2>
+            {b.key === 'albums' && <a href="/albums">All albums</a>}
           </div>
-          <Shelf label="played but not rated" item="min(11rem, 42vw)">
-            <ul role="list">
-              {unplayed.map((t) => (
-                <li class="track-card">
-                  <a class="track-art" href={`/track/${t.id}`} tabindex="-1" aria-hidden="true">
-                    <CoverArt artKey={t.art_key} title={t.title} sizes="11rem" />
-                  </a>
-                  <a class="track-title" href={`/track/${t.id}`}>{t.title}</a>
-                  <span class="muted small"><CreditLine credits={t.credits} /></span>
-                  <span class="track-foot">
-                    <span class="muted small tabular">{t.plays} plays</span>
-                    <a class="small rate-link" href={`/edit/rate/recording/${t.id}?return_to=/`}>Rate it</a>
+          <Shelf label={b.heading.toLowerCase()}>
+            <ol role="list">
+              {b.items.map((album, i) => (
+                <li class="ranked">
+                  <span class="rank tabular" aria-hidden="true">
+                    {i + 1}
                   </span>
+                  <AlbumCard album={album} />
                 </li>
               ))}
-            </ul>
+            </ol>
           </Shelf>
         </section>
-      )
+      ))
     }
 
     {
@@ -453,6 +419,34 @@ const statItems = [
               </li>
             ))}
           </ul>
+        </section>
+      )
+    }
+
+    {
+      unplayed.length > 0 && (
+        <section aria-labelledby="unplayed-heading">
+          <div class="section-head">
+            <h2 id="unplayed-heading">Played a lot, never rated</h2>
+            <a href="/manage/history">History</a>
+          </div>
+          <Shelf label="played but not rated" item="min(11rem, 42vw)">
+            <ul role="list">
+              {unplayed.map((t) => (
+                <li class="track-card">
+                  <a class="track-art" href={`/track/${t.id}`} tabindex="-1" aria-hidden="true">
+                    <CoverArt artKey={t.art_key} title={t.title} sizes="11rem" />
+                  </a>
+                  <a class="track-title" href={`/track/${t.id}`}>{t.title}</a>
+                  <span class="muted small"><CreditLine credits={t.credits} /></span>
+                  <span class="track-foot">
+                    <span class="muted small tabular">{t.plays} plays</span>
+                    <a class="small rate-link" href={`/edit/rate/recording/${t.id}?return_to=/`}>Rate it</a>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Shelf>
         </section>
       )
     }
@@ -673,16 +667,25 @@ const statItems = [
     font-size: var(--step--1);
   }
 
-  /* The picture runs the card's full height down the left; the text sits
-     beside it with its action at the foot, so cards of different lengths
-     all read as full. */
+  /* For today: a list read at a glance, each pick a row (two or three
+     columns on wider screens): picture, what it marks and what it is, and
+     one thing to do with it at the end. */
+  .picks {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+    gap: var(--space-2) var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
   .pick {
     display: grid;
-    grid-template-columns: 6.5rem minmax(0, 1fr);
-    align-items: stretch;
-    height: 100%;
-    min-height: 7.5rem;
-    overflow: hidden;
+    grid-template-columns: 4.5rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2);
+    padding-right: var(--space-3);
     border: 1px solid var(--border);
     border-radius: var(--radius-m);
     background: color-mix(in srgb, var(--surface-1) 80%, transparent);
@@ -696,10 +699,16 @@ const statItems = [
 
   .pick-art {
     display: block;
-    width: 100%;
-    height: 100%;
+    width: 4.5rem;
+    aspect-ratio: 1;
     overflow: hidden;
+    border-radius: var(--radius-s);
     background: var(--surface-2);
+  }
+
+  /* People are round, as everywhere else. */
+  .pick.round .pick-art {
+    border-radius: 50%;
   }
 
   .pick-art img,
@@ -714,9 +723,15 @@ const statItems = [
   .pick-text {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
     min-width: 0;
-    padding: var(--space-3) var(--space-4);
+    line-height: 1.3;
+  }
+
+  .pick-by {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Lines wrap rather than cut off; a long title gets two lines. */
@@ -746,16 +761,21 @@ const statItems = [
     font-size: var(--step--1);
   }
 
+  /* The one thing to do, as a small button at the row's end. */
   .pick-action {
-    align-self: flex-start;
     display: inline-flex;
     align-items: center;
+    max-width: 7rem;
     min-height: 2.25rem;
-    margin-top: auto;
-    padding-top: var(--space-1);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
     color: var(--text-muted);
-    font-size: var(--step--1);
+    font-size: 0.78rem;
     font-weight: 650;
+    line-height: 1.15;
+    text-align: center;
+    text-decoration: none;
   }
 
   .pick-action:hover {
@@ -912,17 +932,36 @@ const statItems = [
     font-weight: 800;
   }
 
-  /* Albums half-rated: cover, progress, and the next track to rate. */
+  /* Albums half-rated: a small cover beside the title, progress, and the
+     next track to rate. Short, so the shelf takes little of the page. */
   .progress-card {
     display: grid;
-    gap: 2px;
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: color-mix(in srgb, var(--surface-1) 80%, transparent);
   }
 
   .progress-art {
     display: block;
-    margin-bottom: var(--space-2);
     overflow: hidden;
-    border-radius: var(--radius-m);
+    border-radius: var(--radius-s);
+  }
+
+  .progress-text {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+    line-height: 1.3;
+  }
+
+  .progress-by {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .progress-title,
@@ -942,7 +981,7 @@ const statItems = [
   .progress-bar {
     display: block;
     height: 4px;
-    margin-top: var(--space-2);
+    margin-top: var(--space-1);
     border-radius: 999px;
     background: var(--surface-2);
     overflow: hidden;
