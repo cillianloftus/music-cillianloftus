@@ -142,3 +142,16 @@ export async function createEdition(albumId: string, input: z.infer<typeof newEd
   await db.batch(statements);
   return { releaseId, matched, created };
 }
+
+/**
+ * Words that mark an edition rather than the album itself. The same list as
+ * v_release_group_canonical (migration 0036): a plainly titled edition is
+ * the standard one before any "Deluxe" or "Special Edition", whatever their
+ * dates. Substring matches, as the view's GLOBs are, so both always agree.
+ */
+const EDITION_MARKS = ['deluxe', 'special', 'expanded', 'anniversary', 'remaster', 'bonus', 'edition', 'collector'];
+
+export const isEditionTitle = (title: string) => {
+  const lower = title.toLowerCase();
+  return EDITION_MARKS.some((mark) => lower.includes(mark));
+};

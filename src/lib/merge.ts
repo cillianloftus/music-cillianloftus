@@ -12,6 +12,7 @@
 
 import { env } from 'cloudflare:workers';
 import { ReviewError } from './review';
+import { normaliseTitle } from './text';
 
 /** The redirect from a merged-away id, carrying the row as it was. */
 function redirect(type: string, goneId: string, keepId: string, row: Record<string, unknown>): D1PreparedStatement {
@@ -132,6 +133,7 @@ export async function mergeAlbums(keepId: string, goneId: string): Promise<void>
     [keepId, goneId].map((id) => db.prepare(`SELECT * FROM release_group WHERE id = ?`).bind(id).first<Record<string, unknown>>()),
   );
   if (!keep || !gone) throw new ReviewError('One of these albums no longer exists.');
+  const arriving = (await db.prepare(`SELECT id FROM release WHERE release_group_id = ?`).bind(goneId).all<{ id: string }>()).results.map((r) => r.id);
 
   const moveEntity = (table: string) => [
     db.prepare(`UPDATE OR IGNORE ${table} SET entity_id = ?1 WHERE entity_type = 'release_group' AND entity_id = ?2`).bind(keepId, goneId),
@@ -171,6 +173,86 @@ export async function mergeAlbums(keepId: string, goneId: string): Promise<void>
     db.prepare(`DELETE FROM search_index WHERE kind = 'release_group' AND entity_id = ?`).bind(goneId),
     db.prepare(`DELETE FROM release_group WHERE id = ?`).bind(goneId),
   ]);
+  await foldDuplicateEditions(keepId, arriving);
+}
+
+/**
+ * After a merge, an edition that arrived which is one the album already
+ * had (the Special Edition from MusicBrainz beside the same one imported
+ * from Spotify) is folded into it, so the album does not list it twice.
+ * Two editions are one when their tracklists match title for title, in
+ * order. The songs on the one going are merged into the kept one's, track
+ * by track; copies owned move across; its ids and art fill gaps.
+ */
+export async function foldDuplicateEditions(albumId: string, arriving: string[]): Promise<number> {
+  if (arriving.length === 0) return 0;
+  const db = env.DB;
+  const { results: rows } = await db
+    .prepare(
+      `SELECT x.id AS release_id, x.mbid, x.art_key, x.created_at, t.recording_id, coalesce(t.title_on_release, r.title) AS title
+       FROM release x LEFT JOIN track t ON t.release_id = x.id LEFT JOIN recording r ON r.id = t.recording_id
+       WHERE x.release_group_id = ?
+       ORDER BY x.id, t.disc, t.position`,
+    )
+    .bind(albumId)
+    .all<{ release_id: string; mbid: string | null; art_key: string | null; created_at: string; recording_id: string | null; title: string | null }>();
+
+  type Edition = { id: string; mbid: string | null; art: string | null; created: string; recordings: string[]; key: string };
+  const editions = new Map<string, Edition>();
+  for (const r of rows) {
+    let e = editions.get(r.release_id);
+    if (!e) editions.set(r.release_id, (e = { id: r.release_id, mbid: r.mbid, art: r.art_key, created: r.created_at, recordings: [], key: '' }));
+    if (r.recording_id) e.recordings.push(r.recording_id);
+    if (r.title !== null) e.key += `${normaliseTitle(r.title)}\u0000`;
+  }
+  // Keep the edition with MusicBrainz behind it, then art, then the older.
+  const rank = (e: Edition) => [e.mbid ? 0 : 1, e.art ? 0 : 1, e.created] as const;
+  const better = (a: Edition, b: Edition) => {
+    const [x, y] = [rank(a), rank(b)];
+    return x[0] - y[0] || x[1] - y[1] || (x[2] < y[2] ? -1 : 1);
+  };
+
+  let folded = 0;
+  const gone = new Set<string>();
+  for (const id of arriving) {
+    const incoming = editions.get(id);
+    if (!incoming || incoming.recordings.length === 0 || gone.has(id)) continue;
+    const twin = [...editions.values()].find(
+      (e) => e.id !== id && !gone.has(e.id) && !arriving.includes(e.id) && e.recordings.length === incoming.recordings.length && e.key === incoming.key,
+    );
+    if (!twin) continue;
+    const [kept, going] = better(twin, incoming) <= 0 ? [twin, incoming] : [incoming, twin];
+
+    // Track by track, the same song: one recording.
+    for (let i = 0; i < kept.recordings.length; i++) {
+      const [k, g] = [kept.recordings[i]!, going.recordings[i]!];
+      if (k !== g) {
+        const both = await db.prepare(`SELECT count(*) AS n FROM recording WHERE id IN (?, ?)`).bind(k, g).first<{ n: number }>();
+        if (both?.n === 2) await mergeRecordings(k, g);
+      }
+    }
+
+    const row = await db.prepare(`SELECT * FROM release WHERE id = ?`).bind(going.id).first<Record<string, unknown>>();
+    const fill = (column: string) =>
+      db.prepare(`UPDATE release SET ${column} = ?2 WHERE id = ?1 AND ${column} IS NULL AND ?2 IS NOT NULL`).bind(kept.id, row?.[column] ?? null);
+    await db.batch([
+      db.prepare(`UPDATE release_group SET preferred_release_id = ?1 WHERE preferred_release_id = ?2`).bind(kept.id, going.id),
+      db.prepare(`UPDATE release SET mbid = NULL, spotify_id = NULL WHERE id = ?`).bind(going.id),
+      ...['mbid', 'spotify_id', 'art_key', 'barcode', 'label', 'country', 'format', 'note'].map(fill),
+      db.prepare(`UPDATE holding SET release_id = ?1 WHERE release_id = ?2`).bind(kept.id, going.id),
+      db.prepare(`UPDATE OR IGNORE artist_credit SET entity_id = ?1 WHERE entity_type = 'release' AND entity_id = ?2`).bind(kept.id, going.id),
+      db.prepare(`DELETE FROM artist_credit WHERE entity_type = 'release' AND entity_id = ?`).bind(going.id),
+      db.prepare(`DELETE FROM field_override WHERE entity_type = 'release' AND entity_id = ?`).bind(going.id),
+      db.prepare(`DELETE FROM lookup_log WHERE entity_id = ?`).bind(going.id),
+      db.prepare(`UPDATE entity_redirect SET new_id = ?1 WHERE entity_type = 'release' AND new_id = ?2`).bind(kept.id, going.id),
+      redirect('release', going.id, kept.id, row ?? {}),
+      db.prepare(`DELETE FROM track WHERE release_id = ?`).bind(going.id),
+      db.prepare(`DELETE FROM release WHERE id = ?`).bind(going.id),
+    ]);
+    gone.add(going.id);
+    folded++;
+  }
+  return folded;
 }
 
 /**

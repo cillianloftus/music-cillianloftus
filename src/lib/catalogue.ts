@@ -201,7 +201,10 @@ export async function editions(releaseGroupId: string): Promise<Edition[]> {
             (SELECT count(*) FROM track t WHERE t.release_id = r.id) AS track_count
      FROM release r
      WHERE r.release_group_id = ?
-     ORDER BY r.date IS NULL, substr(r.date || '-99-99', 1, 10), track_count, r.created_at, r.id`,
+     ORDER BY (lower(r.title) GLOB '*deluxe*' OR lower(r.title) GLOB '*special*' OR lower(r.title) GLOB '*expanded*'
+               OR lower(r.title) GLOB '*anniversary*' OR lower(r.title) GLOB '*remaster*' OR lower(r.title) GLOB '*bonus*'
+               OR lower(r.title) GLOB '*edition*' OR lower(r.title) GLOB '*collector*'),
+              r.date IS NULL, substr(r.date || '-99-99', 1, 10), track_count, r.created_at, r.id`,
   )
     .bind(releaseGroupId)
     .all<Edition>();

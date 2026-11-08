@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { storeCoverArt } from '../../../lib/import/coverart';
-import { detectAnomalies, dismiss, linkWork, mergeMatchingTracks, ReviewError, same, skip } from '../../../lib/review';
+import { detectAnomalies, dismiss, linkWork, mergeMatchingAlbums, mergeMatchingTracks, ReviewError, same, skip } from '../../../lib/review';
 
 /**
  * Review queue actions. Each is one person's decision about one item;
@@ -36,7 +36,8 @@ export const POST: APIRoute = async ({ request, redirect }) => {
         await dismiss(id);
         return back({ done: 'dismiss' });
       case 'merge_matching': {
-        const { merged, left } = await mergeMatchingTracks({ budgetMs: 20_000 });
+        const run = kind === 'near_duplicate_release_group' ? mergeMatchingAlbums : mergeMatchingTracks;
+        const { merged, left } = await run({ budgetMs: 20_000 });
         return back({ done: 'merge_matching', merged: String(merged), left: String(left) });
       }
       case 'link_work':

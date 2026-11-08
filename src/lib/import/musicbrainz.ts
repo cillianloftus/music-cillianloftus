@@ -2,6 +2,7 @@
  * Builds an ImportPlan from MusicBrainz.
  */
 
+import { isEditionTitle } from '../editions';
 import { parsePartialDate } from '../dates';
 import { browseReleases, getRelease, getReleaseGroup } from '../musicbrainz/client';
 import type { MbTarget } from '../musicbrainz/input';
@@ -62,17 +63,20 @@ export function trackCount(release: MbReleaseSummary): number {
  * Other editions can be imported later and attach to the same group.
  *
  *   1. official releases first
- *   2. earliest date
- *   3. fewest tracks: several editions often share the release day, and
+ *   2. a plainly titled edition before a "Deluxe" or "Special Edition"
+ *      (src/lib/editions.ts, as v_release_group_canonical does)
+ *   3. earliest date
+ *   4. fewest tracks: several editions often share the release day, and
  *      deluxe, CD-bonus and vinyl editions add tracks far more often than
  *      they remove them
- *   4. no disambiguation ("24-Bit", "Extended Cut" mark a variant)
- *   5. MBID, so the choice is stable however MusicBrainz orders its list
+ *   5. no disambiguation ("24-Bit", "Extended Cut" mark a variant)
+ *   6. MBID, so the choice is stable however MusicBrainz orders its list
  */
 export function chooseRelease(releases: MbReleaseSummary[]): MbReleaseSummary | null {
   const ranked = [...releases].sort(
     (a, b) =>
       Number(b.status === 'Official') - Number(a.status === 'Official') ||
+      Number(isEditionTitle(a.title)) - Number(isEditionTitle(b.title)) ||
       rankDate(a.date).localeCompare(rankDate(b.date)) ||
       (trackCount(a) || Infinity) - (trackCount(b) || Infinity) ||
       Number(Boolean(a.disambiguation)) - Number(Boolean(b.disambiguation)) ||

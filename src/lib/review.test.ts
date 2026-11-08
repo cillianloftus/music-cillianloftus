@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { detectAnomalies, dismiss, findAnomalies, linkWork, matchingTrackPairs, mergeMatchingTracks, openAnomalies, ReviewError, same, skip } from './review';
+import { detectAnomalies, dismiss, findAnomalies, linkWork, matchingAlbumPairs, mergeMatchingAlbums, matchingTrackPairs, mergeMatchingTracks, openAnomalies, ReviewError, same, skip } from './review';
 
 let db: DatabaseSync;
 
@@ -230,5 +230,18 @@ describe('deciding', () => {
     expect((await matchingTrackPairs()).length).toBe(1);
     expect(await mergeMatchingTracks({ budgetMs: 10_000 })).toEqual({ merged: 1, left: 0 });
     expect(db.prepare(`SELECT count(*) n FROM recording WHERE id IN ('a2', 'a2-dup')`).get()).toEqual({ n: 1 });
+  });
+});
+
+describe('albums that are plainly one', () => {
+  it('merges a deluxe filed as its own album into the album, as an edition', async () => {
+    seedDuplicates();
+    insert(db, 'release_group', [{ id: 'rg-a-single', title: 'Album A', type: 'single', source: 'manual' }]);
+    insert(db, 'artist_credit', [credit('release_group', 'rg-a-single', 'art-x')]);
+    await detectAnomalies();
+    // The single of the same name is a different kind of release: not taken.
+    expect((await matchingAlbumPairs()).map((p) => [p.entity_a, p.entity_b])).toEqual([['rg-a', 'rg-a-deluxe']]);
+    expect(await mergeMatchingAlbums({ budgetMs: 10_000 })).toEqual({ merged: 1, left: 0 });
+    expect(db.prepare(`SELECT release_group_id FROM release WHERE id = 'r-ad'`).get()).toEqual({ release_group_id: 'rg-a' });
   });
 });

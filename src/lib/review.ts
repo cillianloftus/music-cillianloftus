@@ -330,6 +330,41 @@ export async function mergeMatchingTracks({ budgetMs }: { budgetMs: number }): P
   return { merged, left: (await matchingTrackPairs()).length };
 }
 
+/**
+ * Open "one album filed twice" pairs that are certainly one album: same
+ * kind (album beside album, never a single beside its album), and titles
+ * identical once edition words go ("Nine Track Mind (Special Edition)").
+ * The looser "Title: Subtitle" matches are left to be judged one by one.
+ */
+export async function matchingAlbumPairs(): Promise<{ id: string; entity_a: string; entity_b: string }[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT a.id, a.entity_a, a.entity_b, x.title AS ta, y.title AS tb, x.type = y.type AS same_type
+     FROM anomaly a
+     JOIN release_group x ON x.id = a.entity_a JOIN release_group y ON y.id = a.entity_b
+     WHERE a.kind = 'near_duplicate_release_group' AND a.status = 'open'
+     ORDER BY a.detected_at, a.id`,
+  ).all<{ id: string; entity_a: string; entity_b: string; ta: string; tb: string; same_type: number }>();
+  return results
+    .filter((r) => r.same_type && normaliseTitle(r.ta) === normaliseTitle(r.tb))
+    .map(({ id, entity_a, entity_b }) => ({ id, entity_a, entity_b }));
+}
+
+/** Merges every certain album pair, as mergeMatchingTracks does for songs. */
+export async function mergeMatchingAlbums({ budgetMs }: { budgetMs: number }): Promise<{ merged: number; left: number }> {
+  const stop = Date.now() + budgetMs;
+  const { mergeSame } = await import('./merge');
+  let merged = 0;
+  for (const p of await matchingAlbumPairs()) {
+    if (Date.now() > stop || merged >= 25) break;
+    // A three-way duplicate: an earlier merge here may have taken one side.
+    const still = await env.DB.prepare(`SELECT 1 FROM anomaly WHERE id = ? AND status = 'open'`).bind(p.id).first();
+    if (!still) continue;
+    await mergeSame('release_group', p.entity_a, p.entity_b);
+    merged++;
+  }
+  return { merged, left: (await matchingAlbumPairs()).length };
+}
+
 /** Open duplicate-track pairs whose lengths agree, so they are one recording. */
 export async function matchingTrackPairs(): Promise<{ id: string; entity_a: string; entity_b: string }[]> {
   const { results } = await env.DB.prepare(

@@ -10,7 +10,7 @@ import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import { missingInfo } from '../../lib/gaps';
-import { matchingTrackPairs, openAnomalies, openCounts, reviewEntities, type Anomaly, type AnomalyKind } from '../../lib/review';
+import { matchingAlbumPairs, matchingTrackPairs, openAnomalies, openCounts, reviewEntities, type Anomaly, type AnomalyKind } from '../../lib/review';
 
 const PAGE = 25;
 /** The order they are offered in: the quick, important ones first. */
@@ -68,7 +68,11 @@ const items = kind ? await openAnomalies(kind, PAGE) : [];
 const [entities, gaps, matching] = await Promise.all([
   reviewEntities(items),
   missingInfo(),
-  kind === 'near_duplicate_recording' ? matchingTrackPairs() : Promise.resolve([]),
+  kind === 'near_duplicate_recording'
+    ? matchingTrackPairs()
+    : kind === 'near_duplicate_release_group'
+      ? matchingAlbumPairs()
+      : Promise.resolve([]),
 ]);
 const total = [...counts.values()].reduce((n, c) => n + c.open, 0);
 
@@ -158,10 +162,14 @@ const SOURCES: Record<string, string> = {
             <form method="post" action="/api/write/review" class="bulk" data-bulk>
               <input type="hidden" name="kind" value={kind} />
               <button class="button button--primary" type="submit" name="intent" value="merge_matching">
-                Merge all {matching.length} that match to the second
+                {kind === 'near_duplicate_release_group'
+                  ? `Merge all ${matching.length} that are plainly one album`
+                  : `Merge all ${matching.length} that match to the second`}
               </button>
               <span class="muted small" data-bulk-status aria-live="polite">
-                Same title, same artist, lengths within two seconds: the same recording entered twice.
+                {kind === 'near_duplicate_release_group'
+                  ? 'Same artist, same kind, same title once words like “Deluxe” or “Special Edition” are set aside. Each becomes an edition of one album.'
+                  : 'Same title, same artist, lengths within two seconds: the same recording entered twice.'}
               </span>
             </form>
           )}
@@ -342,7 +350,8 @@ const SOURCES: Record<string, string> = {
       status.textContent = `Merged ${merged}${left ? `, ${left} to go…` : '.'}`;
       if (!left || !Number(result.merged)) break;
     }
-    location.assign(`/manage/review?kind=near_duplicate_recording&done=merge_matching&merged=${merged}`);
+    const kind = bulk.querySelector<HTMLInputElement>('input[name="kind"]')!.value;
+    location.assign(`/manage/review?kind=${kind}&done=merge_matching&merged=${merged}`);
   });
 </script>
 
