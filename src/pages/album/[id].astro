@@ -1,4 +1,5 @@
 ---
+import { kindsOf } from '../../lib/track-kinds';
 import Base from '../../layouts/Base.astro';
 import Findings from '../../components/Findings.astro';
 import AlbumShape from '../../components/AlbumShape.astro';
@@ -118,7 +119,10 @@ const editionHref = (e: Edition) =>
   e.id === standardId ? `${Astro.url.pathname}#tracklist-heading` : `${Astro.url.pathname}?edition=${e.id}#tracklist-heading`;
 
 // Listening history is private too: play counts only for the signed-in listener.
-const plays = user ? await playCounts(user.id, tracks.map((t) => t.recording_id)) : new Map<string, number>();
+const [plays, kinds] = await Promise.all([
+  user ? playCounts(user.id, tracks.map((t) => t.recording_id)) : Promise.resolve(new Map<string, number>()),
+  kindsOf(tracks.map((t) => t.recording_id)),
+]);
 const totalPlays = [...plays.values()].reduce((a, b) => a + b, 0);
 
 const discs = [...new Set(tracks.map((t) => t.disc))];
@@ -323,6 +327,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                           <span class="visually-hidden">Track {track.position}: </span>
                           <a class="track-link" href={`/track/${track.recording_id}`}>{track.title}</a>
                           {isBonus(track.recording_id) && <span class="tag">Bonus</span>}
+                          {kinds.has(track.recording_id) && <span class="tag">{kinds.get(track.recording_id) === 'skit' ? 'Skit' : 'Interlude'}</span>}
                         </span>
                         {track.credits.map((c) => c.artist_id).join() !== albumArtistKey && (
                           <span class="track-artist">
@@ -346,7 +351,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                       <span class="track-score">
                         <Score quality={track.quality_score} personal={track.personal_score} size="s" quietWhenEmpty />
                       </span>
-                      {user && (
+                      {user && kinds.get(track.recording_id) !== 'skit' && (
                         <a class="rate" href={rateHref('recording', track.recording_id)} title={`Rate ${track.title}`}>
                           <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" />

@@ -4,6 +4,7 @@
  * it. Credits edited here are the track's from then on; no import or
  * lookup adds to them or takes from them again.
  */
+import { kindsOf } from '../../../lib/track-kinds';
 import { env } from 'cloudflare:workers';
 import Base from '../../../layouts/Base.astro';
 import CoverArt from '../../../components/CoverArt.astro';
@@ -33,6 +34,7 @@ const [credits, byHand, appearances, overrides, manualGenres, allGenres] = await
   env.DB.prepare(`SELECT name FROM genre ORDER BY name`).all<{ name: string }>(),
 ]);
 const edits = await editsOf('recording', id);
+const kind = (await kindsOf([id])).get(id) ?? 'song';
 void overrides;
 const home = appearances[0]?.album ?? null;
 const params = Astro.url.searchParams;
@@ -97,6 +99,22 @@ const hasGenius = Boolean(await geniusToken());
         }
         {!byHand && <p class="hint">Once you change anything here, imports and lookups leave these credits alone. Put them back as they were, or undo, and that ends.</p>}
     </CreditEditor>
+
+    <form method="post" action="/api/write/track-kind" class="card kind-form">
+      <input type="hidden" name="id" value={id} />
+      <input type="hidden" name="back" value={`/edit/track/${id}?done=${encodeURIComponent('Kind saved.')}`} />
+      <fieldset>
+        <legend>What kind of track</legend>
+        <div class="kinds">
+          {(['song', 'interlude', 'skit'] as const).map((k) => (
+            <button class="button" type="submit" name="kind" value={k} aria-pressed={k === kind ? 'true' : 'false'}>
+              {k === 'song' ? 'Song' : k === 'interlude' ? 'Interlude' : 'Skit'}
+            </button>
+          ))}
+        </div>
+        <p class="hint">An interlude counts less toward its album; a skit is not rated and does not count. <a href="/manage/weights">How much</a></p>
+      </fieldset>
+    </form>
 
   </div>
 </Base>
@@ -189,5 +207,29 @@ const hasGenius = Boolean(await geniusToken());
   .notice--error {
     border-color: var(--danger);
     color: var(--danger);
+  }
+
+  .kind-form fieldset {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .kind-form legend {
+    margin-bottom: var(--space-3);
+    font-weight: 700;
+  }
+
+  .kinds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .kinds [aria-pressed='true'] {
+    border-color: var(--accent);
+    background: color-mix(in oklch, var(--accent) 18%, transparent);
   }
 </style>

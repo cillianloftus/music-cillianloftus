@@ -336,14 +336,17 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
       db.prepare(
         `INSERT INTO genre (id, name)
          SELECT j.value ->> '$.id', j.value ->> '$.name'
-         FROM json_each(?1) j WHERE true
+         FROM json_each(?1) j
+         -- A name the library has renamed lands on the genre it became.
+         WHERE NOT EXISTS (SELECT 1 FROM genre_alias a WHERE a.name = j.value ->> '$.name')
          ON CONFLICT DO NOTHING`,
       ).bind(json(genres)),
       db.prepare(
         `INSERT INTO genre_tag (entity_type, entity_id, genre_id, source, weight)
          SELECT 'release_group', ?2, g.id, ?3, j.value ->> '$.weight'
          FROM json_each(?1) j
-         JOIN genre g ON g.name = j.value ->> '$.name'
+         JOIN genre g ON g.id = coalesce((SELECT a.genre_id FROM genre_alias a WHERE a.name = j.value ->> '$.name'),
+                                         (SELECT x.id FROM genre x WHERE x.name = j.value ->> '$.name'))
          WHERE true
          ON CONFLICT DO NOTHING`,
       ).bind(json(genres), releaseGroupId, source),

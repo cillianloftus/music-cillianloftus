@@ -137,11 +137,11 @@ export async function editAlbum(userId: string, id: string, input: z.infer<typeo
     statements.push(
       db.prepare(`DELETE FROM genre_tag WHERE entity_type = 'release_group' AND entity_id = ? AND source = 'manual'`).bind(id),
       db.prepare(
-        `INSERT INTO genre (id, name) SELECT j.value ->> '$.id', j.value ->> '$.name' FROM json_each(?1) j WHERE true ON CONFLICT DO NOTHING`,
+        `INSERT INTO genre (id, name) SELECT j.value ->> '$.id', j.value ->> '$.name' FROM json_each(?1) j WHERE NOT EXISTS (SELECT 1 FROM genre_alias a WHERE a.name = j.value ->> '$.name') ON CONFLICT DO NOTHING`,
       ).bind(JSON.stringify(rows)),
       db.prepare(
         `INSERT INTO genre_tag (entity_type, entity_id, genre_id, source, weight)
-         SELECT 'release_group', ?2, g.id, 'manual', 1 FROM json_each(?1) j JOIN genre g ON g.name = j.value ->> '$.name'
+         SELECT 'release_group', ?2, g.id, 'manual', 1 FROM json_each(?1) j JOIN genre g ON g.id = coalesce((SELECT a.genre_id FROM genre_alias a WHERE a.name = j.value ->> '$.name'), (SELECT x.id FROM genre x WHERE x.name = j.value ->> '$.name'))
          WHERE true ON CONFLICT DO NOTHING`,
       ).bind(JSON.stringify(rows), id),
     );
@@ -213,12 +213,12 @@ export async function editTrackGenres(recordingId: string, raw: string): Promise
   const db = env.DB;
   await db.batch([
     db.prepare(`DELETE FROM genre_tag WHERE entity_type = 'recording' AND entity_id = ? AND source = 'manual'`).bind(recordingId),
-    db.prepare(`INSERT INTO genre (id, name) SELECT j.value ->> '$.id', j.value ->> '$.name' FROM json_each(?1) j WHERE true ON CONFLICT DO NOTHING`).bind(
+    db.prepare(`INSERT INTO genre (id, name) SELECT j.value ->> '$.id', j.value ->> '$.name' FROM json_each(?1) j WHERE NOT EXISTS (SELECT 1 FROM genre_alias a WHERE a.name = j.value ->> '$.name') ON CONFLICT DO NOTHING`).bind(
       JSON.stringify(rows),
     ),
     db.prepare(
       `INSERT INTO genre_tag (entity_type, entity_id, genre_id, source, weight)
-       SELECT 'recording', ?2, g.id, 'manual', 1 FROM json_each(?1) j JOIN genre g ON g.name = j.value ->> '$.name'
+       SELECT 'recording', ?2, g.id, 'manual', 1 FROM json_each(?1) j JOIN genre g ON g.id = coalesce((SELECT a.genre_id FROM genre_alias a WHERE a.name = j.value ->> '$.name'), (SELECT x.id FROM genre x WHERE x.name = j.value ->> '$.name'))
        WHERE true ON CONFLICT DO NOTHING`,
     ).bind(JSON.stringify(rows), recordingId),
   ]);

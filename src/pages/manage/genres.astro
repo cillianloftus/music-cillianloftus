@@ -68,6 +68,8 @@ const filed = Number(params.get('n') ?? 0);
 const DONE: Record<string, string> = {
   created: 'Genre added.',
   moved: 'Moved.',
+  renamed: 'Renamed everywhere. Imports using the old name land here too.',
+  merged: 'Merged into the genre that already had that name.',
   dismissed: 'Turned down.',
   filed: filed === 1 ? 'Filed 1 genre.' : `Filed ${filed} genres.`,
 };

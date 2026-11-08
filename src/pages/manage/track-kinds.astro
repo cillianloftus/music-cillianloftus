@@ -1,0 +1,285 @@
+---
+/**
+ * Track kinds: which tracks are interludes or skits. Suggestions are
+ * short tracks, or ones titled as such, on the library's albums; nothing
+ * is marked until answered here. How much an interlude counts, and how
+ * much length counts, are set on the weights page.
+ */
+import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import CoverArt from '../../components/CoverArt.astro';
+import { CUTOFFS, DEFAULT_CUTOFF, markedTracks, suggestions, type KindRow } from '../../lib/track-kinds';
+
+const params = Astro.url.searchParams;
+const asked = Number(params.get('under'));
+const cutoff = (CUTOFFS as readonly number[]).includes(asked) ? asked : DEFAULT_CUTOFF;
+const view = params.get('view') === 'marked' ? 'marked' : 'suggested';
+const [suggested, marked] = await Promise.all([suggestions(cutoff), markedTracks()]);
+const rows: KindRow[] = view === 'marked' ? marked : suggested.rows;
+const here = `/manage/track-kinds?${params}`;
+
+const clock = (ms: number | null) => {
+  if (ms == null) return null;
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+const cutoffLabel = (s: number) => `Under ${clock(s * 1000)}`;
+const KIND_LABEL = { song: 'Song', interlude: 'Interlude', skit: 'Skit' } as const;
+---
+
+<Base title="Track kinds">
+  <div class="wrap page">
+    <PageHeader title="Track kinds" />
+    <p class="lede">
+      Skits are not rated and do not count toward an album. Interludes count less, by the weight set on <a href="/manage/weights">Weights</a>.
+      Everything else is a song.
+    </p>
+
+    {params.get('error') && <p class="notice notice--error" role="alert">{params.get('error')}</p>}
+
+    <nav class="tabs" aria-label="Which tracks">
+      <a href={`/manage/track-kinds?under=${cutoff}`} aria-current={view === 'suggested' ? 'page' : undefined}>
+        To look at <span class="n tabular">{suggested.total}</span>
+      </a>
+      <a href={`/manage/track-kinds?view=marked&under=${cutoff}`} aria-current={view === 'marked' ? 'page' : undefined}>
+        Marked <span class="n tabular">{marked.length}</span>
+      </a>
+    </nav>
+
+    {
+      view === 'suggested' && (
+        <div class="cutoffs" role="group" aria-label="Short means">
+          <span class="muted small">Short means</span>
+          {CUTOFFS.map((s) => (
+            <a href={`/manage/track-kinds?under=${s}`} aria-current={s === cutoff ? 'true' : undefined}>
+              {cutoffLabel(s)}
+            </a>
+          ))}
+          <span class="muted small">or titled skit, interlude, intro, outro…</span>
+        </div>
+      )
+    }
+
+    {rows.length === 0 && <p class="empty">{view === 'marked' ? 'Nothing marked yet.' : 'Nothing to look at.'}</p>}
+
+    <ul role="list" class="list" data-list>
+      {
+        rows.map((r) => (
+          <li class="row">
+            <a class="art" href={`/album/${r.album_id}`} tabindex="-1" aria-hidden="true">
+              <CoverArt artKey={r.art_key} title={r.album ?? r.title} sizes="3rem" />
+            </a>
+            <div class="text">
+              <a class="title" href={`/track/${r.id}`}>
+                {r.title}
+              </a>
+              <span class="meta muted small">
+                {[clock(r.length_ms), r.artist, r.album].filter(Boolean).join(' · ')}
+                {r.rated ? ' · rated' : ''}
+                {r.skipped ? ' · skipped before' : ''}
+              </span>
+            </div>
+            <form method="post" action="/api/write/track-kind" class="choices" data-row>
+              <input type="hidden" name="id" value={r.id} />
+              <input type="hidden" name="back" value={here} />
+              {(['song', 'interlude', 'skit'] as const).map((k) => (
+                <button
+                  class:list={['button', 'small', { 'button--primary': view === 'suggested' && k === r.kind }]}
+                  type="submit"
+                  name="kind"
+                  value={k}
+                  aria-pressed={view === 'marked' ? (k === r.kind ? 'true' : 'false') : undefined}
+                >
+                  {KIND_LABEL[k]}
+                </button>
+              ))}
+              {view === 'suggested' && (
+                <button class="button small button--quiet" type="submit" name="intent" value="skip">
+                  Skip
+                </button>
+              )}
+            </form>
+          </li>
+        ))
+      }
+    </ul>
+    {view === 'suggested' && suggested.total > rows.length && <p class="muted small more">More appear as you answer these.</p>}
+  </div>
+</Base>
+
+<script>
+  const list = document.querySelector<HTMLElement>('[data-list]');
+  const marked = new URLSearchParams(location.search).get('view') === 'marked';
+  for (const form of document.querySelectorAll<HTMLFormElement>('[data-row]')) {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = event.submitter as HTMLButtonElement | null;
+      const body = new FormData(form);
+      if (button?.name) body.set(button.name, button.value);
+      const buttons = [...form.querySelectorAll('button')];
+      for (const b of buttons) b.disabled = true;
+      const response = await fetch(form.action, { method: 'POST', body, headers: { Accept: 'application/json' } });
+      const result = (await response.json()) as { ok: boolean; error?: string };
+      for (const b of buttons) b.disabled = false;
+      if (!result.ok) {
+        alert(result.error ?? 'That did not work.');
+        return;
+      }
+      // Marked: the choice changes in place. Suggested: answered, so it goes.
+      if (marked && button?.name === 'kind') {
+        for (const b of buttons) b.setAttribute('aria-pressed', String(b === button));
+        return;
+      }
+      const row = form.closest('li')!;
+      const next = row.nextElementSibling;
+      row.remove();
+      next?.querySelector<HTMLButtonElement>('.button--primary')?.focus();
+      if (list && list.children.length === 0) location.reload();
+    });
+  }
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .lede {
+    max-width: 62ch;
+    color: var(--text-muted);
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  .notice--error {
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--danger);
+    color: var(--danger);
+  }
+
+  .tabs,
+  .cutoffs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .tabs a,
+  .cutoffs a {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+    padding: 0 var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .cutoffs a {
+    min-height: 2.25rem;
+    padding: 0 var(--space-3);
+    font-size: var(--step--1);
+  }
+
+  .tabs a[aria-current='page'],
+  .cutoffs a[aria-current='true'] {
+    border-color: var(--text);
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .n {
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+  }
+
+  .empty {
+    padding: var(--space-6) 0;
+    color: var(--text-muted);
+  }
+
+  .list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 3rem minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    padding-block: var(--space-3);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .art {
+    display: block;
+    width: 3rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .text {
+    display: grid;
+    min-width: 0;
+  }
+
+  .title {
+    overflow: hidden;
+    font-weight: 650;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The choices sit under the track on a phone, beside it given room. */
+  .choices {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  @media (min-width: 48rem) {
+    .row {
+      grid-template-columns: 3rem minmax(0, 1fr) auto;
+    }
+
+    .choices {
+      grid-column: auto;
+    }
+  }
+
+  .choices .button--quiet {
+    margin-left: auto;
+  }
+
+  .choices [aria-pressed='true'] {
+    border-color: var(--accent);
+    background: color-mix(in oklch, var(--accent) 18%, transparent);
+  }
+
+  .more {
+    text-align: center;
+  }
+</style>

@@ -42,8 +42,16 @@ const { nodes, suggestOpen, level = 1 } = Astro.props;
           ))}
           <details class="move">
             <summary>
-              Move<span class="visually-hidden"> {node.name}</span>
+              Edit<span class="visually-hidden"> {node.name}</span>
             </summary>
+            <form method="post" action="/api/write/genre">
+              <input type="hidden" name="intent" value="rename" />
+              <input type="hidden" name="id" value={node.id} />
+              {suggestOpen && <input type="hidden" name="suggest" value="1" />}
+              <label for={`name-${node.id}`}>Name</label>
+              <input class="input" id={`name-${node.id}`} name="name" autocomplete="off" value={node.name} required maxlength="80" spellcheck="false" />
+              <button class="button" type="submit">Rename</button>
+            </form>
             <form method="post" action="/api/write/genre">
               <input type="hidden" name="id" value={node.id} />
               {suggestOpen && <input type="hidden" name="suggest" value="1" />}

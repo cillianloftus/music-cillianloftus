@@ -20,15 +20,22 @@ export type AlbumKey = (typeof ALBUM_KEYS)[number];
 export interface Weights {
   craft: Record<CraftKey, number>;
   album: Record<AlbumKey, number>;
-  release: { tracks: number; album_axes: number; trim_lowest: boolean };
+  /**
+   * interlude: how much an interlude counts beside a song (0–1).
+   * length: how much a track's length sets its weight in its album (0–1).
+   */
+  release: { tracks: number; album_axes: number; trim_lowest: boolean; interlude: number; length: number };
 }
 
 /** The defaults the views fall back to for any missing key. */
 export const DEFAULT_WEIGHTS: Weights = {
   craft: { production: 1, songwriting: 1, lyrics: 1, performance: 1 },
   album: { sequencing: 1, cohesion: 1, ambition: 1 },
-  release: { tracks: 0.7, album_axes: 0.3, trim_lowest: true },
+  release: { tracks: 0.7, album_axes: 0.3, trim_lowest: true, interlude: 0.5, length: 0 },
 };
+
+/** Song is the default and is never stored unless chosen. */
+export type TrackKind = 'song' | 'interlude' | 'skit';
 
 /** One rating row: axes are null when not given. */
 export type AxisValues = Partial<Record<CraftKey | AlbumKey, number | null>>;
@@ -46,6 +53,10 @@ export interface ScoreInputs {
   albums: Record<string, RatingSample>;
   /** Recordings on each album's canonical edition. */
   canonical: Record<string, string[]>;
+  /** Tracks that are not songs. Skits score nothing; interludes count less. */
+  kinds?: Record<string, TrackKind>;
+  /** Track lengths in milliseconds, where known. */
+  lengths?: Record<string, number>;
 }
 
 export interface Score {
@@ -106,8 +117,13 @@ export interface Scores {
 export function computeScores(inputs: ScoreInputs, w: Weights): Scores {
   const { offset, samples } = gutOffset(inputs, w);
 
+  const kinds = inputs.kinds ?? {};
+  const lengths = inputs.lengths ?? {};
+
+  // v_recording_score: a skit has no score.
   const recordings = new Map<string, Score>();
   for (const [id, r] of Object.entries(inputs.recordings)) {
+    if (kinds[id] === 'skit') continue;
     const score = recordingScore(r, w, offset);
     if (score) recordings.set(id, score);
   }
@@ -116,17 +132,28 @@ export function computeScores(inputs: ScoreInputs, w: Weights): Scores {
   const albums = new Map<string, AlbumScore>();
   const ids = new Set([...Object.keys(inputs.albums), ...Object.keys(inputs.canonical)]);
   for (const id of ids) {
-    const qualities = (inputs.canonical[id] ?? [])
-      .map((recording) => recordings.get(recording)?.quality)
-      .filter((q): q is number => q !== undefined);
+    const rated = [...new Set(inputs.canonical[id] ?? [])]
+      .filter((recording) => recordings.has(recording))
+      .map((recording) => ({ id: recording, q: recordings.get(recording)!.quality, length: lengths[recording] }));
+    const qualities = rated.map((r) => r.q);
 
+    // A weighted mean: an interlude counts less, and with length switched
+    // on a track counts by its length over the album's mean length.
     let tracks: number | null = null;
-    if (qualities.length > 0) {
-      const total = qualities.reduce((a, b) => a + b, 0);
-      tracks =
-        qualities.length >= 2 && w.release.trim_lowest
-          ? (total - Math.min(...qualities)) / (qualities.length - 1)
-          : total / qualities.length;
+    if (rated.length > 0) {
+      const known = rated.filter((r) => r.length !== undefined);
+      const mean = known.length > 0 ? known.reduce((a, r) => a + r.length!, 0) / known.length : null;
+      const ordered = [...rated].sort((a, b) => a.q - b.q || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      const kept = ordered.length >= 2 && w.release.trim_lowest ? ordered.slice(1) : ordered;
+      let total = 0;
+      let weight = 0;
+      for (const r of kept) {
+        const kind = kinds[r.id] === 'interlude' ? w.release.interlude : 1;
+        const byLength = r.length === undefined || mean === null ? 1 : 1 - w.release.length + (w.release.length * r.length) / mean;
+        total += kind * byLength * r.q;
+        weight += kind * byLength;
+      }
+      tracks = weight > 0 ? total / weight : null;
     }
 
     const rating = inputs.albums[id];

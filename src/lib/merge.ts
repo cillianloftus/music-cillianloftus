@@ -218,6 +218,8 @@ export async function mergeRecordings(keepId: string, goneId: string): Promise<v
     ...moveColumn('file'),
     ...moveColumn('definition_pin'),
     ...moveColumn('definition_exclude'),
+    ...moveColumn('recording_kind'),
+    ...moveColumn('recording_kind_skip'),
     ...moveEntity('artist_credit'),
     ...moveEntity('genre_tag'),
     ...moveEntity('field_override'),

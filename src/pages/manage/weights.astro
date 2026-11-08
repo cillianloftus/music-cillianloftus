@@ -91,6 +91,10 @@ const LABELS: Record<string, string> = {
 };
 
 const tracksShare = Math.round(preview.release.tracks * 100);
+const lengthShare = Math.round(preview.release.length * 100);
+const interludeShare = Math.round(preview.release.interlude * 100);
+const lengthLabel = (n: number) => (n === 0 ? 'none' : n === 100 ? 'full' : `${n}%`);
+const interludeLabel = (n: number) => (n === 100 ? 'as a song' : n === 0 ? 'not at all' : `${n}% of a song`);
 const nextVersion = (versions[0]?.version ?? 0) + 1;
 const baselineName = current ? `version ${current.version}` : 'the defaults';
 
@@ -100,7 +104,11 @@ function describe(w: Weights): string {
     .filter(([, value]) => value !== 1)
     .map(([key, value]) => `${LABELS[key]!.toLowerCase()} ×${value}`);
   const blend = `tracks ${Math.round(w.release.tracks * 100)}%`;
-  return [...axes, blend, w.release.trim_lowest ? 'lowest track dropped' : 'every track counted'].join(', ');
+  const extra = [
+    w.release.length > 0 && `length ${Math.round(w.release.length * 100)}%`,
+    w.release.interlude !== 0.5 && `interludes ${Math.round(w.release.interlude * 100)}%`,
+  ].filter(Boolean);
+  return [...axes, blend, w.release.trim_lowest ? 'lowest track dropped' : 'every track counted', ...extra].join(', ');
 }
 
 const date = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -175,6 +183,24 @@ const clientData = {
             <input type="checkbox" name="trim_lowest" checked={preview.release.trim_lowest} />
             Drop each album’s lowest-rated track
           </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Tracks within an album</legend>
+          <div class="slider slider--stacked">
+            <label for="length_share">Length</label>
+            <output for="length_share" id="length_share-value" class="tabular">{lengthLabel(lengthShare)}</output>
+            <input type="range" id="length_share" name="length_share" min="0" max="100" step="5" value={lengthShare} aria-describedby="length-hint" />
+            <span class="hint" id="length-hint">At none, every track counts the same. At full, a track counts by its length: a one-minute interlude a quarter as much as a four-minute song.</span>
+          </div>
+          <div class="slider slider--stacked">
+            <label for="interlude_share">Interludes</label>
+            <output for="interlude_share" id="interlude_share-value" class="tabular">{interludeLabel(interludeShare)}</output>
+            <input type="range" id="interlude_share" name="interlude_share" min="0" max="100" step="5" value={interludeShare} aria-describedby="interlude-hint" />
+            <span class="hint" id="interlude-hint">
+              How much a track marked as an interlude counts beside a song. Skits never count. <a href="/manage/track-kinds">Mark tracks</a>
+            </span>
+          </div>
         </fieldset>
 
         <p class="calibration" id="calibration">
@@ -319,7 +345,13 @@ const clientData = {
     return {
       craft,
       album,
-      release: { tracks: share / 100, album_axes: (100 - share) / 100, trim_lowest: field('trim_lowest').checked },
+      release: {
+        tracks: share / 100,
+        album_axes: (100 - share) / 100,
+        trim_lowest: field('trim_lowest').checked,
+        interlude: number('interlude_share') / 100,
+        length: number('length_share') / 100,
+      },
     };
   }
 
@@ -331,7 +363,15 @@ const clientData = {
   function render(animate: boolean) {
     for (const output of form.querySelectorAll('output')) {
       const input = field(output.htmlFor.value);
-      output.value = input.name === 'tracks_share' ? `${input.value}% / ${100 - Number(input.value)}%` : `×${input.value}`;
+      const n = Number(input.value);
+      output.value =
+        input.name === 'tracks_share'
+          ? `${n}% / ${100 - n}%`
+          : input.name === 'length_share'
+            ? n === 0 ? 'none' : n === 100 ? 'full' : `${n}%`
+            : input.name === 'interlude_share'
+              ? n === 100 ? 'as a song' : n === 0 ? 'not at all' : `${n}% of a song`
+              : `×${input.value}`;
     }
 
     const weights = read();

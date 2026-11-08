@@ -12,6 +12,7 @@ import {
   DEFAULT_WEIGHTS,
   type RatingSample,
   type ScoreInputs,
+  type TrackKind,
   type Weights,
 } from './scoring';
 
@@ -29,6 +30,9 @@ export const weightsForm = z
   .object({
     ...Object.fromEntries([...CRAFT_KEYS, ...ALBUM_KEYS].map((key) => [key, axisWeight])),
     tracks_share: z.coerce.number().int().min(0).max(100).multipleOf(5),
+    // Older links and forms have neither: they mean the defaults.
+    interlude_share: z.coerce.number().int().min(0).max(100).multipleOf(5).default(Math.round(DEFAULT_WEIGHTS.release.interlude * 100)),
+    length_share: z.coerce.number().int().min(0).max(100).multipleOf(5).default(Math.round(DEFAULT_WEIGHTS.release.length * 100)),
     trim_lowest: z.preprocess((value) => value === 'on' || value === 'true' || value === true, z.boolean()),
   })
   .transform((form, ctx): Weights => {
@@ -40,6 +44,8 @@ export const weightsForm = z
         tracks: form.tracks_share / 100,
         album_axes: (100 - form.tracks_share) / 100,
         trim_lowest: form.trim_lowest,
+        interlude: form.interlude_share / 100,
+        length: form.length_share / 100,
       },
     };
     // With every axis at zero a detailed rating would have no score at all.
@@ -59,6 +65,8 @@ export function weightsToForm(w: Weights): Record<string, string> {
     ...Object.fromEntries(ALBUM_KEYS.map((k) => [k, String(w.album[k])])),
     tracks_share: String(Math.round(w.release.tracks * 100)),
     trim_lowest: w.release.trim_lowest ? 'on' : '',
+    interlude_share: String(Math.round(w.release.interlude * 100)),
+    length_share: String(Math.round(w.release.length * 100)),
   };
 }
 
@@ -73,6 +81,8 @@ export function withDefaults(payload: unknown): Weights {
       tracks: p.release?.tracks ?? DEFAULT_WEIGHTS.release.tracks,
       album_axes: p.release?.album_axes ?? DEFAULT_WEIGHTS.release.album_axes,
       trim_lowest: trim === undefined ? DEFAULT_WEIGHTS.release.trim_lowest : Boolean(trim),
+      interlude: p.release?.interlude ?? DEFAULT_WEIGHTS.release.interlude,
+      length: p.release?.length ?? DEFAULT_WEIGHTS.release.length,
     },
   };
 }
@@ -163,7 +173,7 @@ const sample = (r: SampleRow, keys: readonly ((typeof CRAFT_KEYS)[number] | (typ
  * latest row per entity, calibration over all history, canonical editions.
  */
 export async function scoreInputs(userId: string): Promise<ScoreInputs> {
-  const [ratings, canonical] = await env.DB.batch([
+  const [ratings, canonical, tracks] = await env.DB.batch([
     env.DB.prepare(
       `SELECT entity_type, entity_id, rated_at, gut_score, impact,
               production, songwriting, lyrics, performance, sequencing, cohesion, ambition
@@ -175,9 +185,19 @@ export async function scoreInputs(userId: string): Promise<ScoreInputs> {
        JOIN track t ON t.release_id = c.release_id
        WHERE EXISTS (SELECT 1 FROM rating r WHERE r.user_id = ? AND r.entity_type = 'recording' AND r.entity_id = t.recording_id)`,
     ).bind(userId),
+    // Kind and length of every rated recording.
+    env.DB.prepare(
+      `SELECT r.id, r.length_ms, k.kind FROM recording r
+       LEFT JOIN recording_kind k ON k.recording_id = r.id
+       WHERE r.id IN (SELECT entity_id FROM rating WHERE user_id = ? AND entity_type = 'recording')`,
+    ).bind(userId),
   ]);
 
-  const inputs: ScoreInputs = { calibration: [], recordings: {}, albums: {}, canonical: {} };
+  const inputs: ScoreInputs = { calibration: [], recordings: {}, albums: {}, canonical: {}, kinds: {}, lengths: {} };
+  for (const t of (tracks!.results ?? []) as { id: string; length_ms: number | null; kind: TrackKind | null }[]) {
+    if (t.kind && t.kind !== 'song') inputs.kinds![t.id] = t.kind;
+    if (t.length_ms != null) inputs.lengths![t.id] = t.length_ms;
+  }
   // Oldest first, so later rows overwrite: the last one standing is the latest.
   for (const r of (ratings!.results ?? []) as SampleRow[]) {
     if (r.entity_type === 'recording') {

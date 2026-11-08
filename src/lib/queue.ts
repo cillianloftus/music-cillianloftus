@@ -108,6 +108,7 @@ items AS (
     l.entity_type, l.entity_id, NULL, NULL, 0, l.gut_score, NULL, l.rated_at, 3
   FROM v_latest_rating_axes l
   WHERE l.user_id = ?1 AND l.depth = 'gut' AND l.gut_score >= ?4
+    AND NOT EXISTS (SELECT 1 FROM recording_kind k WHERE k.recording_id = l.entity_id AND k.kind = 'skit')
 )
 SELECT
   i.entity_type, i.entity_id, i.tier, i.artist_name, i.artist_score, i.plays, i.gut, i.rated_track_count,

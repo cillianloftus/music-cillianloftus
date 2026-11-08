@@ -16,11 +16,17 @@ import { genreAlbums, genreArtists, genreDetail, genreTopTracks } from '../../li
 import Score from '../../components/Score.astro';
 import { encodeDefinition } from '../../lib/query/builder';
 import { hydrateTracks } from '../../lib/query/run';
+import { redirectFor } from '../../lib/catalogue';
 
 const id = Astro.params.id!;
 const deep = Astro.url.searchParams.get('beneath') === '1';
 const genre = await genreDetail(id, deep);
-if (!genre) return Astro.rewrite('/404');
+if (!genre) {
+  // Merged into another genre by a rename: its old address leads there.
+  const merged = await redirectFor('genre', id);
+  if (merged) return Astro.redirect(`/genre/${merged}${Astro.url.search}`, 301);
+  return Astro.rewrite('/404');
+}
 
 const user = Astro.locals.user;
 const viewerId = user?.id ?? (await ownerId());

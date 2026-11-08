@@ -44,9 +44,13 @@ class Params {
   }
 }
 
-const GENRE_TREE = (placeholder: string) => `
+/** A genre by name, or by a name it had before a rename (0035), so saved definitions keep working. */
+const GENRE_BY_NAME = (p: Params, value: unknown) =>
+  `SELECT id FROM genre WHERE name = ${p.add(value)} UNION SELECT genre_id FROM genre_alias WHERE name = ${p.add(value)}`;
+
+const GENRE_TREE = (p: Params, value: unknown) => `
   WITH RECURSIVE tree(id) AS (
-    SELECT id FROM genre WHERE name = ${placeholder}
+    ${GENRE_BY_NAME(p, value)}
     UNION
     -- Every parent link, primary or not (0013): blues rock counts under blues too.
     SELECT e.genre_id FROM v_genre_edge e JOIN tree ON e.parent_id = tree.id
@@ -112,9 +116,13 @@ function creditCondition(spec: EntitySpec, field: Field, op: Condition['op'], va
 
 function genreCondition(spec: EntitySpec, op: Condition['op'], value: unknown, p: Params): string {
   let genres: string;
-  if (op === 'in_tree') genres = GENRE_TREE(p.add(value));
-  else if (op === 'eq') genres = `SELECT id FROM genre WHERE name = ${p.add(value)}`;
-  else genres = `SELECT id FROM genre WHERE lower(name) IN (SELECT lower(value) FROM json_each(${p.add(JSON.stringify(value))}))`;
+  if (op === 'in_tree') genres = GENRE_TREE(p, value);
+  else if (op === 'eq') genres = GENRE_BY_NAME(p, value);
+  else {
+    const names = JSON.stringify(value);
+    genres = `SELECT id FROM genre WHERE lower(name) IN (SELECT lower(value) FROM json_each(${p.add(names)}))
+      UNION SELECT genre_id FROM genre_alias WHERE lower(name) IN (SELECT lower(value) FROM json_each(${p.add(names)}))`;
+  }
   return spec.genre!.replace('{genres}', genres);
 }
 

@@ -171,9 +171,76 @@ export function packGenres(roots: GenreTreeNode[], size: number): PackedCircle[]
 
 export class GenreError extends Error {}
 
-/** A genre id by name, ignoring case (names are unique without it). */
+/** A genre id by name or a name it used to have, ignoring case (names are unique without it). */
 async function genreIdByName(name: string): Promise<string | null> {
-  return env.DB.prepare(`SELECT id FROM genre WHERE name = ? COLLATE NOCASE`).bind(name.trim()).first<string>('id');
+  return env.DB.prepare(
+    `SELECT coalesce((SELECT id FROM genre WHERE name = ?1 COLLATE NOCASE), (SELECT genre_id FROM genre_alias WHERE name = ?1)) AS id`,
+  )
+    .bind(name.trim())
+    .first<string | null>('id');
+}
+
+/**
+ * Renames a genre everywhere at once: tags point at it by id, so every
+ * album and track follows. The old name is kept as an alias, so an import
+ * still using it lands here. Renaming onto a genre that already exists
+ * merges the two: tags, children and further parents move to that genre,
+ * and this one's name becomes its alias. Returns the genre that remains.
+ */
+export async function renameGenre(id: string, newName: string): Promise<string> {
+  const clean = newName.trim().replace(/\s+/g, ' ');
+  if (!clean || clean.length > 80) throw new GenreError('Give the genre a name of up to 80 characters.');
+  const genre = await env.DB.prepare(`SELECT id, name FROM genre WHERE id = ?`).bind(id).first<{ id: string; name: string }>();
+  if (!genre) throw new GenreError('That genre no longer exists.');
+  if (genre.name === clean) return id;
+
+  const other = await env.DB.prepare(`SELECT id FROM genre WHERE name = ? COLLATE NOCASE AND id <> ?`).bind(clean, id).first<string>('id');
+  const db = env.DB;
+
+  if (!other) {
+    await db.batch([
+      // Its new name is no longer anybody's old one.
+      db.prepare(`DELETE FROM genre_alias WHERE name = ?`).bind(clean),
+      db.prepare(`UPDATE genre SET name = ? WHERE id = ?`).bind(clean, id),
+      // A change of capitals only needs no alias: names already match without them.
+      db.prepare(`INSERT INTO genre_alias (name, genre_id) SELECT ?1, ?2 WHERE lower(?1) <> lower(?3) ON CONFLICT (name) DO UPDATE SET genre_id = ?2`).bind(
+        genre.name,
+        id,
+        clean,
+      ),
+    ]);
+    return id;
+  }
+
+  // Onto an existing genre: merge into it.
+  const descendants = await db
+    .prepare(
+      `WITH RECURSIVE below(id) AS (SELECT id FROM genre WHERE parent_id = ?1 UNION SELECT g.id FROM genre g JOIN below b ON g.parent_id = b.id)
+       SELECT 1 FROM below WHERE id = ?2`,
+    )
+    .bind(id, other)
+    .first();
+  if (descendants) throw new GenreError(`“${clean}” sits beneath “${genre.name}”, so they cannot be merged. Move it out first.`);
+  try {
+    await db.batch([
+      db.prepare(`UPDATE OR IGNORE genre_tag SET genre_id = ?1 WHERE genre_id = ?2`).bind(other, id),
+      db.prepare(`DELETE FROM genre_tag WHERE genre_id = ?`).bind(id),
+      db.prepare(`UPDATE genre SET parent_id = ?1 WHERE parent_id = ?2 AND id <> ?1`).bind(other, id),
+      db.prepare(`UPDATE OR IGNORE genre_extra_parent SET parent_id = ?1 WHERE parent_id = ?2 AND genre_id <> ?1`).bind(other, id),
+      db.prepare(`UPDATE OR IGNORE genre_extra_parent SET genre_id = ?1 WHERE genre_id = ?2 AND parent_id <> ?1`).bind(other, id),
+      db.prepare(`DELETE FROM genre_extra_parent WHERE genre_id = ?1 OR parent_id = ?1`).bind(id),
+      // The kept genre takes this one's place in the tree if it had none.
+      db.prepare(`UPDATE genre SET parent_id = (SELECT parent_id FROM genre WHERE id = ?2) WHERE id = ?1 AND parent_id IS NULL AND (SELECT parent_id FROM genre WHERE id = ?2) <> ?1`).bind(other, id),
+      db.prepare(`UPDATE genre_alias SET genre_id = ?1 WHERE genre_id = ?2`).bind(other, id),
+      db.prepare(`INSERT INTO genre_alias (name, genre_id) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET genre_id = ?2`).bind(genre.name, other),
+      db.prepare(`INSERT OR REPLACE INTO entity_redirect (entity_type, old_id, new_id) VALUES ('genre', ?, ?)`).bind(id, other),
+      db.prepare(`DELETE FROM genre WHERE id = ?`).bind(id),
+    ]);
+  } catch (error) {
+    if (String(error).includes('beneath itself')) throw new GenreError('Merging those would put a genre beneath itself. Move one of them first.');
+    throw error;
+  }
+  return other;
 }
 
 /**

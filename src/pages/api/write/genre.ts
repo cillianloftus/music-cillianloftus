@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { addParent, createGenre, GenreError, moveGenre, removeParent } from '../../../lib/genres';
+import { addParent, createGenre, GenreError, moveGenre, removeParent, renameGenre } from '../../../lib/genres';
 import { dismissSuggestion } from '../../../lib/genre-suggest';
 
 /**
@@ -38,6 +38,10 @@ export const POST: APIRoute = async ({ request, redirect }) => {
 
   try {
     switch (text('intent')) {
+      case 'rename': {
+        const kept = await renameGenre(text('id'), text('name'));
+        return back(kept === text('id') ? `done=renamed` : `done=merged`, `#genre-${kept}`);
+      }
       case 'add_parent':
         await addParent(text('id'), text('parent'));
         return back(`done=moved`, `#genre-${text('id')}`);

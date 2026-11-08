@@ -63,7 +63,27 @@ function randomWeights(random: () => number): Weights {
   craft.production ||= 1; // The form rejects all-zero groups.
   album.cohesion ||= 1;
   const tracks = Math.round(random() * 20) / 20;
-  return { craft, album, release: { tracks, album_axes: 1 - tracks, trim_lowest: random() < 0.5 } };
+  return {
+    craft,
+    album,
+    release: {
+      tracks,
+      album_axes: 1 - tracks,
+      trim_lowest: random() < 0.5,
+      interlude: Math.round(random() * 20) / 20,
+      length: random() < 0.3 ? 0 : Math.round(random() * 20) / 20,
+    },
+  };
+}
+
+/** Some tracks get a length, and some are marked interludes or skits. */
+function randomKindsAndLengths(random: () => number) {
+  for (const id of RECORDINGS) {
+    if (random() < 0.8) db.prepare(`UPDATE recording SET length_ms = ? WHERE id = ?`).run(Math.round(30_000 + random() * 400_000), id);
+    const roll = random();
+    const kind = roll < 0.15 ? 'skit' : roll < 0.4 ? 'interlude' : roll < 0.5 ? 'song' : null;
+    if (kind) insert(db, 'recording_kind', [{ recording_id: id, kind }]);
+  }
 }
 
 function viewScores(view: 'v_recording_score' | 'v_release_score', key: string) {
@@ -78,6 +98,7 @@ describe('preview scoring matches the SQL views', () => {
     it(`seed ${seed}`, async () => {
       const random = prng(seed);
       insert(db, 'rating', randomRatings(random));
+      if (seed > 1) randomKindsAndLengths(random);
       const weights = seed === 1 ? DEFAULT_WEIGHTS : randomWeights(random);
       await saveWeights('u-owner', weights);
 
@@ -143,7 +164,8 @@ describe('weights versions', () => {
   it('parses the form, deriving the album share from the tracks share', () => {
     const parsed = weightsForm.parse(form({ lyrics: '2.5', tracks_share: '60', trim_lowest: '' }));
     expect(parsed.craft.lyrics).toBe(2.5);
-    expect(parsed.release).toEqual({ tracks: 0.6, album_axes: 0.4, trim_lowest: false });
+    expect(parsed.release).toEqual({ tracks: 0.6, album_axes: 0.4, trim_lowest: false, interlude: 0.5, length: 0 });
+    expect(weightsForm.parse(form({ length_share: '40', interlude_share: '25' })).release).toMatchObject({ length: 0.4, interlude: 0.25 });
   });
 
   it('rejects a group with every weight at zero, and off-step values', () => {
