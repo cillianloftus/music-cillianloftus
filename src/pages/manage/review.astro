@@ -1,185 +1,267 @@
 ---
 /**
- * The review queue (ARCHITECTURE.md §3): what the rules think is wrong,
- * one card each, with the choices that fit. Rules raise; people resolve.
+ * The review queue (ARCHITECTURE.md §3). One kind at a time, a page of
+ * cards each, so a big list never buries a small one. A pair asks one
+ * question, "Are these the same?", with the two side by side and what
+ * differs marked; "Same" merges them whole (src/lib/merge.ts), "Different"
+ * never asks again, "Skip" sends it to the back for later.
  */
 import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
+import CoverArt from '../../components/CoverArt.astro';
 import { missingInfo } from '../../lib/gaps';
-import { openAnomalies, reviewEntities, type Anomaly, type AnomalyKind, type ReviewEntity } from '../../lib/review';
+import { matchingTrackPairs, openAnomalies, openCounts, reviewEntities, type Anomaly, type AnomalyKind } from '../../lib/review';
 
-const anomalies = await openAnomalies();
-const [entities, gaps] = await Promise.all([reviewEntities(anomalies), missingInfo()]);
-const params = Astro.url.searchParams;
-const error = params.get('error');
-const done = params.get('done');
-
-const KINDS: Record<AnomalyKind, { heading: string; explain: string }> = {
+const PAGE = 25;
+/** The order they are offered in: the quick, important ones first. */
+const ORDER: AnomalyKind[] = [
+  'duplicate_artist_name',
+  'near_duplicate_release_group',
+  'near_duplicate_recording',
+  'missing_cover_art',
+  'unlinked_rated_recording',
+  'track_count_mismatch',
+  'orphaned_track',
+];
+const KINDS: Record<AnomalyKind, { tab: string; question?: string; explain: string }> = {
   duplicate_artist_name: {
-    heading: 'Two artists with one name',
-    explain: 'Often one typed by hand and one imported. If they are one artist, their credits should be together.',
-  },
-  near_duplicate_recording: {
-    heading: 'The same song twice',
-    explain:
-      'Same artist, same title (capitals and punctuation aside), but not linked as one song, so they cannot collapse into one in a playlist. Linking keeps each title exactly as it is styled on its release.',
+    tab: 'Artists',
+    question: 'Same artist?',
+    explain: 'Two artists with one name. If they are one person or group, merging puts all their albums, songs, credits and pictures together.',
   },
   near_duplicate_release_group: {
-    heading: 'One album filed twice',
-    explain: 'Same artist, same title once words like “Deluxe” are set aside: usually an edition imported as an album of its own.',
+    tab: 'Albums',
+    question: 'Same album?',
+    explain: 'One album filed twice, usually a deluxe or reissue imported on its own. Merging makes them editions of one album, with both sets of ratings.',
   },
-  track_count_mismatch: {
-    heading: 'Editions of very different lengths',
-    explain: 'One edition has at least twice the tracks of another. Sometimes a box set or a compilation filed in the wrong album.',
-  },
-  unlinked_rated_recording: {
-    heading: 'Rated, but not linked to a work',
-    explain: 'Other versions of this song (live, remixed, covered) cannot be recognised as the same song until it has a work.',
+  near_duplicate_recording: {
+    tab: 'Songs',
+    question: 'Same song?',
+    explain:
+      'One song recorded twice in the catalogue: the single’s copy and the album’s, say. Merging makes them one song, with both sets of ratings and plays. Live takes and different versions are not asked about.',
   },
   missing_cover_art: {
-    heading: 'No cover art',
-    explain: 'The album’s standard edition has no art stored.',
+    tab: 'Cover art',
+    explain: 'Albums with no cover stored. “Look again” asks the Cover Art Archive once more; you can also add one from the album’s edit page.',
+  },
+  unlinked_rated_recording: {
+    tab: 'Versions',
+    explain: 'Rated songs not yet matched with their other versions, so a live or remixed take cannot be recognised as the same song.',
+  },
+  track_count_mismatch: {
+    tab: 'Editions',
+    explain: 'Albums whose editions differ a lot in length: sometimes a box set or a compilation filed in the wrong album.',
   },
   orphaned_track: {
-    heading: 'A recording on no release',
-    explain: 'It is in the catalogue but not on any album, so nothing links to it.',
+    tab: 'Loose songs',
+    explain: 'Songs in the catalogue but on no album, so nothing links to them.',
   },
 };
 
-const DONE: Record<string, string> = {
-  dismiss: 'Marked as fine. It will not come up again.',
-  link_work: 'Linked to one work.',
-  merge: 'Merged. The old page now leads to the one kept.',
+const params = Astro.url.searchParams;
+const counts = await openCounts();
+const kinds = ORDER.filter((k) => (counts.get(k)?.open ?? 0) > 0);
+const asked = params.get('kind');
+const showGaps = asked === 'missing';
+const kind = (showGaps ? null : (kinds.find((k) => k === asked) ?? kinds[0])) ?? null;
+const items = kind ? await openAnomalies(kind, PAGE) : [];
+const [entities, gaps, matching] = await Promise.all([
+  reviewEntities(items),
+  missingInfo(),
+  kind === 'near_duplicate_recording' ? matchingTrackPairs() : Promise.resolve([]),
+]);
+const total = [...counts.values()].reduce((n, c) => n + c.open, 0);
+
+const done = params.get('done');
+const MESSAGES: Record<string, string> = {
+  dismiss: 'Noted. It will not come up again.',
+  link_work: 'Matched.',
+  merge: 'Merged into one. The old page leads to the one kept.',
+  skip: 'Skipped for now.',
   refetch_art: 'Cover art found and stored.',
 };
-const detectMessage = () => {
-  const raised = Number(params.get('raised') ?? 0);
-  const cleared = Number(params.get('cleared') ?? 0);
-  if (raised === 0 && cleared === 0) return 'Checked. Nothing new.';
-  return [raised > 0 && `${raised} new`, cleared > 0 && `${cleared} cleared up`].filter(Boolean).join(', ') + '.';
-};
-
-const counts = new Map<AnomalyKind, number>();
-for (const a of anomalies) counts.set(a.kind, (counts.get(a.kind) ?? 0) + 1);
+const message = (() => {
+  if (!done) return null;
+  if (done === 'detect') {
+    const raised = Number(params.get('raised') ?? 0);
+    const cleared = Number(params.get('cleared') ?? 0);
+    if (raised === 0 && cleared === 0) return 'Checked. Nothing new.';
+    return [raised > 0 && `${raised} new`, cleared > 0 && `${cleared} cleared up`].filter(Boolean).join(', ') + '.';
+  }
+  if (done === 'merge_matching') return `Merged ${params.get('merged')}.`;
+  return MESSAGES[done] ?? null;
+})();
 
 const isPair = (a: Anomaly) => a.entity_b !== null;
-const canLinkWork = (a: Anomaly) => a.kind === 'near_duplicate_recording' || a.kind === 'unlinked_rated_recording';
-const dismissLabel = (a: Anomaly) => (isPair(a) ? 'They are different' : a.kind === 'missing_cover_art' ? 'Leave without art' : 'This is fine');
-const pairNoun: Partial<Record<AnomalyKind, string>> = {
-  duplicate_artist_name: 'artists',
-  near_duplicate_recording: 'recordings',
-  near_duplicate_release_group: 'albums',
+const singleActions: Partial<Record<AnomalyKind, { intent: string; label: string }[]>> = {
+  missing_cover_art: [
+    { intent: 'refetch_art', label: 'Look again' },
+    { intent: 'dismiss', label: 'Leave without art' },
+  ],
+  unlinked_rated_recording: [
+    { intent: 'link_work', label: 'Match it' },
+    { intent: 'dismiss', label: 'Leave it' },
+  ],
+  track_count_mismatch: [{ intent: 'dismiss', label: 'This is fine' }],
+  orphaned_track: [{ intent: 'dismiss', label: 'Leave it' }],
 };
-const sourceLabel = (e: ReviewEntity) => (e.source === 'musicbrainz' ? 'MusicBrainz' : e.source === 'manual' ? 'added by hand' : e.source);
+const artSrc = (e: { art: string | null; artKind: string | null }) =>
+  e.art ? (e.artKind === 'cover' ? `/${e.art}/250.jpg` : `/${e.art}`) : null;
+const sourceLabel = (source: string) => (source === 'musicbrainz' ? 'MusicBrainz' : source === 'manual' ? 'added by hand' : source);
 ---
 
 <Base title="Review">
   <div class="wrap page">
-    <PageHeader title="Review">
+    <PageHeader title="Review" count={total || null}>
       <form method="post" action="/api/write/review">
         <button class="button" type="submit" name="intent" value="detect">Check now</button>
       </form>
     </PageHeader>
 
-    {error && <p class="notice notice--error" role="alert">{error}</p>}
-    {done && <p class="notice" role="status">{done === 'detect' ? detectMessage() : DONE[done]}</p>}
+    {params.get('error') && <p class="notice notice--error" role="alert">{params.get('error')}</p>}
+    {message && <p class="notice" role="status">{message}</p>}
 
     {
-      anomalies.length === 0 ? (
-        <p class="empty">Nothing to review.</p>
-      ) : (
-        <>
-          <p class="summary">
-            <span class="tabular">{anomalies.length}</span> {anomalies.length === 1 ? 'item' : 'items'}:{' '}
-            {[...counts].map(([kind, n], i) => (
-              <>
-                {i > 0 && ', '}
-                <a href={`#${kind}`}>
-                  {KINDS[kind].heading.toLowerCase()} ({n})
-                </a>
-              </>
-            ))}
-          </p>
-
-          {[...counts.keys()].map((kind) => (
-            <section aria-labelledby={kind} class="group">
-              <h2 id={kind}>{KINDS[kind].heading}</h2>
-              <p class="muted explain">{KINDS[kind].explain}</p>
-              <ul role="list" class="items">
-                {anomalies
-                  .filter((a) => a.kind === kind)
-                  .map((a) => {
-                    const shown = [a.entity_a, a.entity_b].filter((x): x is string => x !== null).map((id) => entities.get(id));
-                    return (
-                      <li class="item">
-                        <ul role="list" class="entities" aria-label={isPair(a) ? `The two ${pairNoun[a.kind] ?? 'items'}` : undefined}>
-                          {shown.map((e) =>
-                            e ? (
-                              <li>
-                                {e.href ? <a href={e.href} class="title">{e.title}</a> : <span class="title">{e.title}</span>}
-                                <span class="detail">{e.detail}</span>
-                                <span class="source">
-                                  {sourceLabel(e)}
-                                  {e.mbid && (
-                                    <>
-                                      {' · '}
-                                      <a href={`https://musicbrainz.org/${a.entity_type.replace('_', '-')}/${e.mbid}`} rel="noopener" target="_blank">
-                                        on MusicBrainz<span class="visually-hidden"> (opens in a new tab)</span>
-                                      </a>
-                                    </>
-                                  )}
-                                </span>
-                              </li>
-                            ) : (
-                              <li class="gone">No longer in the catalogue.</li>
-                            ),
-                          )}
-                        </ul>
-                        <form method="post" action="/api/write/review" class="actions">
-                          <input type="hidden" name="id" value={a.id} />
-                          {(a.kind === 'duplicate_artist_name' || a.kind === 'near_duplicate_release_group') &&
-                            shown.map(
-                              (e, i) =>
-                                e && (
-                                  <button class:list={['button', { 'button--primary': i === 0 }]} type="submit" name="keep" value={e.id}>
-                                    {a.kind === 'duplicate_artist_name' ? 'Same artist' : 'One album'}: keep {i === 0 ? 'the first' : 'the second'}
-                                  </button>
-                                ),
-                            )}
-                          {canLinkWork(a) && (
-                            <button class="button button--primary" type="submit" name="intent" value="link_work">
-                              {isPair(a) ? 'Same song: link them' : 'Give it a work'}
-                            </button>
-                          )}
-                          {a.kind === 'missing_cover_art' && shown[0]?.mbid && (
-                            <button class="button button--primary" type="submit" name="intent" value="refetch_art">
-                              Look again
-                            </button>
-                          )}
-                          <button class="button" type="submit" name="intent" value="dismiss">
-                            {dismissLabel(a)}
-                          </button>
-                        </form>
-                        {a.kind === 'duplicate_artist_name' && (
-                          <p class="later muted">Keeping one moves every credit, picture and other name onto it; the other’s ids fill any gaps.</p>
-                        )}
-                        {a.kind === 'near_duplicate_release_group' && (
-                          <p class="later muted">Keeping one files the other’s editions under it; the standard edition is chosen as usual.</p>
-                        )}
-                      </li>
-                    );
-                  })}
-              </ul>
-            </section>
+      (kinds.length > 0 || gaps.length > 0) && (
+        <nav class="kinds" aria-label="Kinds of item">
+          {kinds.map((k) => (
+            <a href={`/manage/review?kind=${k}`} aria-current={k === kind ? 'page' : undefined}>
+              {KINDS[k].tab} <span class="n tabular">{counts.get(k)!.open}</span>
+            </a>
           ))}
-        </>
+          {gaps.length > 0 && (
+            <a href="/manage/review?kind=missing" aria-current={showGaps ? 'page' : undefined}>
+              Missing info
+            </a>
+          )}
+        </nav>
+      )
+    }
+
+    {total === 0 && !showGaps && <p class="empty">Nothing to review.</p>}
+
+    {
+      kind && (
+        <section aria-labelledby="kind-heading" class="group">
+          <h2 id="kind-heading" class="visually-hidden">
+            {KINDS[kind].tab}
+          </h2>
+          <p class="muted explain">{KINDS[kind].explain}</p>
+
+          {matching.length > 0 && (
+            <form method="post" action="/api/write/review" class="bulk" data-bulk>
+              <input type="hidden" name="kind" value={kind} />
+              <button class="button button--primary" type="submit" name="intent" value="merge_matching">
+                Merge all {matching.length} that match to the second
+              </button>
+              <span class="muted small" data-bulk-status aria-live="polite">
+                Same title, same artist, lengths within two seconds: the same recording entered twice.
+              </span>
+            </form>
+          )}
+
+          <ul role="list" class="items" data-items>
+            {items.map((a) => {
+              const shown = [a.entity_a, a.entity_b].filter((x): x is string => x !== null).map((id) => entities.get(id));
+              const pair = isPair(a) && shown[0] && shown[1];
+              // Fact rows where the two disagree are marked.
+              const differs = (label: string) =>
+                pair ? shown[0]!.facts.find((f) => f.label === label)?.value !== shown[1]!.facts.find((f) => f.label === label)?.value : false;
+              return (
+                <li class="item" id={`a-${a.id}`}>
+                  {isPair(a) && (
+                    <p class="question">
+                      {KINDS[a.kind].question}
+                      {a.skipped_at && <span class="skipped">skipped before</span>}
+                    </p>
+                  )}
+                  <div class:list={['sides', { pair: isPair(a) }]}>
+                    {shown.map((e) =>
+                      e ? (
+                        <article class="side">
+                          <a class="art" href={e.href ?? undefined} tabindex="-1" aria-hidden="true">
+                            {e.artKind === 'cover' ? (
+                              <CoverArt artKey={e.art} title={e.title} sizes="4.5rem" />
+                            ) : artSrc(e) ? (
+                              <img src={artSrc(e)!} alt="" width="72" height="72" loading="lazy" />
+                            ) : (
+                              <CoverArt artKey={null} title={e.title} sizes="4.5rem" />
+                            )}
+                          </a>
+                          <div class="body">
+                            <h3 class="title">{e.href ? <a href={e.href}>{e.title}</a> : e.title}</h3>
+                            <dl class="facts">
+                              {e.facts
+                                .filter((f) => f.value || (pair && differs(f.label)))
+                                .map((f) => (
+                                  <div class:list={[{ differs: differs(f.label) }]}>
+                                    <dt>{f.label}</dt>
+                                    <dd>{f.value || '—'}</dd>
+                                  </div>
+                                ))}
+                            </dl>
+                            <p class="source">
+                              {sourceLabel(e.source)}
+                              {e.mbid && (
+                                <>
+                                  {' · '}
+                                  <a href={`https://musicbrainz.org/${a.entity_type.replace('_', '-')}/${e.mbid}`} rel="noopener" target="_blank">
+                                    MusicBrainz<span class="visually-hidden"> (opens in a new tab)</span>
+                                  </a>
+                                </>
+                              )}
+                            </p>
+                          </div>
+                        </article>
+                      ) : (
+                        <p class="gone">No longer in the catalogue.</p>
+                      ),
+                    )}
+                  </div>
+                  <form method="post" action="/api/write/review" class="actions" data-row>
+                    <input type="hidden" name="id" value={a.id} />
+                    <input type="hidden" name="kind" value={kind} />
+                    {isPair(a) ? (
+                      <>
+                        <button class="button button--primary" type="submit" name="intent" value="same">
+                          Same: merge them
+                        </button>
+                        <button class="button" type="submit" name="intent" value="dismiss">
+                          Different
+                        </button>
+                      </>
+                    ) : (
+                      (singleActions[a.kind] ?? []).map((action, i) =>
+                        action.intent === 'refetch_art' && !shown[0]?.mbid ? null : (
+                          <button class:list={['button', { 'button--primary': i === 0 }]} type="submit" name="intent" value={action.intent}>
+                            {action.label}
+                          </button>
+                        ),
+                      )
+                    )}
+                    <button class="button button--quiet" type="submit" name="intent" value="skip">
+                      Skip
+                    </button>
+                  </form>
+                </li>
+              );
+            })}
+          </ul>
+          {(counts.get(kind)?.open ?? 0) > items.length && (
+            <p class="muted small more">
+              {(counts.get(kind)?.open ?? 0) - items.length} more after these. The next ones load as you clear this page.
+            </p>
+          )}
+        </section>
       )
     }
 
     {
-      gaps.length > 0 && (
+      showGaps && (
         <section aria-labelledby="gaps-heading" class="gaps">
-          <h2 id="gaps-heading" class="gaps-title">Missing information</h2>
+          <h2 id="gaps-heading" class="visually-hidden">
+            Missing information
+          </h2>
           <p class="muted explain">Not wrong, just not known yet. Most of it can be filled from the album or artist’s edit page, or by looking the album up again.</p>
           {gaps.map((g) => (
             <section aria-labelledby={`gap-${g.key}`} class="gap">
@@ -204,21 +286,74 @@ const sourceLabel = (e: ReviewEntity) => (e.source === 'musicbrainz' ? 'MusicBra
   </div>
 </Base>
 
+<script>
+  type Reply = { ok: boolean; error?: string; merged?: string; left?: string };
+  const post = async (form: HTMLFormElement, intent: string): Promise<Reply> => {
+    const body = new FormData(form);
+    body.set('intent', intent);
+    const response = await fetch(form.action, { method: 'POST', body, headers: { Accept: 'application/json' } });
+    return (await response.json()) as Reply;
+  };
+
+  const list = document.querySelector<HTMLElement>('[data-items]');
+  // Each decision takes its card away and moves to the next; a cleared page fetches the next one.
+  for (const form of document.querySelectorAll<HTMLFormElement>('[data-row]')) {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const intent = (event.submitter as HTMLButtonElement | null)?.value ?? 'skip';
+      const card = form.closest('li')!;
+      const buttons = [...form.querySelectorAll('button')];
+      for (const b of buttons) b.disabled = true;
+      const result = await post(form, intent);
+      if (!result.ok) {
+        alert(result.error ?? 'That did not work.');
+        for (const b of buttons) b.disabled = false;
+        return;
+      }
+      const next = card.nextElementSibling;
+      card.remove();
+      if (next) next.querySelector<HTMLButtonElement>('.button--primary, button')?.focus({ preventScroll: false });
+      else if (list && list.children.length === 0) location.reload();
+    });
+  }
+
+  // Merge every matching pair, a batch at a time, then a fresh page.
+  const bulk = document.querySelector<HTMLFormElement>('[data-bulk]');
+  bulk?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = bulk.querySelector('button')!;
+    const status = bulk.querySelector<HTMLElement>('[data-bulk-status]')!;
+    button.disabled = true;
+    let merged = 0;
+    for (;;) {
+      const result = await post(bulk, 'merge_matching');
+      if (!result.ok) {
+        status.textContent = result.error ?? 'That did not work.';
+        button.disabled = false;
+        return;
+      }
+      merged += Number(result.merged ?? 0);
+      const left = Number(result.left ?? 0);
+      status.textContent = `Merged ${merged}${left ? `, ${left} to go…` : '.'}`;
+      if (!left || !Number(result.merged)) break;
+    }
+    location.assign(`/manage/review?kind=near_duplicate_recording&done=merge_matching&merged=${merged}`);
+  });
+</script>
+
 <style>
   .page {
     display: grid;
     gap: var(--space-5);
-    --content-max: 48rem;
-  }
-
-
-  h2 {
-    font-size: var(--step-1);
-    scroll-margin-top: var(--space-4);
+    --content-max: 52rem;
   }
 
   .muted {
     color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
   }
 
   .notice {
@@ -232,19 +367,217 @@ const sourceLabel = (e: ReviewEntity) => (e.source === 'musicbrainz' ? 'MusicBra
     color: var(--danger);
   }
 
+  /* The kinds, as a row of tabs that scrolls sideways on a phone. */
+  .kinds {
+    display: flex;
+    gap: var(--space-2);
+    margin-inline: calc(var(--gutter) * -1);
+    padding: 2px var(--gutter);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .kinds a {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+    padding: 0 var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .kinds a[aria-current='page'] {
+    border-color: var(--text);
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .n {
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+  }
+
+  .group {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .explain {
+    max-width: 62ch;
+    font-size: var(--step--1);
+  }
+
+  .bulk {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .items {
+    display: grid;
+    gap: var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .item {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+  }
+
+  .question {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-3);
+    font-size: var(--step-1);
+    font-weight: 750;
+  }
+
+  .skipped {
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-weight: 500;
+  }
+
+  .sides {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  /* A pair side by side once there is room; stacked, with a rule between, on a phone. */
+  @media (min-width: 40rem) {
+    .sides.pair {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  @media (max-width: 39.99rem) {
+    .sides.pair > .side + .side {
+      padding-top: var(--space-4);
+      border-top: 1px solid var(--border);
+    }
+  }
+
+  .side {
+    display: grid;
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+    align-items: start;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .art {
+    display: block;
+    width: 4.5rem;
+    aspect-ratio: 1;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+    background: var(--surface-2);
+  }
+
+  .art img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .body {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .title {
+    font-size: var(--step-0);
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+
+  .title a {
+    text-decoration: none;
+  }
+
+  .facts {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    font-size: var(--step--1);
+  }
+
+  /* Labels in one column, so values line up whatever the label's length. */
+  .facts > div {
+    display: grid;
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+    gap: var(--space-2);
+    padding: 1px var(--space-1);
+    border-radius: var(--radius-s);
+  }
+
+  .facts dt {
+    color: var(--text-subtle);
+  }
+
+  .facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* What differs between the two, marked on both. */
+  .facts .differs {
+    background: color-mix(in oklch, var(--accent) 14%, transparent);
+  }
+
+  .facts .differs dd {
+    font-weight: 650;
+  }
+
+  .source {
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+  }
+
+  .gone {
+    color: var(--text-subtle);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  /* Skip sits apart from the decisions. */
+  .actions .button--quiet {
+    margin-left: auto;
+  }
+
+  .more {
+    text-align: center;
+  }
+
+  .empty {
+    padding: var(--space-6) 0;
+    color: var(--text-muted);
+    font-size: var(--step-1);
+  }
+
   .gaps {
     display: grid;
     gap: var(--space-5);
-    padding-top: var(--space-5);
-    border-top: 1px solid var(--border);
-  }
-
-  .gaps-title {
-    font-size: var(--step-2);
-  }
-
-  .gaps > .explain {
-    margin-top: calc(var(--space-4) * -1);
   }
 
   .gap h3 {
@@ -285,98 +618,6 @@ const sourceLabel = (e: ReviewEntity) => (e.source === 'musicbrainz' ? 'MusicBra
 
   .gap-items .detail {
     color: var(--text-muted);
-    font-size: var(--step--1);
-  }
-
-  .more {
-    margin-top: var(--space-2);
-    font-size: var(--step--1);
-  }
-
-  .empty {
-    padding: var(--space-6) 0;
-    color: var(--text-muted);
-    font-size: var(--step-1);
-  }
-
-  .summary {
-    color: var(--text-muted);
-  }
-
-  .group {
-    display: grid;
-    gap: var(--space-2);
-  }
-
-  .explain {
-    font-size: var(--step--1);
-  }
-
-  .items {
-    display: grid;
-    gap: var(--space-3);
-    margin: var(--space-2) 0 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .item {
-    display: grid;
-    gap: var(--space-3);
-    padding: var(--space-4);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-m);
-    background: var(--surface-1);
-  }
-
-  .entities {
-    display: grid;
-    gap: var(--space-3);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .entities > li {
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  /* A pair reads as two things side by side once there is room. */
-  @media (min-width: 40rem) {
-    .entities:has(> li + li) {
-      grid-template-columns: 1fr 1fr;
-    }
-  }
-
-  .title {
-    font-weight: 700;
-    overflow-wrap: anywhere;
-  }
-
-  .detail {
-    color: var(--text-muted);
-    font-size: var(--step--1);
-    overflow-wrap: anywhere;
-  }
-
-  .source {
-    color: var(--text-subtle);
-    font-size: var(--step--1);
-  }
-
-  .gone {
-    color: var(--text-subtle);
-  }
-
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-  }
-
-  .later {
     font-size: var(--step--1);
   }
 </style>

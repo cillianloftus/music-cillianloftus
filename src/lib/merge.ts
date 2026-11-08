@@ -1,18 +1,25 @@
 /**
- * Merging two artist records that are one artist (the review queue's "two
- * artists with one name"). Everything attached to the one going away moves
- * to the one kept: credits, other names, links, pictures, hand edits. Its
- * external ids and details fill whatever the kept one lacks; its name
- * becomes another name for the kept one if it differs. Then its row goes,
- * and an entity_redirect keeps its old address working.
+ * Merging two records that are one thing: the review queue's "Are these
+ * the same?". Everything attached to the one going away moves to the one
+ * kept (credits, names, pictures, tracks, editions, plays, files, both
+ * rating histories), its ids and details fill whatever the kept one lacks,
+ * and then its row goes. Its old address redirects, and the row itself is
+ * kept whole in the redirect (snapshot_json), so nothing is lost.
  *
- * Deleting is safe for artists: nothing is rated at artist level, so no
- * rating or history refers to the row. Albums and recordings are another
- * matter (ARCHITECTURE.md, "Review queue") and are not merged here.
+ * Ratings move by their entity_id, which append-only allows: no score or
+ * date changes, and a merged history reads as one, the latest counting.
  */
 
 import { env } from 'cloudflare:workers';
 import { ReviewError } from './review';
+
+/** The redirect from a merged-away id, carrying the row as it was. */
+function redirect(type: string, goneId: string, keepId: string, row: Record<string, unknown>): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT OR REPLACE INTO entity_redirect (entity_type, old_id, new_id, snapshot_json, merged_at)
+     VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+  ).bind(type, goneId, keepId, JSON.stringify(row));
+}
 
 const FILLABLE = ['mbid', 'spotify_id', 'wikidata_id', 'disambiguation', 'kind', 'area', 'enriched_at'] as const;
 
@@ -69,11 +76,12 @@ export async function mergeArtists(keepId: string, goneId: string): Promise<void
 
     // Anything pointing at the old id now points on.
     db.prepare(`UPDATE entity_redirect SET new_id = ?1 WHERE entity_type = 'artist' AND new_id = ?2`).bind(keepId, goneId),
-    db.prepare(`INSERT OR REPLACE INTO entity_redirect (entity_type, old_id, new_id) VALUES ('artist', ?, ?)`).bind(goneId, keepId),
+    redirect('artist', goneId, keepId, gone),
     db.prepare(
       `UPDATE anomaly SET status = 'resolved', resolution = 'merged'
        WHERE status = 'open' AND entity_type = 'artist' AND (entity_a = ?1 OR entity_b = ?1)`,
     ).bind(goneId),
+    db.prepare(`DELETE FROM confirmed_distinct WHERE entity_type = 'artist' AND (id_a = ?1 OR id_b = ?1)`).bind(goneId),
     db.prepare(`DELETE FROM search_index WHERE kind = 'artist' AND entity_id = ?`).bind(goneId),
     db.prepare(`DELETE FROM artist WHERE id = ?`).bind(goneId),
   ]);
@@ -111,58 +119,155 @@ async function tidyCredits(entities: { entity_type: string; entity_id: string }[
 
 /**
  * Files one album as editions of another: "Opening Night: The Complete
- * Score" is the deluxe of "Opening Night". Its editions, credits and genres
- * move to the kept album (its own hand edits are dropped), whose standard-edition rule then
- * decides which edition the score comes from; the emptied album goes, and
- * its address redirects.
- *
- * Refused while the album going away has ratings of its own: ratings are
- * append-only and cannot be moved, and whether to keep or snapshot them is
- * still an open question (ARCHITECTURE.md, "Review queue"). Track ratings
- * are unaffected either way, since recordings do not move.
+ * Score" is the deluxe of "Opening Night". Its editions (with any copies
+ * owned), credits, genres and album ratings move to the kept album, whose
+ * standard-edition rule then decides which edition the score comes from;
+ * its ids fill the kept album's gaps; the emptied album goes, and its
+ * address redirects.
  */
 export async function mergeAlbums(keepId: string, goneId: string): Promise<void> {
   if (keepId === goneId) throw new ReviewError('An album cannot be merged with itself.');
   const db = env.DB;
-  const rows = await db
-    .prepare(`SELECT id FROM release_group WHERE id IN (?, ?)`)
-    .bind(keepId, goneId)
-    .all<{ id: string }>();
-  if (rows.results.length !== 2) throw new ReviewError('One of these albums no longer exists.');
-  const rated = await db
-    .prepare(`SELECT count(*) AS n FROM rating WHERE entity_type = 'release_group' AND entity_id = ?`)
-    .bind(goneId)
-    .first<{ n: number }>();
-  if ((rated?.n ?? 0) > 0) {
-    throw new ReviewError('The album being folded in has album ratings of its own, which cannot be moved yet. Fold it the other way round, or wait for full merging.');
-  }
+  const [keep, gone] = await Promise.all(
+    [keepId, goneId].map((id) => db.prepare(`SELECT * FROM release_group WHERE id = ?`).bind(id).first<Record<string, unknown>>()),
+  );
+  if (!keep || !gone) throw new ReviewError('One of these albums no longer exists.');
 
-  const goneSpotify = await db.prepare(`SELECT spotify_id FROM release_group WHERE id = ?`).bind(goneId).first<{ spotify_id: string | null }>();
   const moveEntity = (table: string) => [
     db.prepare(`UPDATE OR IGNORE ${table} SET entity_id = ?1 WHERE entity_type = 'release_group' AND entity_id = ?2`).bind(keepId, goneId),
     db.prepare(`DELETE FROM ${table} WHERE entity_type = 'release_group' AND entity_id = ?`).bind(goneId),
   ];
+  const fill = (column: string) =>
+    db.prepare(`UPDATE release_group SET ${column} = ?2 WHERE id = ?1 AND ${column} IS NULL AND ?2 IS NOT NULL`).bind(keepId, gone[column] ?? null);
 
   await db.batch([
     db.prepare(`UPDATE release_group SET preferred_release_id = NULL WHERE id = ?`).bind(goneId),
     db.prepare(`UPDATE release SET release_group_id = ?1 WHERE release_group_id = ?2`).bind(keepId, goneId),
-    // Its Spotify album fills the kept album's when that has none (the
-    // column is unique, so it leaves the old row first).
+    // Unique ids leave the old row first, so the kept row can take them.
     db.prepare(`UPDATE release_group SET spotify_id = NULL, mbid = NULL WHERE id = ?`).bind(goneId),
-    db.prepare(`UPDATE release_group SET spotify_id = ?2 WHERE id = ?1 AND spotify_id IS NULL AND ?2 IS NOT NULL`).bind(keepId, goneSpotify?.spotify_id ?? null),
+    fill('spotify_id'),
+    fill('mbid'),
+    db.prepare(
+      `UPDATE release_group SET first_release_date = ?2, date_precision = ?3
+       WHERE id = ?1 AND first_release_date IS NULL AND ?2 IS NOT NULL`,
+    ).bind(keepId, gone.first_release_date ?? null, gone.date_precision ?? 'unknown'),
+    db.prepare(`UPDATE release_group SET official = 1 WHERE id = ?1 AND ?2 = 1`).bind(keepId, gone.official ?? null),
+    // Both rating histories become one; the latest still counts.
+    db.prepare(`UPDATE rating SET entity_id = ?1 WHERE entity_type = 'release_group' AND entity_id = ?2`).bind(keepId, goneId),
     ...moveEntity('artist_credit'),
     ...moveEntity('genre_tag'),
     // Its hand edits were about its own title and date, not the kept album's.
     db.prepare(`DELETE FROM field_override WHERE entity_type = 'release_group' AND entity_id = ?`).bind(goneId),
     db.prepare(`DELETE FROM queue_skip WHERE entity_type = 'release_group' AND entity_id = ?`).bind(goneId),
     db.prepare(`DELETE FROM queue_handoff WHERE entity_type = 'release_group' AND entity_id = ?`).bind(goneId),
+    db.prepare(`DELETE FROM lookup_log WHERE entity_id = ?`).bind(goneId),
     db.prepare(`UPDATE entity_redirect SET new_id = ?1 WHERE entity_type = 'release_group' AND new_id = ?2`).bind(keepId, goneId),
-    db.prepare(`INSERT OR REPLACE INTO entity_redirect (entity_type, old_id, new_id) VALUES ('release_group', ?, ?)`).bind(goneId, keepId),
+    redirect('release_group', goneId, keepId, gone),
     db.prepare(
       `UPDATE anomaly SET status = 'resolved', resolution = 'merged'
        WHERE status = 'open' AND entity_type = 'release_group' AND (entity_a = ?1 OR entity_b = ?1)`,
     ).bind(goneId),
+    db.prepare(`DELETE FROM confirmed_distinct WHERE entity_type = 'release_group' AND (id_a = ?1 OR id_b = ?1)`).bind(goneId),
     db.prepare(`DELETE FROM search_index WHERE kind = 'release_group' AND entity_id = ?`).bind(goneId),
     db.prepare(`DELETE FROM release_group WHERE id = ?`).bind(goneId),
   ]);
+}
+
+/**
+ * Two records of one song: the single's version and the album's, a hand
+ * entry beside an import. Every track using the one going away uses the
+ * kept one instead, and its ratings, plays, files, playlist pins, credits
+ * and genres follow; its ids, length and work fill the kept one's gaps.
+ */
+export async function mergeRecordings(keepId: string, goneId: string): Promise<void> {
+  if (keepId === goneId) throw new ReviewError('A song cannot be merged with itself.');
+  const db = env.DB;
+  const [keep, gone] = await Promise.all(
+    [keepId, goneId].map((id) => db.prepare(`SELECT * FROM recording WHERE id = ?`).bind(id).first<Record<string, unknown>>()),
+  );
+  if (!keep || !gone) throw new ReviewError('One of these songs no longer exists.');
+
+  const moveEntity = (table: string) => [
+    db.prepare(`UPDATE OR IGNORE ${table} SET entity_id = ?1 WHERE entity_type = 'recording' AND entity_id = ?2`).bind(keepId, goneId),
+    db.prepare(`DELETE FROM ${table} WHERE entity_type = 'recording' AND entity_id = ?`).bind(goneId),
+  ];
+  const moveColumn = (table: string) => [
+    db.prepare(`UPDATE OR IGNORE ${table} SET recording_id = ?1 WHERE recording_id = ?2`).bind(keepId, goneId),
+    db.prepare(`DELETE FROM ${table} WHERE recording_id = ?`).bind(goneId),
+  ];
+  const fill = (column: string) =>
+    db.prepare(`UPDATE recording SET ${column} = ?2 WHERE id = ?1 AND ${column} IS NULL AND ?2 IS NOT NULL`).bind(keepId, gone[column] ?? null);
+
+  await db.batch([
+    // A work whose preferred version is going away prefers none until one is chosen again.
+    db.prepare(`UPDATE work SET preferred_recording_id = NULL WHERE preferred_recording_id = ?`).bind(goneId),
+    db.prepare(`UPDATE recording SET mbid = NULL, spotify_id = NULL WHERE id = ?`).bind(goneId),
+    fill('mbid'),
+    fill('spotify_id'),
+    fill('isrc'),
+    fill('length_ms'),
+    fill('genius_url'),
+    fill('work_id'),
+    db.prepare(
+      `UPDATE recording SET first_release_date = ?2, date_precision = ?3
+       WHERE id = ?1 AND first_release_date IS NULL AND ?2 IS NOT NULL`,
+    ).bind(keepId, gone.first_release_date ?? null, gone.date_precision ?? 'unknown'),
+    db.prepare(`UPDATE track SET recording_id = ?1 WHERE recording_id = ?2`).bind(keepId, goneId),
+    db.prepare(`UPDATE rating SET entity_id = ?1 WHERE entity_type = 'recording' AND entity_id = ?2`).bind(keepId, goneId),
+    db.prepare(`UPDATE play SET recording_id = ?1 WHERE recording_id = ?2`).bind(keepId, goneId),
+    ...moveColumn('file'),
+    ...moveColumn('definition_pin'),
+    ...moveColumn('definition_exclude'),
+    ...moveEntity('artist_credit'),
+    ...moveEntity('genre_tag'),
+    ...moveEntity('field_override'),
+    db.prepare(`DELETE FROM queue_skip WHERE entity_type = 'recording' AND entity_id = ?`).bind(goneId),
+    db.prepare(`DELETE FROM queue_handoff WHERE entity_type = 'recording' AND entity_id = ?`).bind(goneId),
+    db.prepare(`DELETE FROM lookup_log WHERE entity_id = ?`).bind(goneId),
+    db.prepare(`UPDATE entity_redirect SET new_id = ?1 WHERE entity_type = 'recording' AND new_id = ?2`).bind(keepId, goneId),
+    redirect('recording', goneId, keepId, gone),
+    db.prepare(
+      `UPDATE anomaly SET status = 'resolved', resolution = 'merged'
+       WHERE status = 'open' AND entity_type = 'recording' AND (entity_a = ?1 OR entity_b = ?1)`,
+    ).bind(goneId),
+    db.prepare(`DELETE FROM confirmed_distinct WHERE entity_type = 'recording' AND (id_a = ?1 OR id_b = ?1)`).bind(goneId),
+    db.prepare(`DELETE FROM search_index WHERE kind = 'recording' AND entity_id = ?`).bind(goneId),
+    db.prepare(`DELETE FROM recording WHERE id = ?`).bind(goneId),
+  ]);
+}
+
+export type MergeType = 'artist' | 'release_group' | 'recording';
+
+/**
+ * Which of two records to keep, so "Same: merge them" needs no second
+ * question: the one holding more of Cillian's data and more to go on.
+ * Everything moves either way; this only decides whose id and spelling stay.
+ */
+export async function survivor(type: MergeType, a: string, b: string): Promise<[keep: string, gone: string]> {
+  const weight: Record<MergeType, string> = {
+    artist: `(SELECT count(*) FROM artist_credit c WHERE c.artist_id = x.id) + 1000 * (x.mbid IS NOT NULL)`,
+    release_group: `10000 * EXISTS (SELECT 1 FROM rating r WHERE r.entity_type = 'release_group' AND r.entity_id = x.id)
+      + 1000 * (x.mbid IS NOT NULL) + 500 * coalesce(x.official, 1) - 400 * (x.type = 'live')
+      + (SELECT count(*) FROM release e JOIN track t ON t.release_id = e.id WHERE e.release_group_id = x.id)`,
+    recording: `10000 * EXISTS (SELECT 1 FROM rating r WHERE r.entity_type = 'recording' AND r.entity_id = x.id)
+      + 1000 * (x.mbid IS NOT NULL)
+      + 100 * (SELECT count(*) FROM track t JOIN release e ON e.id = t.release_id JOIN release_group g ON g.id = e.release_group_id
+               WHERE t.recording_id = x.id AND g.type <> 'live' AND coalesce(g.official, 1) = 1)
+      + (SELECT count(*) FROM play p WHERE p.recording_id = x.id)`,
+  };
+  const { results } = await env.DB.prepare(`SELECT x.id, ${weight[type]} AS w FROM ${type} x WHERE x.id IN (?, ?)`)
+    .bind(a, b)
+    .all<{ id: string; w: number }>();
+  const wa = results.find((r) => r.id === a)?.w ?? 0;
+  const wb = results.find((r) => r.id === b)?.w ?? 0;
+  return wb > wa ? [b, a] : [a, b];
+}
+
+/** Merges two records judged the same, keeping whichever survivor() picks. Returns the one kept. */
+export async function mergeSame(type: MergeType, a: string, b: string): Promise<string> {
+  const [keep, gone] = await survivor(type, a, b);
+  if (type === 'artist') await mergeArtists(keep, gone);
+  else if (type === 'release_group') await mergeAlbums(keep, gone);
+  else await mergeRecordings(keep, gone);
+  return keep;
 }

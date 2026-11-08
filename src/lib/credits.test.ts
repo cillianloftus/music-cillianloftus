@@ -118,9 +118,13 @@ describe('folding one album into another', () => {
     expect(db.prepare(`SELECT new_id FROM entity_redirect WHERE old_id = 'rg-a2'`).get()).toEqual({ new_id: 'rg-a' });
   });
 
-  it('refuses while the album going away has album ratings', async () => {
+  it('brings the album ratings of the one going away, and keeps its row in the redirect', async () => {
     insert(db, 'rating', [{ id: 'rr', user_id: 'u-owner', entity_type: 'release_group', entity_id: 'rg-b', depth: 'gut', gut_score: 7 }]);
-    await expect(mergeAlbums('rg-a', 'rg-b')).rejects.toThrow(/ratings/);
+    await mergeAlbums('rg-a', 'rg-b');
+    expect(db.prepare(`SELECT entity_id FROM rating WHERE id = 'rr'`).get()).toEqual({ entity_id: 'rg-a' });
+    const redirect = db.prepare(`SELECT new_id, snapshot_json FROM entity_redirect WHERE old_id = 'rg-b'`).get() as { new_id: string; snapshot_json: string };
+    expect(redirect.new_id).toBe('rg-a');
+    expect(JSON.parse(redirect.snapshot_json).title).toBe('Album B');
   });
 });
 

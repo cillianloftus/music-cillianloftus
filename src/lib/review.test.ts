@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { detectAnomalies, dismiss, findAnomalies, linkWork, openAnomalies, ReviewError } from './review';
+import { detectAnomalies, dismiss, findAnomalies, linkWork, matchingTrackPairs, mergeMatchingTracks, openAnomalies, ReviewError, same, skip } from './review';
 
 let db: DatabaseSync;
 
@@ -163,5 +163,72 @@ describe('linking a work', () => {
     const [first] = await openAnomalies();
     await dismiss(first!.id);
     await expect(dismiss(first!.id)).rejects.toBeInstanceOf(ReviewError);
+  });
+});
+
+describe('which songs are asked about', () => {
+  it('leaves out generic titles, other versions by length, and takes only on live releases', async () => {
+    seedDuplicates();
+    // Generic: two different "Intro"s.
+    insert(db, 'recording', [
+      { id: 'i1', title: 'Intro', source: 'manual' },
+      { id: 'i2', title: 'intro', source: 'manual' },
+    ]);
+    insert(db, 'track', [
+      { id: 't-i1', release_id: 'r-a', recording_id: 'i1', position: 9 },
+      { id: 't-i2', release_id: 'r-b', recording_id: 'i2', position: 9 },
+    ]);
+    insert(db, 'artist_credit', [credit('recording', 'i1', 'art-x'), credit('recording', 'i2', 'art-x')]);
+    expect((await findAnomalies()).some((f) => f.entity_a === 'i1' || f.entity_b === 'i1')).toBe(false);
+
+    // A minute apart: another version.
+    db.exec(`UPDATE recording SET length_ms = 200000 WHERE id = 'a2'; UPDATE recording SET length_ms = 260000 WHERE id = 'a2-dup'`);
+    expect(has(await findAnomalies(), 'near_duplicate_recording', 'a2', 'a2-dup')).toBe(false);
+    // A second apart: the same recording.
+    db.exec(`UPDATE recording SET length_ms = 201000 WHERE id = 'a2-dup'`);
+    expect(has(await findAnomalies(), 'near_duplicate_recording', 'a2', 'a2-dup')).toBe(true);
+    // Only on a live album: a live take, not asked about.
+    db.exec(`UPDATE release_group SET type = 'live' WHERE id = 'rg-a-deluxe'`);
+    expect(has(await findAnomalies(), 'near_duplicate_recording', 'a2', 'a2-dup')).toBe(false);
+  });
+});
+
+describe('deciding', () => {
+  it('skips an item to the back of its list', async () => {
+    seedDuplicates();
+    await detectAnomalies();
+    const [first, second] = await openAnomalies('duplicate_artist_name').then(async (a) => [...a, ...(await openAnomalies())]);
+    await skip(first!.id);
+    const after = await openAnomalies();
+    expect(after.filter((a) => a.kind === first!.kind).at(-1)!.id).toBe(first!.id);
+    expect(second).toBeDefined();
+  });
+
+  it('merges a same-song pair whole: tracks, ratings, plays and the redirect', async () => {
+    seedDuplicates();
+    insert(db, 'rating', [
+      { id: 'r-dup', user_id: 'u-owner', entity_type: 'recording', entity_id: 'a2-dup', depth: 'gut', gut_score: 3, rated_at: '2026-03-01T00:00:00.000Z' },
+    ]);
+    insert(db, 'play', [{ id: 'p1', user_id: 'u-owner', recording_id: 'a2-dup', played_at: '2026-03-02T00:00:00.000Z', ms_played: 200000, source: 'lastfm' }]);
+    await detectAnomalies();
+    const dup = (await openAnomalies('near_duplicate_recording'))[0]!;
+    await same(dup.id);
+
+    // Both rated: a2 is on two releases, so it stays; a2-dup's track, rating and play move to it.
+    expect(db.prepare(`SELECT count(*) n FROM recording WHERE id = 'a2-dup'`).get()).toEqual({ n: 0 });
+    expect(db.prepare(`SELECT recording_id FROM track WHERE id = 't-ad'`).get()).toEqual({ recording_id: 'a2' });
+    expect(db.prepare(`SELECT entity_id FROM rating WHERE id = 'r-dup'`).get()).toEqual({ entity_id: 'a2' });
+    expect(db.prepare(`SELECT recording_id FROM play WHERE id = 'p1'`).get()).toEqual({ recording_id: 'a2' });
+    expect(db.prepare(`SELECT new_id FROM entity_redirect WHERE old_id = 'a2-dup'`).get()).toEqual({ new_id: 'a2' });
+    expect((await openAnomalies('near_duplicate_recording')).length).toBe(0);
+  });
+
+  it('merges every pair whose lengths match, and only those', async () => {
+    seedDuplicates();
+    db.exec(`UPDATE recording SET length_ms = 200000 WHERE id = 'a2'; UPDATE recording SET length_ms = 201500 WHERE id = 'a2-dup'`);
+    await detectAnomalies();
+    expect((await matchingTrackPairs()).length).toBe(1);
+    expect(await mergeMatchingTracks({ budgetMs: 10_000 })).toEqual({ merged: 1, left: 0 });
+    expect(db.prepare(`SELECT count(*) n FROM recording WHERE id IN ('a2', 'a2-dup')`).get()).toEqual({ n: 1 });
   });
 });

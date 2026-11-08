@@ -36,7 +36,15 @@ export const REVIEW_RULES = {
   trackCountRatio: 2,
   /** …and at least this many more, so a 2-track single beside a 4-track one is fine. */
   trackCountGap: 4,
+  /** Two takes of a title further apart than this are versions, not duplicates. */
+  lengthGapMs: 10_000,
+  /** Lengths this close are the same recording: "Merge all that match" takes these. */
+  sameLengthMs: 2_000,
 } as const;
+
+/** Titles many different tracks share, which say nothing about being one song. */
+const GENERIC_TITLE =
+  /^(intro|outro|interlude|skit|freestyle|untitled|prelude|reprise|instrumental|hidden track|bonus track|outro skit|intro skit)( \d+)?$/;
 
 const pair = (kind: AnomalyKind, entity_type: EntityType, x: string, y: string): Finding => {
   const [a, b] = x < y ? [x, y] : [y, x];
@@ -74,14 +82,18 @@ export async function findAnomalies(): Promise<Finding[]> {
   const [artists, recordings, groups, counts, unlinked, noArt, orphans] = await env.DB.batch([
     env.DB.prepare(`SELECT id, name FROM artist`),
     env.DB.prepare(
-      `SELECT r.id, r.title, r.work_id, c.artist_id
+      // studio: on at least one release that is neither live nor unofficial.
+      `SELECT r.id, r.title, r.work_id, r.length_ms, c.artist_id,
+              EXISTS (SELECT 1 FROM track t JOIN release x ON x.id = t.release_id JOIN release_group g ON g.id = x.release_group_id
+                      WHERE t.recording_id = r.id AND g.type <> 'live' AND coalesce(g.official, 1) = 1) AS studio
        FROM recording r
        JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary'`,
     ),
     env.DB.prepare(
       `SELECT g.id, g.title, g.type, c.artist_id
        FROM release_group g
-       JOIN artist_credit c ON c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary'`,
+       JOIN artist_credit c ON c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary'
+       WHERE coalesce(g.official, 1) = 1`,
     ),
     env.DB.prepare(
       `WITH sizes AS (
@@ -118,13 +130,21 @@ export async function findAnomalies(): Promise<Finding[]> {
     ),
   );
 
-  // Same artist, same title, not linked to the same work: two records of one song,
-  // or two versions that should share a work so they collapse.
-  type Rec = { id: string; title: string; work_id: string | null; artist_id: string };
+  // Same artist, same title, about the same length: two records of one
+  // song (the single's and the album's, a hand entry beside an import).
+  // Not raised: a live or bootleg take (only on live or unofficial releases),
+  // a length more than REVIEW_RULES.lengthGapMs apart (another version), a
+  // generic title ("Intro", "Freestyle") that many different tracks share,
+  // or a pair already linked as one song.
+  type Rec = { id: string; title: string; work_id: string | null; length_ms: number | null; artist_id: string; studio: number };
+  const candidates = rows<Rec>(recordings).filter((r) => r.studio && !GENERIC_TITLE.test(normaliseTitle(r.title)));
   findings.push(
-    ...pairsWithin(
-      groupBy(rows<Rec>(recordings), (r) => `${r.artist_id}\u0000${normaliseTitle(r.title)}`),
-      (x, y) => (x.id === y.id || (x.work_id !== null && x.work_id === y.work_id) ? null : pair('near_duplicate_recording', 'recording', x.id, y.id)),
+    ...pairsWithin(groupBy(candidates, (r) => `${r.artist_id}\u0000${normaliseTitle(r.title)}`), (x, y) =>
+      x.id === y.id ||
+      (x.work_id !== null && x.work_id === y.work_id) ||
+      (x.length_ms !== null && y.length_ms !== null && Math.abs(x.length_ms - y.length_ms) > REVIEW_RULES.lengthGapMs)
+        ? null
+        : pair('near_duplicate_recording', 'recording', x.id, y.id),
     ),
   );
 
@@ -244,13 +264,83 @@ export interface Anomaly extends Finding {
   detected_at: string;
   status: 'open' | 'resolved' | 'dismissed';
   resolution: string | null;
+  skipped_at?: string | null;
 }
 
-export async function openAnomalies(): Promise<Anomaly[]> {
+/**
+ * Open items, skipped ones last (longest-skipped first among them).
+ * With a kind, only that kind, a page at a time.
+ */
+export async function openAnomalies(kind?: AnomalyKind, limit = 10_000, offset = 0): Promise<Anomaly[]> {
   const { results } = await env.DB.prepare(
-    `SELECT id, kind, entity_type, entity_a, entity_b, detected_at, status, resolution
-     FROM anomaly WHERE status = 'open' ORDER BY kind, detected_at, id`,
-  ).all<Anomaly>();
+    `SELECT id, kind, entity_type, entity_a, entity_b, detected_at, status, resolution, skipped_at
+     FROM anomaly WHERE status = 'open' AND (?1 IS NULL OR kind = ?1)
+     ORDER BY kind, skipped_at IS NOT NULL, skipped_at, detected_at, id
+     LIMIT ?2 OFFSET ?3`,
+  )
+    .bind(kind ?? null, limit, offset)
+    .all<Anomaly>();
+  return results;
+}
+
+/** How many are open of each kind, and how many of those are skipped. */
+export async function openCounts(): Promise<Map<AnomalyKind, { open: number; skipped: number }>> {
+  const { results } = await env.DB.prepare(
+    `SELECT kind, count(*) AS open, count(skipped_at) AS skipped FROM anomaly WHERE status = 'open' GROUP BY kind`,
+  ).all<{ kind: AnomalyKind; open: number; skipped: number }>();
+  return new Map(results.map((r) => [r.kind, { open: r.open, skipped: r.skipped }]));
+}
+
+/** Not now: to the back of its list, to come round again. */
+export async function skip(id: string): Promise<void> {
+  const result = await env.DB.prepare(
+    `UPDATE anomaly SET skipped_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'open'`,
+  )
+    .bind(id)
+    .run();
+  if (!result.meta.changes) throw new ReviewError('That item is no longer open.');
+}
+
+/** "Same": merges the pair, keeping whichever holds more (merge.ts, survivor). */
+export async function same(id: string): Promise<void> {
+  const a = await anomaly(id);
+  if (!a || a.status !== 'open' || !a.entity_b) throw new ReviewError('That item is no longer open.');
+  const { mergeSame } = await import('./merge');
+  await mergeSame(a.entity_type, a.entity_a, a.entity_b);
+}
+
+/**
+ * Merges every open pair of duplicate tracks whose lengths agree to within
+ * REVIEW_RULES.sameLengthMs, until the budget runs out. Returns how many
+ * were merged and how many such pairs are left.
+ */
+export async function mergeMatchingTracks({ budgetMs }: { budgetMs: number }): Promise<{ merged: number; left: number }> {
+  const stop = Date.now() + budgetMs;
+  const pairs = await matchingTrackPairs();
+  let merged = 0;
+  const { mergeSame } = await import('./merge');
+  for (const p of pairs) {
+    if (Date.now() > stop || merged >= 40) break;
+    // An earlier merge in this run may have taken one side already.
+    const still = await env.DB.prepare(`SELECT 1 FROM anomaly WHERE id = ? AND status = 'open'`).bind(p.id).first();
+    if (!still) continue;
+    await mergeSame('recording', p.entity_a, p.entity_b);
+    merged++;
+  }
+  return { merged, left: (await matchingTrackPairs()).length };
+}
+
+/** Open duplicate-track pairs whose lengths agree, so they are one recording. */
+export async function matchingTrackPairs(): Promise<{ id: string; entity_a: string; entity_b: string }[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT a.id, a.entity_a, a.entity_b FROM anomaly a
+     JOIN recording x ON x.id = a.entity_a JOIN recording y ON y.id = a.entity_b
+     WHERE a.kind = 'near_duplicate_recording' AND a.status = 'open'
+       AND abs(x.length_ms - y.length_ms) <= ?
+     ORDER BY a.detected_at, a.id`,
+  )
+    .bind(REVIEW_RULES.sameLengthMs)
+    .all<{ id: string; entity_a: string; entity_b: string }>();
   return results;
 }
 
@@ -330,19 +420,43 @@ export async function linkWork(id: string): Promise<string> {
   return workId;
 }
 
+export interface ReviewFact {
+  label: string;
+  value: string;
+}
+
 export interface ReviewEntity {
   id: string;
   title: string;
   href: string | null;
-  /** Artist line, album or edition sizes: what tells two lookalikes apart. */
-  detail: string;
+  /** A cover or picture, as a stored R2 key prefix. */
+  art: string | null;
+  /** Album covers are stored at sizes under the key; artist pictures are the key itself. */
+  artKind: 'cover' | 'picture' | null;
+  /** What tells two lookalikes apart, in the same order for both. */
+  facts: ReviewFact[];
   source: string;
   mbid: string | null;
 }
 
+const minutes = (ms: number | null) => {
+  if (ms == null) return '';
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+const TYPE_NAMES: Record<string, string> = {
+  album: 'Album',
+  ep: 'EP',
+  single: 'Single',
+  compilation: 'Compilation',
+  mixtape: 'Mixtape',
+  soundtrack: 'Soundtrack',
+  live: 'Live',
+};
+
 /**
- * Names and context for every entity in a set of anomalies, keyed by id,
- * so the queue reads as sentences rather than ids.
+ * Names and the facts that matter for every entity in a set of items,
+ * keyed by id, so a pair can be laid side by side and compared.
  */
 export async function reviewEntities(anomalies: Anomaly[]): Promise<Map<string, ReviewEntity>> {
   const ids = (type: EntityType) =>
@@ -350,29 +464,35 @@ export async function reviewEntities(anomalies: Anomaly[]): Promise<Map<string, 
 
   const [artists, recordings, groups] = await env.DB.batch([
     env.DB.prepare(
-      `SELECT a.id, a.name AS title, a.source, a.mbid, a.disambiguation,
-              (SELECT count(*) FROM artist_credit c WHERE c.artist_id = a.id) AS credits
+      `SELECT a.id, a.name AS title, a.source, a.mbid, a.disambiguation, a.area, a.kind,
+              substr(a.begin_date, 1, 4) AS born,
+              (SELECT count(*) FROM artist_credit c WHERE c.artist_id = a.id AND c.entity_type = 'release_group' AND c.role = 'primary') AS albums,
+              (SELECT count(*) FROM artist_credit c WHERE c.artist_id = a.id AND c.entity_type = 'recording') AS songs,
+              (SELECT i.key FROM artist_image i WHERE i.artist_id = a.id AND NOT i.hidden ORDER BY i.position LIMIT 1) AS art
        FROM artist a WHERE a.id IN (SELECT value FROM json_each(?))`,
     ).bind(ids('artist')),
     env.DB.prepare(
-      `SELECT r.id, r.title, r.source, r.mbid, r.length_ms,
+      `SELECT r.id, r.title, r.source, r.mbid, r.length_ms, substr(r.first_release_date, 1, 4) AS year,
               (SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
                WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary') AS artists,
               (SELECT group_concat(title, ', ') FROM (
                  SELECT DISTINCT g.title FROM track t JOIN release x ON x.id = t.release_id
                  JOIN release_group g ON g.id = x.release_group_id WHERE t.recording_id = r.id)) AS albums,
-              (SELECT g.id FROM track t JOIN release x ON x.id = t.release_id
-               JOIN release_group g ON g.id = x.release_group_id WHERE t.recording_id = r.id LIMIT 1) AS album_id
+              (SELECT x.art_key FROM track t JOIN release x ON x.id = t.release_id
+               WHERE t.recording_id = r.id AND x.art_key IS NOT NULL LIMIT 1) AS art,
+              (SELECT count(*) FROM rating x WHERE x.entity_type = 'recording' AND x.entity_id = r.id) AS ratings,
+              (SELECT count(*) FROM play p WHERE p.recording_id = r.id) AS plays
        FROM recording r WHERE r.id IN (SELECT value FROM json_each(?))`,
     ).bind(ids('recording')),
     env.DB.prepare(
-      `SELECT g.id, g.title, g.source, g.mbid,
+      `SELECT g.id, g.title, g.source, g.mbid, g.type, substr(g.first_release_date, 1, 4) AS year,
               (SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
                WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary') AS artists,
-              (SELECT group_concat(n, ' · ') FROM (
-                 SELECT x.title || ': ' || count(t.id) || ' tracks' AS n
-                 FROM release x LEFT JOIN track t ON t.release_id = x.id
-                 WHERE x.release_group_id = g.id GROUP BY x.id ORDER BY count(t.id))) AS editions
+              (SELECT count(*) FROM release x WHERE x.release_group_id = g.id) AS editions,
+              (SELECT count(t.id) FROM v_release_group_canonical k JOIN track t ON t.release_id = k.release_id
+               WHERE k.release_group_id = g.id) AS tracks,
+              (SELECT x.art_key FROM v_release_group_canonical k JOIN release x ON x.id = k.release_id WHERE k.release_group_id = g.id) AS art,
+              (SELECT count(*) FROM rating x WHERE x.entity_type = 'release_group' AND x.entity_id = g.id) AS ratings
        FROM release_group g WHERE g.id IN (SELECT value FROM json_each(?))`,
     ).bind(ids('release_group')),
   ]);
@@ -380,35 +500,57 @@ export async function reviewEntities(anomalies: Anomaly[]): Promise<Map<string, 
   const map = new Map<string, ReviewEntity>();
   type Row = Record<string, string | number | null>;
   const text = (v: unknown) => (v == null ? '' : String(v));
+  const count = (n: unknown, one: string, many: string) => `${Number(n)} ${Number(n) === 1 ? one : many}`;
+  const base = (r: Row, href: string) => ({
+    id: text(r.id),
+    title: text(r.title),
+    href,
+    source: text(r.source),
+    mbid: (r.mbid as string | null) ?? null,
+  });
+
   for (const r of (artists?.results ?? []) as Row[]) {
-    const credits = Number(r.credits);
     map.set(text(r.id), {
-      id: text(r.id),
-      title: text(r.title),
-      href: `/artist/${r.id}`,
-      detail: [r.disambiguation, `${credits} ${credits === 1 ? 'credit' : 'credits'}`].filter(Boolean).join(' · '),
-      source: text(r.source),
-      mbid: (r.mbid as string | null) ?? null,
+      ...base(r, `/artist/${r.id}`),
+      art: (r.art as string | null) ?? null,
+      artKind: r.art ? 'picture' : null,
+      facts: [
+        { label: 'Known as', value: text(r.disambiguation) },
+        { label: 'From', value: text(r.area) },
+        { label: 'Since', value: text(r.born) },
+        { label: 'Albums', value: count(r.albums, 'album', 'albums') },
+        { label: 'Songs', value: count(r.songs, 'song', 'songs') },
+      ],
     });
   }
   for (const r of (recordings?.results ?? []) as Row[]) {
     map.set(text(r.id), {
-      id: text(r.id),
-      title: text(r.title),
-      href: `/track/${r.id}`,
-      detail: [r.artists, r.albums ? `on ${r.albums}` : 'on no release'].filter(Boolean).join(' · '),
-      source: text(r.source),
-      mbid: (r.mbid as string | null) ?? null,
+      ...base(r, `/track/${r.id}`),
+      art: (r.art as string | null) ?? null,
+      artKind: r.art ? 'cover' : null,
+      facts: [
+        { label: 'By', value: text(r.artists) },
+        { label: 'Length', value: minutes(r.length_ms as number | null) },
+        { label: 'Year', value: text(r.year) },
+        { label: 'On', value: text(r.albums) || 'no release' },
+        { label: 'Rated', value: Number(r.ratings) > 0 ? count(r.ratings, 'time', 'times') : 'no' },
+        { label: 'Played', value: Number(r.plays) > 0 ? count(r.plays, 'time', 'times') : '' },
+      ],
     });
   }
   for (const r of (groups?.results ?? []) as Row[]) {
     map.set(text(r.id), {
-      id: text(r.id),
-      title: text(r.title),
-      href: `/album/${r.id}`,
-      detail: [r.artists, r.editions].filter(Boolean).join(' · '),
-      source: text(r.source),
-      mbid: (r.mbid as string | null) ?? null,
+      ...base(r, `/album/${r.id}`),
+      art: (r.art as string | null) ?? null,
+      artKind: r.art ? 'cover' : null,
+      facts: [
+        { label: 'By', value: text(r.artists) },
+        { label: 'Kind', value: TYPE_NAMES[text(r.type)] ?? text(r.type) },
+        { label: 'Year', value: text(r.year) },
+        { label: 'Tracks', value: text(r.tracks) },
+        { label: 'Editions', value: text(r.editions) },
+        { label: 'Rated', value: Number(r.ratings) > 0 ? 'yes' : 'no' },
+      ],
     });
   }
   return map;

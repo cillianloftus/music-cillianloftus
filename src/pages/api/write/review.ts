@@ -1,19 +1,24 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { storeCoverArt } from '../../../lib/import/coverart';
-import { mergeAlbums, mergeArtists } from '../../../lib/merge';
-import { detectAnomalies, dismiss, linkWork, ReviewError } from '../../../lib/review';
+import { detectAnomalies, dismiss, linkWork, mergeMatchingTracks, ReviewError, same, skip } from '../../../lib/review';
 
 /**
  * Review queue actions. Each is one person's decision about one item;
- * nothing here runs on its own. Plain form posts that return to the queue.
+ * nothing here runs on its own. Form posts that return to the queue, or,
+ * asked for JSON, a short answer so the page can drop the card in place.
  */
 export const POST: APIRoute = async ({ request, redirect }) => {
   const form = await request.formData();
-  // A merge button names the artist to keep; the others name their intent.
-  const intent = form.get('keep') ? 'merge_artist' : form.get('intent');
+  const intent = form.get('intent');
   const id = form.get('id')?.toString() ?? '';
-  const back = (params: Record<string, string>) => redirect(`/manage/review?${new URLSearchParams(params)}`, 303);
+  const kind = form.get('kind')?.toString() ?? '';
+  const json = request.headers.get('Accept')?.includes('application/json');
+  const back = (params: Record<string, string>) => {
+    if (json) return Response.json({ ok: !params.error, ...params }, { status: params.error ? 400 : 200 });
+    const query = new URLSearchParams(kind ? { kind, ...params } : params);
+    return redirect(`/manage/review?${query}`, 303);
+  };
 
   try {
     switch (intent) {
@@ -21,23 +26,18 @@ export const POST: APIRoute = async ({ request, redirect }) => {
         const run = await detectAnomalies();
         return back({ done: 'detect', raised: String(run.raised), cleared: String(run.cleared) });
       }
+      case 'same':
+        await same(id);
+        return back({ done: 'merge' });
+      case 'skip':
+        await skip(id);
+        return back({ done: 'skip' });
       case 'dismiss':
         await dismiss(id);
         return back({ done: 'dismiss' });
-      case 'merge_artist': {
-        const keep = form.get('keep')?.toString() ?? '';
-        const a = await env.DB.prepare(
-          `SELECT kind, entity_a, entity_b FROM anomaly
-           WHERE id = ? AND kind IN ('duplicate_artist_name', 'near_duplicate_release_group') AND status = 'open'`,
-        )
-          .bind(id)
-          .first<{ kind: string; entity_a: string; entity_b: string }>();
-        if (!a) throw new ReviewError('That item is no longer open.');
-        if (keep !== a.entity_a && keep !== a.entity_b) throw new ReviewError('Choose which of the two to keep.');
-        const gone = keep === a.entity_a ? a.entity_b : a.entity_a;
-        if (a.kind === 'duplicate_artist_name') await mergeArtists(keep, gone);
-        else await mergeAlbums(keep, gone);
-        return back({ done: 'merge' });
+      case 'merge_matching': {
+        const { merged, left } = await mergeMatchingTracks({ budgetMs: 20_000 });
+        return back({ done: 'merge_matching', merged: String(merged), left: String(left) });
       }
       case 'link_work':
         await linkWork(id);
@@ -56,7 +56,7 @@ export const POST: APIRoute = async ({ request, redirect }) => {
         if (!target?.release_mbid || !target.group_mbid) throw new ReviewError('This album is not from MusicBrainz, so there is nowhere to look.');
         const key = await storeCoverArt({ releaseId: target.release_id, releaseMbid: target.release_mbid, releaseGroupMbid: target.group_mbid });
         if (!key) throw new ReviewError('The Cover Art Archive still has nothing for this album.');
-        await detectAnomalies(); // Closes this item now that the art exists.
+        await env.DB.prepare(`UPDATE anomaly SET status = 'resolved', resolution = 'art_found' WHERE id = ?`).bind(id).run();
         return back({ done: 'refetch_art' });
       }
       default:
