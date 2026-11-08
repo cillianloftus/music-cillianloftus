@@ -74,18 +74,34 @@ export async function search(input: string, viewerId: string | null): Promise<Se
            JOIN release_group g ON g.id = c.entity_id
            WHERE c.entity_type = 'release_group' AND c.role = 'primary'
              AND c.artist_id IN (SELECT value FROM json_each(?))
-           ORDER BY g.first_release_date DESC LIMIT ?`,
+             AND (coalesce(g.official, 1) = 1 OR g.keep_unofficial = 1)
+           ORDER BY g.type NOT IN ('album', 'mixtape'), g.first_release_date DESC LIMIT ?`,
         )
           .bind(JSON.stringify(topArtists), PER_KIND)
           .all<{ id: string }>()
       ).results.map((r) => r.id)
     : [];
-  const albumIdList = [...new Set([...ids(albumIds), ...byArtist])].slice(0, PER_KIND + 4);
+  // Bootlegs waiting to be cleared stay out of search, as off artist pages.
+  const titleMatches = ids(albumIds);
+  const official = titleMatches.length
+    ? new Set(
+        (
+          await env.DB.prepare(
+            `SELECT id FROM release_group WHERE id IN (SELECT value FROM json_each(?)) AND (coalesce(official, 1) = 1 OR keep_unofficial = 1)`,
+          )
+            .bind(JSON.stringify(titleMatches))
+            .all<{ id: string }>()
+        ).results.map((r) => r.id),
+      )
+    : new Set<string>();
+  const albumIdList = [...new Set([...titleMatches.filter((id) => official.has(id)), ...byArtist])].slice(0, PER_KIND + 4);
 
   const [artistRows, albums, tracks] = await Promise.all([
     env.DB.prepare(
       `SELECT a.id, a.name, a.disambiguation,
-              (SELECT count(*) FROM artist_credit c WHERE c.artist_id = a.id AND c.entity_type = 'release_group' AND c.role = 'primary') AS releases,
+              (SELECT count(*) FROM artist_credit c JOIN release_group g ON g.id = c.entity_id
+               WHERE c.artist_id = a.id AND c.entity_type = 'release_group' AND c.role = 'primary'
+                 AND (coalesce(g.official, 1) = 1 OR g.keep_unofficial = 1)) AS releases,
               (SELECT r.art_key FROM artist_credit c
                JOIN v_release_group_canonical gc ON gc.release_group_id = c.entity_id
                JOIN release r ON r.id = gc.release_id
