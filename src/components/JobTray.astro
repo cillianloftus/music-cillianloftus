@@ -39,6 +39,7 @@
   /** Beyond this many at once, one summary card stands for them. */
   const MAX_CARDS = 4;
   const DONE_KEY = 'job-tray-done';
+  const PHONE = matchMedia('(max-width: 39.99rem)');
 
   class JobTray extends HTMLElement {
     items: Item[] = [];
@@ -78,8 +79,15 @@
         this.expanded = !this.expanded;
         this.render();
       });
+      // Turning a tablet, or a window crossing the phone width, regroups the cards.
+      PHONE.addEventListener('change', () => this.render());
       this.render();
       this.poll();
+    }
+
+    /** Cards are folded into the summary (a phone, or more than a few). */
+    grouped() {
+      return PHONE.matches ? this.items.length > 0 : this.items.length > MAX_CARDS;
     }
 
     expanded = false;
@@ -164,8 +172,8 @@
               item.doneAt = Date.now();
               finished++;
               this.announce(`Imported ${job.album_title ?? item.label}.`);
-              // In a big batch the summary counts it and clears with the rest.
-              if (this.items.length <= MAX_CARDS) this.leaveLater(item.id);
+              // Folded into the summary, it is counted there and clears with the rest.
+              if (!this.grouped()) this.leaveLater(item.id);
             } else if (job.status === 'failed') {
               this.announce(`Import of ${item.label} failed.`);
             }
@@ -205,10 +213,13 @@
       tray.hidden = this.items.length === 0;
       if (this.items.length === 0) this.expanded = false;
 
-      const grouped = this.items.length > MAX_CARDS;
+      // On a phone the cards cover the page, so even one is folded into the
+      // summary (failures included, counted in its line); Show all opens them.
+      const grouped = this.grouped();
       // Expanded, a catalogue shows its first two hundred at most: enough to
       // scroll, never so many the page stalls drawing them.
-      const shown = (grouped && !this.expanded ? this.items.filter((i) => i.status === 'failed') : this.items).slice(0, 200);
+      const folded = PHONE.matches ? [] : this.items.filter((i) => i.status === 'failed');
+      const shown = (grouped && !this.expanded ? folded : this.items).slice(0, 200);
       // Measuring every card forces layout; only worth it for a handful.
       const glide = this.nodes.size <= MAX_CARDS * 2 && !matchMedia('(prefers-reduced-motion: reduce)').matches;
       // Where each card is now, to slide the survivors into place after.
