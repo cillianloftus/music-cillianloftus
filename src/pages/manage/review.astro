@@ -107,7 +107,13 @@ const singleActions: Partial<Record<AnomalyKind, { intent: string; label: string
 };
 const artSrc = (e: { art: string | null; artKind: string | null }) =>
   e.art ? (e.artKind === 'cover' ? `/${e.art}/250.jpg` : `/${e.art}`) : null;
-const sourceLabel = (source: string) => (source === 'musicbrainz' ? 'MusicBrainz' : source === 'manual' ? 'added by hand' : source);
+const SOURCES: Record<string, string> = {
+  musicbrainz: 'From MusicBrainz',
+  spotify: 'From Spotify',
+  discogs: 'From Discogs',
+  files: 'From your files',
+  manual: 'Added by hand',
+};
 ---
 
 <Base title="Review">
@@ -201,14 +207,13 @@ const sourceLabel = (source: string) => (source === 'musicbrainz' ? 'MusicBrainz
                                 ))}
                             </dl>
                             <p class="source">
-                              {sourceLabel(e.source)}
-                              {e.mbid && (
-                                <>
-                                  {' · '}
-                                  <a href={`https://musicbrainz.org/${a.entity_type.replace('_', '-')}/${e.mbid}`} rel="noopener" target="_blank">
-                                    MusicBrainz<span class="visually-hidden"> (opens in a new tab)</span>
-                                  </a>
-                                </>
+                              {e.mbid ? (
+                                <a href={`https://musicbrainz.org/${a.entity_type.replace('_', '-')}/${e.mbid}`} rel="noopener" target="_blank">
+                                  {e.source === 'musicbrainz' ? 'From MusicBrainz' : `${SOURCES[e.source] ?? e.source}, on MusicBrainz`}
+                                  <span class="visually-hidden"> (opens in a new tab)</span>
+                                </a>
+                              ) : (
+                                (SOURCES[e.source] ?? e.source)
                               )}
                             </p>
                           </div>
