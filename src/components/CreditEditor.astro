@@ -94,6 +94,7 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
         autocomplete="off"
         spellcheck="false"
         data-role-search
+        data-many
         data-1p-ignore
         data-lpignore="true"
         data-bwignore
@@ -130,7 +131,7 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
       />
     </div>
     <button class="button button--primary" type="submit">Add</button>
-    <span class="hint" id={`credit-hint-${entity}`}>Anyone new is added as typed.</span>
+    <span class="hint" id={`credit-hint-${entity}`}>Anyone new is added as typed. Several roles for one person: separate them with commas.</span>
     <span class="add-status" role="status" data-credit-status></span>
   </form>
 
@@ -204,11 +205,17 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
     select.hidden = true;
     if (label) label.htmlFor = search.id;
     const byLabel = new Map([...select.options].map((o) => [o.text.trim().toLowerCase(), o.value]));
+    // Several roles for one person, comma-separated (data-many): each is suggested as it is typed.
     const match = () => {
-      const role = byLabel.get(search.value.trim().toLowerCase());
-      if (role) select.value = role;
-      search.setCustomValidity(role ? '' : 'Pick a role from the list, or add it below as a new one.');
-      return Boolean(role);
+      const parts = search.value.split(',').map((p) => p.trim()).filter(Boolean);
+      const unknown = parts.find((p) => !byLabel.has(p.toLowerCase()));
+      const roles = parts.map((p) => byLabel.get(p.toLowerCase())).filter((r): r is string => Boolean(r));
+      if (roles[0]) select.value = roles[0];
+      form.dataset.roles = JSON.stringify(unknown ? [] : roles);
+      search.setCustomValidity(
+        !parts.length ? 'Type what they did.' : unknown ? `“${unknown}” isn’t a role yet. Pick one from the list, or add it below.` : '',
+      );
+      return !unknown && roles.length > 0;
     };
     match();
     search.addEventListener('input', match);
@@ -230,8 +237,8 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
   };
 
   /** Posts a credits form; the page it lands on, and what it said. */
-  async function post(form: HTMLFormElement) {
-    const res = await fetch(form.action, { method: 'POST', body: new FormData(form) });
+  async function post(form: HTMLFormElement, body = new FormData(form)) {
+    const res = await fetch(form.action, { method: 'POST', body });
     const params = new URL(res.url).searchParams;
     const ok = res.ok && !params.get('error');
     // The page this edit was opened from shows the change when gone back to (SoftForms).
@@ -289,8 +296,15 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
       const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
       if (button) button.disabled = true;
       say('Adding…');
+      // Every role typed, one field each; the server credits them all.
+      const body = new FormData(form);
+      const roles = JSON.parse(form.dataset.roles || '[]') as string[];
+      if (search && roles.length) {
+        body.delete('role');
+        for (const role of roles) body.append('role', role);
+      }
       try {
-        const result = await post(form);
+        const result = await post(form, body);
         if (!result.ok) throw new Error(result.error ?? 'That could not be saved.');
         swapList(card, result.html);
         say(result.done ?? 'Added.');
