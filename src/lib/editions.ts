@@ -140,6 +140,7 @@ export async function createEdition(albumId: string, input: z.infer<typeof newEd
   }
 
   await db.batch(statements);
+  await albumDateFromEditions(albumId);
   return { releaseId, matched, created };
 }
 
@@ -155,3 +156,27 @@ export const isEditionTitle = (title: string) => {
   const lower = title.toLowerCase();
   return EDITION_MARKS.some((mark) => lower.includes(mark));
 };
+
+/**
+ * An album was first released when its earliest edition was: re-adding the
+ * 2023 original of an album re-released in 2026 moves the album to 2023.
+ * Only ever earlier, and never over a date set by hand.
+ */
+export async function albumDateFromEditions(albumId: string): Promise<void> {
+  await env.DB.prepare(
+    `WITH earliest AS (
+       SELECT date, date_precision FROM release
+       WHERE release_group_id = ?1 AND date IS NOT NULL
+       ORDER BY substr(date || '-99-99', 1, 10) LIMIT 1
+     )
+     UPDATE release_group
+     SET first_release_date = (SELECT date FROM earliest), date_precision = (SELECT date_precision FROM earliest)
+     WHERE id = ?1
+       AND EXISTS (SELECT 1 FROM earliest)
+       AND substr((SELECT date FROM earliest) || '-99-99', 1, 10) < substr(coalesce(first_release_date, '9999') || '-99-99', 1, 10)
+       AND NOT EXISTS (SELECT 1 FROM field_override o
+                       WHERE o.entity_type = 'release_group' AND o.entity_id = ?1 AND o.field = 'first_release_date')`,
+  )
+    .bind(albumId)
+    .run();
+}

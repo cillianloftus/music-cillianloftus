@@ -385,4 +385,8 @@ export async function editEdition(userId: string, albumId: string, input: z.infe
     );
   }
   if (statements.length) await db.batch(statements);
+  // An edition dated earlier than the album moves the album's date back
+  // (editions.ts imports this module, hence the late import).
+  const { albumDateFromEditions } = await import('./editions');
+  await albumDateFromEditions(albumId);
 }

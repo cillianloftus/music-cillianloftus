@@ -174,6 +174,9 @@ export async function mergeAlbums(keepId: string, goneId: string): Promise<void>
     db.prepare(`DELETE FROM release_group WHERE id = ?`).bind(goneId),
   ]);
   await foldDuplicateEditions(keepId, arriving);
+  // The 2023 original merged into its 2026 re-release dates the album 2023.
+  const { albumDateFromEditions } = await import('./editions');
+  await albumDateFromEditions(keepId);
 }
 
 /**

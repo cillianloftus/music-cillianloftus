@@ -71,3 +71,23 @@ describe('merging albums makes editions, folding duplicates', () => {
     expect(db.prepare(`SELECT count(*) n FROM release WHERE release_group_id = 'rg-a'`).get()).toEqual({ n: 3 });
   });
 });
+
+describe('an album dates from its earliest edition', () => {
+  it('moves back when an earlier edition joins, but never over a hand-set date', async () => {
+    const { albumDateFromEditions } = await import('./editions');
+    db.exec(`UPDATE release SET date = '2013-05-01', date_precision = 'day' WHERE id = 'r-a-deluxe'`);
+    await albumDateFromEditions('rg-a');
+    expect(db.prepare(`SELECT first_release_date d FROM release_group WHERE id = 'rg-a'`).get()).toEqual({ d: '2013-05-01' });
+    // Later editions never move it forward.
+    db.exec(`UPDATE release SET date = '2019', date_precision = 'year' WHERE id = 'r-a-deluxe'`);
+    await albumDateFromEditions('rg-a');
+    expect(db.prepare(`SELECT first_release_date d FROM release_group WHERE id = 'rg-a'`).get()).toEqual({ d: '2013-05-01' });
+    // Set by hand: left alone.
+    insert(db, 'field_override', [
+      { entity_type: 'release_group', entity_id: 'rg-b', field: 'first_release_date', value_json: '{"date":"2020","precision":"year"}', user_id: 'u-owner' },
+    ]);
+    db.exec(`UPDATE release SET date = '2001', date_precision = 'year' WHERE id = 'r-b'`);
+    await albumDateFromEditions('rg-b');
+    expect(db.prepare(`SELECT first_release_date d FROM release_group WHERE id = 'rg-b'`).get()).toEqual({ d: '2020' });
+  });
+});
