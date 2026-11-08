@@ -21,6 +21,7 @@ import { spotifyFor, type SpotifyClient } from '../spotify/client';
 import { normaliseName, normaliseTitle } from '../text';
 import { artKeyFor, ART_SIZES, storeCoverArt } from './coverart';
 import { planFromMusicBrainz } from './musicbrainz';
+import type { ImportPlan } from './plan';
 import { writePlan, type WriteResult } from './write';
 
 /** MusicBrainz search scores run to 100; below this a barcode hit is not trusted. */
@@ -85,6 +86,25 @@ async function fillSpotifyIds(result: WriteResult, album: SpotifyAlbum): Promise
 }
 
 /**
+ * Before a MusicBrainz import: the plan carries the Spotify album's ids,
+ * so an album first built from Spotify alone (MusicBrainz had nothing
+ * then) is found by them and filled in, its ratings kept, rather than
+ * imported a second time beside itself. A track's id goes only where
+ * disc, position and title all agree.
+ */
+export function adoptSpotifyIds(plan: ImportPlan, album: SpotifyAlbum): void {
+  plan.releaseGroup.spotify_id ??= album.id;
+  plan.release.spotify_id ??= album.id;
+  for (const t of plan.tracks) {
+    const theirs = album.tracks.items.find((i) => (i.disc_number || 1) === t.disc && i.track_number === t.position);
+    const recording = plan.recordings.find((r) => r.key === t.recording_key);
+    if (theirs && recording && !recording.spotify_id && normaliseTitle(theirs.name) === normaliseTitle(recording.title)) {
+      recording.spotify_id = theirs.id;
+    }
+  }
+}
+
+/**
  * Spotify's cover, stored under the same keys as Cover Art Archive art:
  * its 300 px image as the small size, its 640 px image for the larger two.
  */
@@ -130,6 +150,7 @@ export async function importFromSpotify(target: SpotifyTarget, client?: SpotifyC
   const mbid = await musicBrainzReleaseFor(album);
   if (mbid) {
     const plan = await planFromMusicBrainz({ entity: 'release', mbid });
+    adoptSpotifyIds(plan, album);
     result = await writePlan(plan);
     await fillSpotifyIds(result, album);
     via = 'musicbrainz';

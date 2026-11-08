@@ -1,0 +1,691 @@
+---
+/**
+ * Now playing: what Spotify is playing, steered from here (back, play,
+ * next, seek, shuffle, repeat), with the song's synced lyrics, its
+ * credits, and the rating form, so a song can be graded while it plays
+ * without leaving the site. The music itself plays in Spotify's app.
+ *
+ * The page polls /api/write/player every few seconds while it is in view.
+ * When the song changes it fetches this page again and swaps in the new
+ * song's part (#now-song), so the rating form and credits follow along.
+ */
+import { env } from 'cloudflare:workers';
+import Base from '../layouts/Base.astro';
+import RatingSheet from '../components/RatingSheet.astro';
+import Score from '../components/Score.astro';
+import { ratingHistory } from '../lib/ratings';
+import { spotifyFor } from '../lib/spotify/client';
+import { nowPlaying, PlayerError, type NowState } from '../lib/spotify/player';
+import { activeWeights } from '../lib/weights';
+
+const user = Astro.locals.user;
+if (!user) return Astro.redirect('/manage');
+
+let state: NowState | null = null;
+let problem: string | null = null;
+try {
+  state = await nowPlaying(spotifyFor(user.id));
+} catch (error) {
+  problem = error instanceof PlayerError ? error.message : 'Spotify could not be reached. Is it connected on Manage › Spotify?';
+}
+const song = state?.track ?? null;
+
+interface Here {
+  id: string;
+  title: string;
+  album_id: string | null;
+  album_title: string | null;
+  quality: number | null;
+}
+
+// The song in the catalogue: by its Spotify id, or as a listen already matched to it.
+const here = song
+  ? await env.DB.prepare(
+      `SELECT rec.id, rec.title, g.id AS album_id, g.title AS album_title,
+              (SELECT s.quality_score FROM v_recording_score s WHERE s.recording_id = rec.id AND s.user_id = ?2) AS quality
+       FROM recording rec
+       LEFT JOIN track t ON t.recording_id = rec.id
+       LEFT JOIN release r ON r.id = t.release_id
+       LEFT JOIN release_group g ON g.id = r.release_group_id
+       WHERE rec.id = coalesce((SELECT id FROM recording WHERE spotify_id = ?1),
+                               (SELECT recording_id FROM listen_track WHERE key = 'spotify:' || ?1))
+       ORDER BY r.date IS NULL, r.date
+       LIMIT 1`,
+    )
+      .bind(song.spotifyId, user.id)
+      .first<Here>()
+  : null;
+
+const [history, weights, calibration, creditRows] = here
+  ? await Promise.all([
+      ratingHistory(user.id, 'recording', here.id),
+      activeWeights(user.id),
+      env.DB.prepare('SELECT gut_offset FROM v_gut_calibration WHERE user_id = ?').bind(user.id).first<number>('gut_offset'),
+      env.DB.prepare(
+        `SELECT cr.label, a.id, a.name
+         FROM artist_credit ac JOIN artist a ON a.id = ac.artist_id JOIN credit_role cr ON cr.id = ac.role
+         WHERE ac.entity_type = 'recording' AND ac.entity_id = ?
+         ORDER BY cr.family = 'artist' DESC, cr.label, ac.position`,
+      )
+        .bind(here.id)
+        .all<{ label: string; id: string; name: string }>(),
+    ])
+  : [[], null, null, null];
+const credits = new Map<string, { id: string; name: string }[]>();
+for (const c of creditRows?.results ?? []) credits.set(c.label, [...(credits.get(c.label) ?? []), c]);
+
+const time = (ms: number) => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+const ICON = {
+  previous: 'M7 6v12M18 6l-8 6 8 6z',
+  next: 'M17 6v12M6 6l8 6-8 6z',
+  play: 'M8 5.5v13l11-6.5z',
+  pause: 'M8 5.5v13M16 5.5v13',
+  shuffle: 'M4 7h3c5 0 5 10 10 10h3M17 14l3 3-3 3M4 17h3c1.6 0 2.7-1 3.5-2.3M13.5 9.3C14.3 8 15.4 7 17 7h3M17 4l3 3-3 3',
+  repeat: 'M5 11V9a2 2 0 0 1 2-2h12M16 4l3 3-3 3M19 13v2a2 2 0 0 1-2 2H5M8 20l-3-3 3-3',
+};
+---
+
+<Base title="Now playing">
+  <div class="wrap now" data-now={JSON.stringify(state)}>
+    {
+      problem ? (
+        <section class="empty">
+          <h1>Now playing</h1>
+          <p>{problem}</p>
+          <p><a href="/manage/spotify">Manage › Spotify</a></p>
+        </section>
+      ) : (
+        <>
+          <div class="player" data-player hidden={!song}>
+            <img class="cover" src={song?.art ?? ''} alt="" width="640" height="640" data-art />
+            <div class="titles">
+              <h1 data-title>{song?.title}</h1>
+              <p class="by" data-by>{song?.artists.join(', ')}</p>
+              <p class="album muted" data-album>{song?.album}</p>
+            </div>
+
+            <div class="progress">
+              <label for="seek" class="visually-hidden">Position</label>
+              <input id="seek" type="range" min="0" max={song?.durationMs ?? 0} step="1000" value={state?.progressMs ?? 0} data-seek />
+              <div class="times tabular muted">
+                <span data-elapsed>{time(state?.progressMs ?? 0)}</span>
+                <span data-length>{time(song?.durationMs ?? 0)}</span>
+              </div>
+            </div>
+
+            <div class="controls">
+              <button type="button" class="ctl small" data-cmd="shuffle" aria-label="Shuffle" aria-pressed={state?.shuffle ? 'true' : 'false'}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.shuffle} /></svg>
+              </button>
+              <button type="button" class="ctl" data-cmd="previous" aria-label="Back">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.previous} /></svg>
+              </button>
+              <button type="button" class="ctl main" data-cmd="toggle" aria-label={state?.playing ? 'Pause' : 'Play'} data-toggle>
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="when-paused"><path d={ICON.play} /></svg>
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="when-playing"><path d={ICON.pause} /></svg>
+              </button>
+              <button type="button" class="ctl" data-cmd="next" aria-label="Next">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.next} /></svg>
+              </button>
+              <button type="button" class="ctl small" data-cmd="repeat" aria-label="Repeat" aria-pressed={state?.repeat !== 'off' ? 'true' : 'false'} data-repeat={state?.repeat ?? 'off'}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.repeat} /></svg>
+              </button>
+            </div>
+            <p class="device muted" data-device>{state?.device ? `On ${state.device.name}` : ''}</p>
+            <p class="status" role="status" data-status></p>
+          </div>
+
+          <section class="empty" data-idle hidden={Boolean(song)}>
+            <h1>Nothing playing</h1>
+            <p class="muted">Start something in Spotify, or press Listen on any track or album here. This page follows along.</p>
+          </section>
+
+          <div id="now-song" class="song" data-song-id={song?.spotifyId ?? ''}>
+            {
+              song && here && (
+                <>
+                  <div class="links">
+                    <a href={`/track/${here.id}`}>Track page</a>
+                    {here.album_id && <a href={`/album/${here.album_id}`}>{here.album_title}</a>}
+                    {here.quality != null && (
+                      <span class="current-score">
+                        <Score quality={here.quality} size="s" /> now
+                      </span>
+                    )}
+                  </div>
+                  <section aria-labelledby="rate-heading">
+                    <h2 id="rate-heading" class="visually-hidden">Rate {here.title}</h2>
+                    <RatingSheet entityType="recording" entityId={here.id} current={history[0]} returnTo="/now" preview={{ weights: weights!, offset: calibration ?? 0 }} />
+                  </section>
+                  {credits.size > 0 && (
+                    <section aria-labelledby="credits-heading" class="credits">
+                      <h2 id="credits-heading">Credits</h2>
+                      <dl>
+                        {[...credits].map(([label, people]) => (
+                          <div>
+                            <dt>{label}</dt>
+                            <dd>
+                              {people.map((p, i) => (
+                                <>
+                                  {i > 0 && ', '}
+                                  <a href={`/artist/${p.id}`}>{p.name}</a>
+                                </>
+                              ))}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </section>
+                  )}
+                </>
+              )
+            }
+            {
+              song && !here && (
+                <section class="outside">
+                  <p>Not in the library yet, so there is nothing to rate.</p>
+                  <button type="button" class="button button--primary" data-import={`https://open.spotify.com/album/${song.albumSpotifyId}`}>
+                    Import {song.album}
+                  </button>
+                </section>
+              )
+            }
+          </div>
+
+          <section aria-labelledby="lyrics-heading" class="lyrics" data-lyrics-box hidden>
+            <h2 id="lyrics-heading">Lyrics</h2>
+            <ol class="lines" data-lyrics role="list"></ol>
+            <p class="muted small">From LRCLIB.</p>
+          </section>
+        </>
+      )
+    }
+  </div>
+</Base>
+
+<script>
+  import { enhanceAxes } from '../lib/client/axis-slider';
+  import { enhancePreviews } from '../lib/client/rating-preview';
+  import type { NowState } from '../lib/spotify/now-state';
+
+  interface Lyrics {
+    syncedLyrics?: string | null;
+    plainLyrics?: string | null;
+    instrumental?: boolean;
+  }
+
+  const root = document.querySelector<HTMLElement>('[data-now]');
+  const player = root?.querySelector<HTMLElement>('[data-player]');
+  if (root && player) {
+    let state = JSON.parse(root.dataset.now || 'null') as NowState | null;
+    const $ = <T extends HTMLElement>(sel: string) => root.querySelector<T>(sel)!;
+    const seek = $<HTMLInputElement>('[data-seek]');
+    const elapsed = $('[data-elapsed]');
+    const length = $('[data-length]');
+    const status = $('[data-status]');
+    const idle = $('[data-idle]');
+    let dragging = false;
+
+    const time = (ms: number) => {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    };
+    const position = () => {
+      if (!state?.track) return 0;
+      const ms = state.progressMs + (state.playing ? Date.now() - state.at : 0);
+      return Math.min(ms, state.track.durationMs);
+    };
+
+    // Lyrics from LRCLIB, timed where it has them.
+    let lines: { at: number; el: HTMLLIElement }[] = [];
+    const lyricsBox = $('[data-lyrics-box]');
+    const lyricsList = $<HTMLOListElement>('[data-lyrics]');
+    async function loadLyrics(track: NonNullable<NowState['track']>) {
+      lines = [];
+      lyricsList.replaceChildren();
+      lyricsBox.hidden = true;
+      const params = new URLSearchParams({
+        track_name: track.title,
+        artist_name: track.artists[0] ?? '',
+        album_name: track.album,
+        duration: String(Math.round(track.durationMs / 1000)),
+      });
+      try {
+        let res = await fetch(`https://lrclib.net/api/get?${params}`);
+        let found: Lyrics | null = res.ok ? ((await res.json()) as Lyrics) : null;
+        if (!found) {
+          res = await fetch(`https://lrclib.net/api/search?${new URLSearchParams({ track_name: track.title, artist_name: track.artists[0] ?? '' })}`);
+          found = res.ok ? (((await res.json()) as Lyrics[])[0] ?? null) : null;
+        }
+        if (!found || state?.track?.spotifyId !== track.spotifyId) return;
+        const synced = found.syncedLyrics ?? '';
+        const plain = found.plainLyrics ?? '';
+        if (found.instrumental) {
+          lyricsList.appendChild(Object.assign(document.createElement('li'), { textContent: 'Instrumental.' }));
+        } else if (synced) {
+          for (const raw of synced.split('\n')) {
+            const m = /^\[(\d+):(\d+(?:\.\d+)?)\]\s?(.*)$/.exec(raw);
+            if (!m) continue;
+            const el = document.createElement('li');
+            el.textContent = m[3] || '♪';
+            lyricsList.appendChild(el);
+            lines.push({ at: (Number(m[1]) * 60 + Number(m[2])) * 1000, el });
+          }
+        } else if (plain) {
+          for (const text of plain.split('\n')) lyricsList.appendChild(Object.assign(document.createElement('li'), { textContent: text || ' ' }));
+        } else return;
+        lyricsBox.hidden = false;
+        lyricsBox.classList.toggle('synced', lines.length > 0);
+      } catch {
+        /* No lyrics is fine. */
+      }
+    }
+    let lit = -1;
+    const followLyrics = (ms: number) => {
+      if (!lines.length) return;
+      let i = lines.findIndex((l) => l.at > ms) - 1;
+      if (i < -1) i = lines.length - 1;
+      if (i === lit) return;
+      lines[lit]?.el.classList.remove('lit');
+      lit = i;
+      const line = lines[i]?.el;
+      if (!line) return;
+      line.classList.add('lit');
+      // Scroll the lyrics box, never the page.
+      lyricsList.scrollTo({ top: line.offsetTop - lyricsList.clientHeight / 2 + line.clientHeight / 2, behavior: 'smooth' });
+    };
+
+    const paint = () => {
+      const track = state?.track ?? null;
+      player.hidden = !track;
+      idle.hidden = Boolean(track);
+      if (!track || !state) return;
+      $<HTMLImageElement>('[data-art]').src = track.art ?? '';
+      $('[data-title]').textContent = track.title;
+      $('[data-by]').textContent = track.artists.join(', ');
+      $('[data-album]').textContent = track.album;
+      $('[data-device]').textContent = state.device ? `On ${state.device.name}` : '';
+      seek.max = String(track.durationMs);
+      length.textContent = time(track.durationMs);
+      player.classList.toggle('is-playing', state.playing);
+      $('[data-toggle]').setAttribute('aria-label', state.playing ? 'Pause' : 'Play');
+      $('[data-cmd="shuffle"]').setAttribute('aria-pressed', String(state.shuffle));
+      const repeat = $('[data-cmd="repeat"]');
+      repeat.setAttribute('aria-pressed', String(state.repeat !== 'off'));
+      repeat.dataset.repeat = state.repeat;
+      repeat.setAttribute('aria-label', state.repeat === 'track' ? 'Repeat: this song' : state.repeat === 'context' ? 'Repeat: on' : 'Repeat: off');
+    };
+    const tick = () => {
+      const ms = position();
+      if (!dragging) seek.value = String(ms);
+      elapsed.textContent = time(dragging ? Number(seek.value) : ms);
+      followLyrics(ms);
+    };
+
+    // A new song: this page again, and its song part swapped in.
+    async function swapSong(id: string) {
+      const song = document.getElementById('now-song');
+      if (!song || song.dataset.songId === id) return;
+      song.dataset.songId = id;
+      try {
+        const html = await (await fetch('/now', { headers: { accept: 'text/html' } })).text();
+        const fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('now-song');
+        if (!fresh) return;
+        song.innerHTML = fresh.innerHTML;
+        enhanceAxes(song);
+        enhancePreviews(song);
+      } catch {
+        /* The next poll tries again. */
+      }
+    }
+
+    let last = state?.track?.spotifyId ?? '';
+    async function poll() {
+      try {
+        const res = await fetch('/api/write/player', { headers: { accept: 'application/json' } });
+        const data = (await res.json()) as (NowState & { error?: string }) | null;
+        if (!res.ok) {
+          status.textContent = data?.error ?? '';
+          return;
+        }
+        status.textContent = '';
+        state = data as NowState | null;
+        paint();
+        const id = state?.track?.spotifyId ?? '';
+        if (id !== last) {
+          last = id;
+          if (state?.track) {
+            void loadLyrics(state.track);
+            void swapSong(id);
+          }
+        }
+      } catch {
+        /* Offline for a moment. */
+      }
+    }
+
+    async function send(body: Record<string, unknown>) {
+      status.textContent = '';
+      const res = await fetch('/api/write/player', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) status.textContent = ((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? 'That did not work.';
+      setTimeout(poll, 500);
+      setTimeout(poll, 1500);
+    }
+
+    root.querySelectorAll<HTMLButtonElement>('[data-cmd]').forEach((button) =>
+      button.addEventListener('click', () => {
+        const cmd = button.dataset.cmd!;
+        if (cmd === 'toggle') {
+          // Shown at once; Spotify confirms on the next poll.
+          if (state) state = { ...state, playing: !state.playing, progressMs: position(), at: Date.now() };
+          paint();
+          void send({ action: state?.playing ? 'play' : 'pause' });
+        } else if (cmd === 'shuffle') {
+          void send({ action: 'shuffle', on: !state?.shuffle });
+        } else if (cmd === 'repeat') {
+          const next = { off: 'context', context: 'track', track: 'off' } as const;
+          void send({ action: 'repeat', mode: next[state?.repeat ?? 'off'] });
+        } else {
+          void send({ action: cmd });
+        }
+      }),
+    );
+    seek.addEventListener('input', () => {
+      dragging = true;
+      elapsed.textContent = time(Number(seek.value));
+    });
+    seek.addEventListener('change', () => {
+      dragging = false;
+      if (state) state = { ...state, progressMs: Number(seek.value), at: Date.now() };
+      void send({ action: 'seek', positionMs: Number(seek.value) });
+    });
+
+    // Import the album of a song not in the library yet.
+    root.addEventListener('click', async (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-import]');
+      if (!button) return;
+      button.disabled = true;
+      const body = new FormData();
+      body.set('source', button.dataset.import!);
+      const res = await fetch('/api/write/import', { method: 'POST', body, headers: { accept: 'application/json' } });
+      const data = (await res.json().catch(() => ({}))) as { jobId?: string; label?: string };
+      if (res.ok && data.jobId) {
+        window.dispatchEvent(new CustomEvent('job:watch', { detail: { id: data.jobId, label: data.label ?? 'Album' } }));
+        button.textContent = 'Importing… it can be rated once it lands';
+      } else button.disabled = false;
+    });
+
+    paint();
+    if (state?.track) void loadLyrics(state.track);
+    setInterval(tick, 500);
+    // Every few seconds while the page is in view; at once on coming back to it.
+    setInterval(() => document.visibilityState === 'visible' && poll(), 5000);
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && poll());
+  }
+</script>
+
+<style>
+  .now {
+    display: grid;
+    gap: var(--space-5);
+    --content-max: 40rem;
+    padding-top: var(--space-3);
+  }
+
+  .player {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: center;
+    text-align: center;
+  }
+
+  .player[hidden],
+  .empty[hidden] {
+    display: none;
+  }
+
+  .cover {
+    width: min(100%, 22rem);
+    height: auto;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: var(--radius-l);
+    background: var(--surface-2);
+    box-shadow: var(--shadow);
+  }
+
+  .titles {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    width: 100%;
+  }
+
+  h1 {
+    font-size: var(--step-2);
+    font-weight: 800;
+    line-height: 1.1;
+    overflow-wrap: anywhere;
+  }
+
+  .by {
+    font-weight: 650;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  .progress {
+    display: grid;
+    gap: 2px;
+    width: min(100%, 26rem);
+  }
+
+  .progress input {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  .times {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--step--1);
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+  }
+
+  .ctl {
+    display: grid;
+    place-items: center;
+    width: 3.25rem;
+    height: 3.25rem;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .ctl svg {
+    width: 1.6rem;
+    height: 1.6rem;
+    fill: currentColor;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .ctl.small svg {
+    width: 1.3rem;
+    height: 1.3rem;
+    fill: none;
+  }
+
+  .ctl.small {
+    color: var(--text-subtle);
+  }
+
+  .ctl.small[aria-pressed='true'] {
+    color: var(--accent);
+  }
+
+  /* Repeat one: a dot under the arrows. */
+  .ctl[data-repeat='track'] {
+    position: relative;
+  }
+
+  .ctl[data-repeat='track']::after {
+    content: '1';
+    position: absolute;
+    bottom: 0.45rem;
+    font-size: 0.6rem;
+    font-weight: 800;
+  }
+
+  .ctl.main {
+    width: 4.25rem;
+    height: 4.25rem;
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+
+  .ctl.main svg {
+    width: 1.9rem;
+    height: 1.9rem;
+  }
+
+  .ctl.main .when-playing,
+  .is-playing .ctl.main .when-paused {
+    display: none;
+  }
+
+  .is-playing .ctl.main .when-playing {
+    display: block;
+  }
+
+  .ctl:active {
+    transform: scale(0.94);
+  }
+
+  .device {
+    font-size: var(--step--1);
+  }
+
+  .status:empty {
+    display: none;
+  }
+
+  .status {
+    color: var(--danger);
+    font-size: var(--step--1);
+  }
+
+  .empty {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-6) 0;
+    text-align: center;
+  }
+
+  .song {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .links {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .current-score {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-left: auto;
+    color: var(--text-muted);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .credits dl {
+    display: grid;
+    gap: var(--space-2);
+    margin: var(--space-3) 0 0;
+  }
+
+  .credits div {
+    display: grid;
+    grid-template-columns: 7rem minmax(0, 1fr);
+    gap: var(--space-3);
+    font-size: var(--step--1);
+  }
+
+  .credits dt {
+    color: var(--text-muted);
+  }
+
+  .credits dd {
+    margin: 0;
+    font-weight: 600;
+  }
+
+  .outside {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+  }
+
+  .lyrics {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .lyrics[hidden] {
+    display: none;
+  }
+
+  .lines {
+    display: grid;
+    gap: var(--space-2);
+    max-height: 20rem;
+    margin: 0;
+    padding: var(--space-3) 0;
+    overflow-y: auto;
+    list-style: none;
+    font-size: var(--step-1);
+    font-weight: 700;
+    line-height: 1.3;
+    position: relative;
+  }
+
+  /* Timed lyrics: the line being sung bright, the rest faint. */
+  .synced .lines :global(li) {
+    color: var(--text-subtle);
+    transition: color 0.2s;
+  }
+
+  .synced .lines :global(li.lit) {
+    color: var(--text);
+  }
+</style>

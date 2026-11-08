@@ -179,7 +179,7 @@ function ordinalOf(n: number): string {
         }
 
         <p class="actions">
-          <a class="button" href={listenHref} target="_blank" rel="noopener">
+          <a class="button" href={listenHref} target="_blank" rel="noopener" data-play={track.spotify_id ? '' : undefined} data-track={track.spotify_id ?? undefined}>
 <svg class="spotify-mark" viewBox="0 0 24 24" aria-hidden="true">
               <circle cx="12" cy="12" r="9" />
               <path d="M7.5 10c3-1 6.3-.7 9 .8M8.2 13.2c2.4-.7 5-.5 7.2.6M8.8 16.2c1.8-.4 3.6-.3 5.3.4" />

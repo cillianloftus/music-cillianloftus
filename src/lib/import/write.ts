@@ -194,6 +194,22 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
          AND NOT EXISTS (SELECT 1 FROM ${table} other WHERE other.spotify_id = j.value ->> '$.spotify_id')`,
     ).bind(json(rows.map((r) => ({ id: r.id, spotify_id: r.spotify_id ?? null }))));
 
+  /**
+   * Fills an empty mbid on a row found by another id (an album first built
+   * from Spotify, now on MusicBrainz too), so later refreshes reach
+   * MusicBrainz. Unique like spotify_id: one held elsewhere is left alone.
+   */
+  const fillMbid = (table: 'recording' | 'release_group' | 'release', rows: { id: string; mbid: string | null }[]) =>
+    db.prepare(
+      `UPDATE ${table}
+       SET mbid = j.value ->> '$.mbid'
+       FROM json_each(?1) j
+       WHERE ${table}.id = j.value ->> '$.id'
+         AND ${table}.mbid IS NULL
+         AND j.value ->> '$.mbid' IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM ${table} other WHERE other.mbid = j.value ->> '$.mbid')`,
+    ).bind(json(rows.map((r) => ({ id: r.id, mbid: r.mbid }))));
+
   const statements: D1PreparedStatement[] = [
     // Artists
     db.prepare(
@@ -239,6 +255,7 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
       plan.releaseGroup.spotify_id ?? null,
     ),
     fillSpotifyId('release_group', [{ id: releaseGroupId, spotify_id: plan.releaseGroup.spotify_id ?? null }]),
+    fillMbid('release_group', [{ id: releaseGroupId, mbid: plan.releaseGroup.mbid }]),
     // A date and its precision are filled together or not at all.
     db.prepare(
       `UPDATE release_group
@@ -265,6 +282,7 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
       plan.release.spotify_id ?? null,
     ),
     fillSpotifyId('release', [{ id: releaseId, spotify_id: plan.release.spotify_id ?? null }]),
+    fillMbid('release', [{ id: releaseId, mbid: plan.release.mbid }]),
     db.prepare(
       `UPDATE release
        SET country = coalesce(country, ?2),
@@ -301,6 +319,7 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
        WHERE recording.id = j.value ->> '$.id'`,
     ).bind(json(recordings)),
     fillSpotifyId('recording', recordings),
+    fillMbid('recording', recordings),
 
     // Tracks: (release, disc, position) is unique, so a re-import is a no-op.
     db.prepare(

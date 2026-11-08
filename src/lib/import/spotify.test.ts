@@ -196,6 +196,35 @@ describe('importFromSpotify', () => {
     ]);
   });
 
+  it('fills in an album first built from Spotify once MusicBrainz has it, never a second copy', async () => {
+    const { client } = fakeSpotify(album());
+    const first = await importFromSpotify({ kind: 'album', id: id('alb') }, client);
+    const opening = (db.prepare(`SELECT id FROM recording WHERE spotify_id = ?`).get(id('t1')) as { id: string }).id;
+    const before = ['release_group', 'release', 'recording', 'track'].map(count);
+
+    // Later, MusicBrainz has it: Refresh re-reads the Spotify album and the barcode now hits.
+    barcodeHits.value = [{ id: 'mb-release', score: 100, title: 'New Record' }];
+    const spotifyPlan = planFromSpotify(album());
+    mbPlan.value = {
+      ...spotifyPlan,
+      source: 'musicbrainz',
+      recordings: spotifyPlan.recordings.map((r, i) => ({ ...r, key: `mbr${i}`, mbid: `22222222-2222-4222-8222-22222222222${i}`, spotify_id: null })),
+      tracks: [1, 2].map((position, i) => ({ recording_key: `mbr${i}`, disc: 1, position, title_on_release: null })),
+      credits: [],
+      releaseGroup: { ...spotifyPlan.releaseGroup, key: 'mbrg', mbid: '33333333-3333-4333-8333-333333333333', spotify_id: null },
+      release: { ...spotifyPlan.release, key: 'mbrel', mbid: '44444444-4444-4444-8444-444444444444', spotify_id: null },
+    };
+    const again = await importFromSpotify({ kind: 'album', id: id('alb') }, client);
+
+    expect(again.via).toBe('musicbrainz');
+    expect(again.releaseGroupId).toBe(first.releaseGroupId);
+    expect(['release_group', 'release', 'recording', 'track'].map(count)).toEqual(before);
+    expect(db.prepare(`SELECT mbid FROM release_group WHERE id = ?`).get(first.releaseGroupId)).toEqual({ mbid: '33333333-3333-4333-8333-333333333333' });
+    expect(db.prepare(`SELECT mbid FROM release WHERE id = ?`).get(first.releaseId)).toEqual({ mbid: '44444444-4444-4444-8444-444444444444' });
+    // The same track row (and so its ratings), now with its MusicBrainz id.
+    expect(db.prepare(`SELECT id, mbid FROM recording WHERE spotify_id = ?`).get(id('t1'))).toEqual({ id: opening, mbid: '22222222-2222-4222-8222-222222222220' });
+  });
+
   it('does not trust an ambiguous barcode', async () => {
     barcodeHits.value = [
       { id: 'one', score: 100, title: 'X' },

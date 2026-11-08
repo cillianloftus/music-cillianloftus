@@ -22,6 +22,8 @@ const connected = Astro.url.searchParams.get('connected');
 
 const date = new Intl.DateTimeFormat('en-IE', { dateStyle: 'long', timeZone: 'Europe/Dublin' });
 const WARN_DAYS = 21;
+/** When the playback scopes were added to what connecting asks for. */
+const PLAYBACK_SINCE = '2026-11-08T16:00:00Z';
 ---
 
 <Base title="Spotify">
@@ -92,7 +94,15 @@ const WARN_DAYS = 21;
               </p>
             )
           }
-          <a class:list={['button', { 'button--primary': status.days_left <= WARN_DAYS }]} href="/api/write/spotify/connect">
+          {
+            // Connections made before Now playing lack the playback permissions.
+            status.authorized_at < PLAYBACK_SINCE && (
+              <p class="notice notice--warn">
+                Reconnect once to let <a href="/now">Now playing</a> show and steer what Spotify is playing.
+              </p>
+            )
+          }
+          <a class:list={['button', { 'button--primary': status.days_left <= WARN_DAYS || status.authorized_at < PLAYBACK_SINCE }]} href="/api/write/spotify/connect">
             Reconnect
           </a>
         </section>

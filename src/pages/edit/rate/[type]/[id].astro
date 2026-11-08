@@ -2,19 +2,12 @@
 import { env } from 'cloudflare:workers';
 import Base from '../../../../layouts/Base.astro';
 import { typeLabel } from '../../../../lib/format';
-import AxisSlider from '../../../../components/AxisSlider.astro';
 import Backdrop from '../../../../components/Backdrop.astro';
 import CoverArt from '../../../../components/CoverArt.astro';
 import CreditLine from '../../../../components/CreditLine.astro';
+import RatingSheet from '../../../../components/RatingSheet.astro';
 import { artistLines } from '../../../../lib/catalogue';
-import {
-  ALBUM_AXES,
-  CRAFT_AXES,
-  ratingHistory,
-  safeReturnPath,
-  type RatableEntity,
-  type RatingRow,
-} from '../../../../lib/ratings';
+import { ALBUM_AXES, CRAFT_AXES, ratingHistory, safeReturnPath, type RatableEntity, type RatingRow } from '../../../../lib/ratings';
 import { activeWeights } from '../../../../lib/weights';
 
 const { type, id } = Astro.params as { type: string; id: string };
@@ -66,8 +59,6 @@ const [lines, history, weights, calibration] = await Promise.all([
   activeWeights(user.id),
   env.DB.prepare('SELECT gut_offset FROM v_gut_calibration WHERE user_id = ?').bind(user.id).first<number>('gut_offset'),
 ]);
-// For the live preview: the same formula as the views (src/lib/scoring.ts).
-const previewData = { entityType, weights, offset: calibration ?? 0 };
 const credits = lines.get(id) ?? [];
 const current = history[0];
 
@@ -76,19 +67,7 @@ const returnTo = safeReturnPath(Astro.url.searchParams.get('return_to'), fallbac
 const error = Astro.url.searchParams.get('error');
 
 const axes = entityType === 'recording' ? CRAFT_AXES : ALBUM_AXES;
-// Kept short and always shown: they say what to listen for.
-const axisHints: Record<string, string> = {
-  arrangement: 'What’s played, and how the parts fit.',
-  sound: 'Recording, mix, texture.',
-  songwriting: 'Melody, structure, harmony.',
-  lyrics: 'The words on their own terms.',
-  performance: 'Delivery, feel, playing.',
-  sequencing: 'Order, pacing, transitions.',
-  cohesion: 'Whether it holds together as one thing.',
-  ambition: 'What it reaches for.',
-};
 const capitalise = (s: string) => s[0]!.toUpperCase() + s.slice(1);
-
 /** A row as it was given: production before the split, its halves after. */
 const givenAxes = (row: RatingRow): string[] =>
   entityType === 'recording' && row.production != null ? ['production', ...CRAFT_AXES.slice(2)] : [...axes];
@@ -117,49 +96,7 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
 
     {error && <p class="error" role="alert">{error}</p>}
 
-    {/* One form, every slider on one screen: the gut, then the parts, then
-        impact. Any can be left blank; a blank axis is left out, not zero. */}
-    <form method="post" action="/api/write/rating" class="sheet">
-      <input type="hidden" name="entity_type" value={entityType} />
-      <input type="hidden" name="entity_id" value={id} />
-      <input type="hidden" name="return_to" value={returnTo} />
-
-      <div class="gut">
-        <AxisSlider name="gut_score" label="Gut" hint="First instinct." value={current?.gut_score} />
-      </div>
-
-      <fieldset class="axes">
-        <legend class="visually-hidden">The parts, each out of 10</legend>
-        {
-          axes.map((axis) => (
-            <AxisSlider
-              name={axis}
-              label={capitalise(axis)}
-              hint={axisHints[axis]}
-              value={current?.[axis]}
-              canNotApply
-              notApplicable={current?.not_applicable.includes(axis) ?? false}
-            />
-          ))
-        }
-      </fieldset>
-
-      <div class="impact">
-        <AxisSlider name="impact" label="Impact" hint="Rare: life before it and after." value={current?.impact} tone="accent" />
-        <details class="note" open={current?.impact_note ? true : undefined}>
-          <summary>When and what</summary>
-          <label for="impact_note" class="visually-hidden">When and what</label>
-          <textarea class="input" id="impact_note" name="impact_note" rows="2" maxlength="500" aria-describedby="impact-note-hint">{current?.impact_note ?? ''}</textarea>
-          <span class="muted" id="impact-note-hint">Public. A line about where you were.</span>
-        </details>
-      </div>
-
-      <div class="save-row">
-        <button class="button button--primary" type="submit">Save rating</button>
-        <p class="preview" data-preview aria-live="polite"></p>
-      </div>
-      <script is:inline type="application/json" id="rate-preview" set:html={JSON.stringify(previewData)} />
-    </form>
+    <RatingSheet entityType={entityType} entityId={id} current={current} returnTo={returnTo} preview={{ weights, offset: calibration ?? 0 }} />
 
     {
       entityType === 'recording' && (
@@ -203,42 +140,6 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
   </div>
 </Base>
 
-<script>
-  // A live preview of the score this rating gives, by the views' own formula.
-  import { ALBUM_KEYS, CRAFT_KEYS, albumComposite, craftComposite, type Weights } from '../../../../lib/scoring';
-
-  const data = document.getElementById('rate-preview');
-  const out = document.querySelector<HTMLElement>('[data-preview]');
-  const form = out?.closest('form');
-  if (data && out && form) {
-    const { entityType, weights, offset } = JSON.parse(data.textContent!) as { entityType: string; weights: Weights; offset: number };
-    const value = (name: string) => {
-      const field = form.elements.namedItem(name) as HTMLInputElement | null;
-      if (!field || field.value.trim() === '') return null;
-      const n = Number(field.value);
-      return Number.isFinite(n) && n >= 0 && n <= 10 ? n : null;
-    };
-    const update = () => {
-      const axes = Object.fromEntries([...CRAFT_KEYS, ...ALBUM_KEYS].map((k) => [k, value(k)]));
-      const composite = entityType === 'recording' ? craftComposite(axes, weights) : albumComposite(axes, weights);
-      const gut = value('gut_score');
-      const base = composite ?? (gut === null ? null : gut + offset);
-      if (base === null) {
-        out.textContent = '';
-        return;
-      }
-      const quality = Math.round(Math.max(0, Math.min(100, base * 10)));
-      const impact = value('impact') ?? 0;
-      const how = composite !== null ? 'from the parts' : 'from your gut, calibrated';
-      const mark = impact ? `, impact ${impact}` : '';
-      out.textContent =
-        entityType === 'recording' ? `Gives ${quality}${mark}, ${how}.` : `Album axes give ${quality}${mark}; the tracks make up the rest.`;
-    };
-    form.addEventListener('input', update);
-    update();
-  }
-</script>
-
 <style>
   .page {
     display: grid;
@@ -281,72 +182,6 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
     border: 1px solid var(--danger);
     border-radius: var(--radius-s);
     color: var(--danger);
-  }
-
-  .sheet {
-    display: grid;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-4) var(--space-4);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-l);
-    background: var(--surface-1);
-  }
-
-  fieldset {
-    margin: 0;
-    padding: 0;
-    border: 0;
-    min-width: 0;
-  }
-
-  /* The gut stands apart from the parts it is checked against. */
-  .gut {
-    padding-bottom: var(--space-2);
-    border-bottom: 2px solid var(--border);
-  }
-
-  .gut :global(.axis),
-  .impact :global(.axis) {
-    border-bottom: 0;
-  }
-
-  .axes {
-    display: grid;
-  }
-
-  .impact {
-    display: grid;
-  }
-
-  .note summary {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
-    color: var(--text-muted);
-    font-size: var(--step--1);
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .note[open] {
-    display: grid;
-    gap: var(--space-1);
-  }
-
-  .save-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-2) var(--space-4);
-  }
-
-  .preview {
-    color: var(--accent);
-    font-weight: 700;
-  }
-
-  .preview:empty {
-    display: none;
   }
 
   .history ol {

@@ -12,7 +12,15 @@ import { env } from 'cloudflare:workers';
 const ACCOUNTS = 'https://accounts.spotify.com';
 const API = 'https://api.spotify.com/v1';
 
-export const SCOPES = ['playlist-modify-private', 'playlist-modify-public', 'ugc-image-upload'];
+/** Playlists and their covers; and, for Now playing, reading and steering playback (src/lib/spotify/player.ts). */
+export const SCOPES = [
+  'playlist-modify-private',
+  'playlist-modify-public',
+  'ugc-image-upload',
+  'user-read-playback-state',
+  'user-modify-playback-state',
+  'user-read-currently-playing',
+];
 
 /**
  * The market availability is judged in. Named outright: "from_token" makes

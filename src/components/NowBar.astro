@@ -1,0 +1,283 @@
+---
+/**
+ * The mini player: while Spotify is playing, a slim bar just above the
+ * phone's tab bar (bottom left on wider screens) with the song, play or
+ * pause and next. Tapping it opens Now playing. Hidden when nothing is on,
+ * so the tab bar keeps its five places.
+ *
+ * Also makes every Listen link (a[data-play]) start the song or album in
+ * Spotify without leaving the page. If Spotify can't be steered (not
+ * reconnected yet, not Premium, no device awake) the link opens Spotify
+ * as it always did.
+ *
+ * Only for the signed-in listener; included by Base.
+ */
+const onNow = Astro.url.pathname === '/now';
+---
+
+<now-bar hidden data-on-now={onNow ? '' : undefined}>
+  <a class="nb-link" href="/now">
+    <img class="nb-art" alt="" width="40" height="40" data-nb-art />
+    <span class="nb-text">
+      <span class="nb-title" data-nb-title></span>
+      <span class="nb-by" data-nb-by></span>
+    </span>
+    <span class="visually-hidden">Open now playing</span>
+  </a>
+  <button type="button" class="nb-btn" data-nb-toggle aria-label="Pause">
+    <svg viewBox="0 0 24 24" aria-hidden="true" class="nb-play"><path d="M8 5.5v13l11-6.5z"></path></svg>
+    <svg viewBox="0 0 24 24" aria-hidden="true" class="nb-pause"><path d="M8 5.5v13M16 5.5v13"></path></svg>
+  </button>
+  <button type="button" class="nb-btn" data-nb-next aria-label="Next">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 6v12M6 6l8 6-8 6z"></path></svg>
+  </button>
+  <span class="nb-progress" aria-hidden="true"><span data-nb-fill></span></span>
+</now-bar>
+
+<script>
+  import type { NowState } from '../lib/spotify/now-state';
+
+  // How long to stop asking after Spotify says it can't be read (not connected, no scope).
+  const QUIET_KEY = 'nowbar-quiet-until';
+  const quiet = () => {
+    try {
+      return Number(sessionStorage.getItem(QUIET_KEY)) > Date.now();
+    } catch {
+      return false;
+    }
+  };
+  const hush = () => {
+    try {
+      sessionStorage.setItem(QUIET_KEY, String(Date.now() + 10 * 60_000));
+    } catch {}
+  };
+
+  class NowBar extends HTMLElement {
+    state: NowState | null = null;
+
+    connectedCallback() {
+      const onNow = this.hasAttribute('data-on-now');
+      this.querySelector('[data-nb-toggle]')!.addEventListener('click', () => {
+        if (!this.state) return;
+        const playing = !this.state.playing;
+        this.state = { ...this.state, playing, progressMs: this.position(), at: Date.now() };
+        this.paint();
+        void this.send({ action: playing ? 'play' : 'pause' });
+      });
+      this.querySelector('[data-nb-next]')!.addEventListener('click', () => void this.send({ action: 'next' }));
+
+      // Listen links start playback here rather than leaving for Spotify.
+      document.addEventListener('click', async (event) => {
+        const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('a[data-play]');
+        if (!link || event.metaKey || event.ctrlKey || event.shiftKey) return;
+        event.preventDefault();
+        const ok = await this.send({ action: 'start', track: link.dataset.track || undefined, album: link.dataset.album || undefined });
+        // Couldn't steer Spotify: open it, as the link always did (same tab, as a pop-up after a wait is blocked).
+        if (!ok) window.location.assign(link.href);
+      });
+
+      // The Now playing page draws its own player; the bar stays away there.
+      if (onNow) return;
+      void this.poll();
+      setInterval(() => document.visibilityState === 'visible' && this.poll(), 15_000);
+      document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && this.poll());
+      setInterval(() => this.paintProgress(), 1000);
+    }
+
+    position() {
+      const s = this.state;
+      if (!s?.track) return 0;
+      return Math.min(s.progressMs + (s.playing ? Date.now() - s.at : 0), s.track.durationMs);
+    }
+
+    async poll() {
+      if (quiet() && !this.state) return;
+      try {
+        const res = await fetch('/api/write/player', { headers: { accept: 'application/json' } });
+        if (!res.ok) {
+          hush();
+          this.show(null);
+          return;
+        }
+        this.show((await res.json()) as NowState | null);
+      } catch {
+        /* Offline for a moment. */
+      }
+    }
+
+    /** True when Spotify took the command. */
+    async send(body: Record<string, unknown>): Promise<boolean> {
+      try {
+        const res = await fetch('/api/write/player', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        if (!res.ok) return false;
+        try {
+          sessionStorage.removeItem(QUIET_KEY);
+        } catch {}
+        if (!this.hasAttribute('data-on-now')) {
+          setTimeout(() => this.poll(), 700);
+          setTimeout(() => this.poll(), 2000);
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    show(state: NowState | null) {
+      this.state = state;
+      // Shown while a song is on, or paused part-way (it can be resumed from here).
+      const visible = Boolean(state?.track && (state.playing || state.progressMs > 0));
+      this.hidden = !visible;
+      document.documentElement.toggleAttribute('data-nowbar', visible);
+      this.paint();
+    }
+
+    paint() {
+      const track = this.state?.track;
+      if (!track) return;
+      const art = this.querySelector<HTMLImageElement>('[data-nb-art]')!;
+      if (art.src !== track.art) art.src = track.art ?? '';
+      this.querySelector('[data-nb-title]')!.textContent = track.title;
+      this.querySelector('[data-nb-by]')!.textContent = track.artists.join(', ');
+      this.classList.toggle('is-playing', Boolean(this.state?.playing));
+      this.querySelector('[data-nb-toggle]')!.setAttribute('aria-label', this.state?.playing ? 'Pause' : 'Play');
+      this.paintProgress();
+    }
+
+    paintProgress() {
+      const track = this.state?.track;
+      if (!track || this.hidden) return;
+      this.querySelector<HTMLElement>('[data-nb-fill]')!.style.width = `${(this.position() / track.durationMs) * 100}%`;
+    }
+  }
+  customElements.define('now-bar', NowBar);
+</script>
+
+<style>
+  now-bar {
+    position: fixed;
+    z-index: 44;
+    left: var(--tabbar-inset, 0.6rem);
+    right: var(--tabbar-inset, 0.6rem);
+    bottom: calc(var(--tabbar-space) + 0.1rem);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
+    border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    border-radius: 1rem;
+    background: var(--surface-1);
+    box-shadow: 0 10px 28px -10px rgb(0 0 0 / 0.55);
+    overflow: hidden;
+  }
+
+  now-bar[hidden] {
+    display: none;
+  }
+
+  /* Wider screens have no tab bar: a card in the bottom left corner. */
+  @media (min-width: 40rem) {
+    now-bar {
+      right: auto;
+      bottom: var(--space-4);
+      left: var(--space-4);
+      width: 22rem;
+    }
+  }
+
+  /* Room for it at the foot of every page while it shows. */
+  :global(:root[data-nowbar] body) {
+    padding-bottom: calc(var(--tabbar-space, 0px) + 4rem);
+  }
+
+  .nb-link {
+    display: grid;
+    grid-template-columns: 2.5rem minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .nb-art {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: var(--radius-s);
+    object-fit: cover;
+    background: var(--surface-2);
+  }
+
+  .nb-text {
+    display: grid;
+    min-width: 0;
+    line-height: 1.25;
+  }
+
+  .nb-title,
+  .nb-by {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .nb-title {
+    font-size: var(--step--1);
+    font-weight: 700;
+  }
+
+  .nb-by {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+  }
+
+  .nb-btn {
+    display: grid;
+    place-items: center;
+    width: var(--target);
+    height: var(--target);
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .nb-btn svg {
+    width: 1.35rem;
+    height: 1.35rem;
+    fill: currentColor;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .nb-pause,
+  now-bar.is-playing .nb-play {
+    display: none;
+  }
+
+  now-bar.is-playing .nb-pause {
+    display: block;
+  }
+
+  .nb-progress {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+
+  .nb-progress span {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    transition: width 1s linear;
+  }
+</style>

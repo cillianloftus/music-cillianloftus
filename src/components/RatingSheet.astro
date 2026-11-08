@@ -1,0 +1,152 @@
+---
+/**
+ * The rating form: every slider on one phone screen. The gut first, then
+ * the parts, then impact with its note folded away until there is one.
+ * Any can be left blank; a blank axis is left out, not counted as zero.
+ * Used by the rate page and by Now playing.
+ */
+import AxisSlider from './AxisSlider.astro';
+import { ALBUM_AXES, CRAFT_AXES, type RatableEntity, type RatingRow } from '../lib/ratings';
+import type { Weights } from '../lib/scoring';
+
+interface Props {
+  entityType: RatableEntity;
+  entityId: string;
+  current: RatingRow | undefined;
+  returnTo: string;
+  /** For the live score preview: the same formula as the views. */
+  preview: { weights: Weights; offset: number };
+}
+
+const { entityType, entityId, current, returnTo, preview } = Astro.props;
+const axes = entityType === 'recording' ? CRAFT_AXES : ALBUM_AXES;
+// Kept short and always shown: they say what to listen for.
+const HINTS: Record<string, string> = {
+  arrangement: 'What’s played, and how the parts fit.',
+  sound: 'Recording, mix, texture.',
+  songwriting: 'Melody, structure, harmony.',
+  lyrics: 'The words on their own terms.',
+  performance: 'Delivery, feel, playing.',
+  sequencing: 'Order, pacing, transitions.',
+  cohesion: 'Whether it holds together as one thing.',
+  ambition: 'What it reaches for.',
+};
+const capitalise = (s: string) => s[0]!.toUpperCase() + s.slice(1);
+---
+
+<form method="post" action="/api/write/rating" class="sheet" data-rating-sheet data-preview={JSON.stringify({ entityType, ...preview })}>
+  <input type="hidden" name="entity_type" value={entityType} />
+  <input type="hidden" name="entity_id" value={entityId} />
+  <input type="hidden" name="return_to" value={returnTo} />
+
+  <div class="gut">
+    <AxisSlider name="gut_score" label="Gut" hint="First instinct." value={current?.gut_score} />
+  </div>
+
+  <fieldset class="axes">
+    <legend class="visually-hidden">The parts, each out of 10</legend>
+    {
+      axes.map((axis) => (
+        <AxisSlider
+          name={axis}
+          label={capitalise(axis)}
+          hint={HINTS[axis]}
+          value={current?.[axis]}
+          canNotApply
+          notApplicable={current?.not_applicable.includes(axis) ?? false}
+        />
+      ))
+    }
+  </fieldset>
+
+  <div class="impact">
+    <AxisSlider name="impact" label="Impact" hint="Rare: life before it and after." value={current?.impact} tone="accent" />
+    <details class="note" open={current?.impact_note ? true : undefined}>
+      <summary>When and what</summary>
+      <label for="impact_note" class="visually-hidden">When and what</label>
+      <textarea class="input" id="impact_note" name="impact_note" rows="2" maxlength="500" aria-describedby="impact-note-hint">{current?.impact_note ?? ''}</textarea>
+      <span class="muted" id="impact-note-hint">Public. A line about where you were.</span>
+    </details>
+  </div>
+
+  <div class="save-row">
+    <button class="button button--primary" type="submit">Save rating</button>
+    <p class="preview" data-preview aria-live="polite"></p>
+  </div>
+</form>
+
+<script>
+  import { enhancePreviews } from '../lib/client/rating-preview';
+
+  enhancePreviews();
+</script>
+
+<style>
+  .sheet {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  fieldset {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  /* The gut stands apart from the parts it is checked against. */
+  .gut {
+    padding-bottom: var(--space-2);
+    border-bottom: 2px solid var(--border);
+  }
+
+  .gut :global(.axis),
+  .impact :global(.axis) {
+    border-bottom: 0;
+  }
+
+  .axes,
+  .impact {
+    display: grid;
+  }
+
+  .muted {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .note summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .note[open] {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .save-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .preview {
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  .preview:empty {
+    display: none;
+  }
+</style>

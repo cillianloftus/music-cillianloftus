@@ -1,5 +1,6 @@
 ---
 import JobTray from '../components/JobTray.astro';
+import NowBar from '../components/NowBar.astro';
 import SearchOverlay from '../components/SearchOverlay.astro';
 import SoftForms from '../components/SoftForms.astro';
 import '../styles/global.css';
@@ -54,6 +55,7 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
       <slot />
     </main>
     {Astro.locals.user && <JobTray />}
+    {Astro.locals.user && <NowBar />}
     <SearchOverlay />
     {Astro.locals.user && <SoftForms />}
     <script>
