@@ -11,11 +11,13 @@
 
 import { env } from 'cloudflare:workers';
 import { normaliseName, normaliseTitle } from './text';
+import { versionPairs } from './versions';
 
 export type AnomalyKind =
   | 'duplicate_artist_name'
   | 'near_duplicate_recording'
   | 'near_duplicate_release_group'
+  | 'version_of_recording'
   | 'track_count_mismatch'
   | 'unlinked_rated_recording'
   | 'missing_cover_art'
@@ -148,6 +150,13 @@ export async function findAnomalies(): Promise<Finding[]> {
     ),
   );
 
+  // A remix, sped-up, acoustic or live take beside the song itself, by the
+  // same artist and not yet linked: "Link as a version" puts both in one
+  // work. Ordered: the original first, then the version.
+  for (const [original, version] of versionPairs(rows<Rec>(recordings), GENERIC_TITLE)) {
+    findings.push({ kind: 'version_of_recording', entity_type: 'recording', entity_a: original, entity_b: version });
+  }
+
   // Same artist, same title once edition words go: usually a deluxe edition
   // imported as an album of its own.
   type Group = { id: string; title: string; type: string; artist_id: string };
@@ -227,7 +236,11 @@ export async function detectAnomalies(): Promise<{ open: number; raised: number;
     const k = key(f.kind, f.entity_a, f.entity_b);
     firing.add(k);
     if (open.has(k) || dismissed.has(k)) continue;
-    if (f.entity_b !== null && judged.has(`${f.entity_type}\u0000${f.entity_a}\u0000${f.entity_b}`)) continue;
+    // Judged pairs are kept in id order; a version pair is raised original first.
+    if (f.entity_b !== null) {
+      const [x, y] = f.entity_a < f.entity_b ? [f.entity_a, f.entity_b] : [f.entity_b, f.entity_a];
+      if (judged.has(`${f.entity_type}\u0000${x}\u0000${y}`)) continue;
+    }
     raise.push({ ...f, id: crypto.randomUUID() });
   }
   const clear = [...open].filter(([k]) => !firing.has(k)).map(([, id]) => id);
@@ -403,12 +416,9 @@ export async function dismiss(id: string): Promise<void> {
     ),
   ];
   if (a.entity_b) {
+    const [x, y] = a.entity_a < a.entity_b ? [a.entity_a, a.entity_b] : [a.entity_b, a.entity_a];
     statements.push(
-      env.DB.prepare(`INSERT OR IGNORE INTO confirmed_distinct (entity_type, id_a, id_b) VALUES (?, ?, ?)`).bind(
-        a.entity_type,
-        a.entity_a,
-        a.entity_b,
-      ),
+      env.DB.prepare(`INSERT OR IGNORE INTO confirmed_distinct (entity_type, id_a, id_b) VALUES (?, ?, ?)`).bind(a.entity_type, x, y),
     );
   }
   await env.DB.batch(statements);
@@ -423,7 +433,7 @@ export async function dismiss(id: string): Promise<void> {
 export async function linkWork(id: string): Promise<string> {
   const a = await anomaly(id);
   if (!a || a.status !== 'open') throw new ReviewError('That item is no longer open.');
-  if (a.kind !== 'near_duplicate_recording' && a.kind !== 'unlinked_rated_recording') {
+  if (a.kind !== 'near_duplicate_recording' && a.kind !== 'unlinked_rated_recording' && a.kind !== 'version_of_recording') {
     throw new ReviewError('Only recordings can be linked to a work.');
   }
   const ids = [a.entity_a, a.entity_b].filter((x): x is string => x !== null);
@@ -435,7 +445,7 @@ export async function linkWork(id: string): Promise<string> {
   if (results.length !== ids.length) throw new ReviewError('A recording in this item no longer exists.');
 
   const works = [...new Set(results.map((r) => r.work_id).filter((w): w is string => w !== null))];
-  if (works.length > 1) throw new ReviewError('These recordings already belong to different works.');
+  if (works.length > 1) throw new ReviewError('These recordings already belong to different songs.');
 
   const statements = [];
   let workId = works[0];
@@ -453,6 +463,34 @@ export async function linkWork(id: string): Promise<string> {
   );
   await env.DB.batch(statements);
   return workId;
+}
+
+/**
+ * Links every open "another version" pair as versions of one song, until
+ * the budget runs out. Each is one person's standing decision ("these are
+ * all versions"), taken from the button that says so.
+ */
+export async function linkAllVersions({ budgetMs }: { budgetMs: number }): Promise<{ merged: number; left: number }> {
+  const stop = Date.now() + budgetMs;
+  const open = async () =>
+    (
+      await env.DB.prepare(`SELECT id FROM anomaly WHERE kind = 'version_of_recording' AND status = 'open' ORDER BY detected_at, id`).all<{
+        id: string;
+      }>()
+    ).results;
+  let merged = 0;
+  for (const { id } of await open()) {
+    if (Date.now() > stop || merged >= 300) break;
+    try {
+      await linkWork(id);
+      merged++;
+    } catch (error) {
+      // Already in different songs: left for a person to judge.
+      if (!(error instanceof ReviewError)) throw error;
+      await env.DB.prepare(`UPDATE anomaly SET skipped_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`).bind(id).run();
+    }
+  }
+  return { merged, left: (await open()).length };
 }
 
 export interface ReviewFact {

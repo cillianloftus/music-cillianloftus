@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { detectAnomalies, dismiss, findAnomalies, linkWork, matchingAlbumPairs, mergeMatchingAlbums, matchingTrackPairs, mergeMatchingTracks, openAnomalies, ReviewError, same, skip } from './review';
+import { detectAnomalies, dismiss, findAnomalies, linkAllVersions, linkWork, matchingAlbumPairs, mergeMatchingAlbums, matchingTrackPairs, mergeMatchingTracks, openAnomalies, ReviewError, same, skip } from './review';
 
 let db: DatabaseSync;
 
@@ -243,5 +243,44 @@ describe('albums that are plainly one', () => {
     expect((await matchingAlbumPairs()).map((p) => [p.entity_a, p.entity_b])).toEqual([['rg-a', 'rg-a-deluxe']]);
     expect(await mergeMatchingAlbums({ budgetMs: 10_000 })).toEqual({ merged: 1, left: 0 });
     expect(db.prepare(`SELECT release_group_id FROM release WHERE id = 'r-ad'`).get()).toEqual({ release_group_id: 'rg-a' });
+  });
+});
+
+describe('versions of a song', () => {
+  /** Two remixes of Song A2, credited to its artist, and a track that only looks like one. */
+  function seedRemixes() {
+    insert(db, 'recording', [
+      { id: 'zz-remix', title: 'Song A2 (Someone Remix)', source: 'manual' },
+      { id: 'aa-sped', title: 'Song A2 - Sped Up', source: 'manual' },
+    ]);
+    insert(db, 'artist_credit', [credit('recording', 'zz-remix', 'art-x'), credit('recording', 'aa-sped', 'art-x')]);
+  }
+
+  it('raises each version beside the song, original first', async () => {
+    seedRemixes();
+    const findings = await findAnomalies();
+    expect(has(findings, 'version_of_recording', 'a2', 'zz-remix')).toBe(true);
+    expect(has(findings, 'version_of_recording', 'a2', 'aa-sped')).toBe(true);
+  });
+
+  it('remembers "Not a version", though the version sorts before the song', async () => {
+    seedRemixes();
+    await detectAnomalies();
+    const open = await openAnomalies('version_of_recording');
+    const sped = open.find((a) => a.entity_b === 'aa-sped')!;
+    await dismiss(sped.id);
+    expect(db.prepare(`SELECT id_a, id_b FROM confirmed_distinct WHERE entity_type = 'recording'`).all()).toEqual([{ id_a: 'a2', id_b: 'aa-sped' }]);
+    await detectAnomalies();
+    expect((await openAnomalies('version_of_recording')).map((a) => a.entity_b)).toEqual(['zz-remix']);
+  });
+
+  it('links them all into one song', async () => {
+    seedRemixes();
+    await detectAnomalies();
+    const run = await linkAllVersions({ budgetMs: 10_000 });
+    expect(run).toEqual({ merged: 2, left: 0 });
+    const works = db.prepare(`SELECT DISTINCT work_id FROM recording WHERE id IN ('a2', 'zz-remix', 'aa-sped')`).all() as { work_id: string }[];
+    expect(works).toHaveLength(1);
+    expect(works[0]!.work_id).not.toBeNull();
   });
 });

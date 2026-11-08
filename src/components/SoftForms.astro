@@ -129,7 +129,7 @@ const soft = editing || path === '/manage' || path.startsWith('/manage/') || pat
           carry.type = 'hidden';
           carry.name = submitter.name;
           carry.value = submitter.value;
-          form.append(carry);
+          form.appendChild(carry);
         }
         HTMLFormElement.prototype.submit.call(form);
       }

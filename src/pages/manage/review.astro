@@ -18,6 +18,7 @@ const ORDER: AnomalyKind[] = [
   'duplicate_artist_name',
   'near_duplicate_release_group',
   'near_duplicate_recording',
+  'version_of_recording',
   'missing_cover_art',
   'unlinked_rated_recording',
   'track_count_mismatch',
@@ -39,6 +40,12 @@ const KINDS: Record<AnomalyKind, { tab: string; question?: string; explain: stri
     question: 'Same song?',
     explain:
       'One song recorded twice in the catalogue: the single’s copy and the album’s, say. Merging makes them one song, with both sets of ratings and plays. Live takes and different versions are not asked about.',
+  },
+  version_of_recording: {
+    tab: 'Remixes',
+    question: 'Another version of this song?',
+    explain:
+      'Remixes, sped-up and slowed takes, acoustic, live and instrumental versions, each beside the song itself. Linked, they show as versions of one track, and a playlist plays the song once.',
   },
   missing_cover_art: {
     tab: 'Cover art',
@@ -72,14 +79,16 @@ const [entities, gaps, matching] = await Promise.all([
     ? matchingTrackPairs()
     : kind === 'near_duplicate_release_group'
       ? matchingAlbumPairs()
-      : Promise.resolve([]),
+      : kind === 'version_of_recording'
+        ? Promise.resolve(Array.from({ length: counts.get('version_of_recording')?.open ?? 0 }))
+        : Promise.resolve([]),
 ]);
 const total = [...counts.values()].reduce((n, c) => n + c.open, 0);
 
 const done = params.get('done');
 const MESSAGES: Record<string, string> = {
   dismiss: 'Noted. It will not come up again.',
-  link_work: 'Matched.',
+  link_work: 'Linked as versions of one song.',
   merge: 'Merged into one. The old page leads to the one kept.',
   skip: 'Skipped for now.',
   refetch_art: 'Cover art found and stored.',
@@ -92,7 +101,8 @@ const message = (() => {
     if (raised === 0 && cleared === 0) return 'Checked. Nothing new.';
     return [raised > 0 && `${raised} new`, cleared > 0 && `${cleared} cleared up`].filter(Boolean).join(', ') + '.';
   }
-  if (done === 'merge_matching') return `Merged ${params.get('merged')}.`;
+  if (done === 'merge_matching')
+    return asked === 'version_of_recording' ? `Linked ${params.get('merged')} as versions.` : `Merged ${params.get('merged')}.`;
   return MESSAGES[done] ?? null;
 })();
 
@@ -164,12 +174,16 @@ const SOURCES: Record<string, string> = {
               <button class="button button--primary" type="submit" name="intent" value="merge_matching">
                 {kind === 'near_duplicate_release_group'
                   ? `Merge all ${matching.length} that are plainly one album`
-                  : `Merge all ${matching.length} that match to the second`}
+                  : kind === 'version_of_recording'
+                    ? `Link all ${matching.length} as versions`
+                    : `Merge all ${matching.length} that match to the second`}
               </button>
               <span class="muted small" data-bulk-status aria-live="polite">
                 {kind === 'near_duplicate_release_group'
                   ? 'Same artist, same kind, same title once words like “Deluxe” or “Special Edition” are set aside. Each becomes an edition of one album.'
-                  : 'Same title, same artist, lengths within two seconds: the same recording entered twice.'}
+                  : kind === 'version_of_recording'
+                    ? 'Each one’s title is the song’s with a version named in brackets or after a dash. Look down the list first: anything that is not a version, mark “Not a version”.'
+                    : 'Same title, same artist, lengths within two seconds: the same recording entered twice.'}
               </span>
             </form>
           )}
@@ -234,7 +248,16 @@ const SOURCES: Record<string, string> = {
                   <form method="post" action="/api/write/review" class="actions" data-row>
                     <input type="hidden" name="id" value={a.id} />
                     <input type="hidden" name="kind" value={kind} />
-                    {isPair(a) ? (
+                    {a.kind === 'version_of_recording' ? (
+                      <>
+                        <button class="button button--primary" type="submit" name="intent" value="link_work">
+                          Link as a version
+                        </button>
+                        <button class="button" type="submit" name="intent" value="dismiss">
+                          Not a version
+                        </button>
+                      </>
+                    ) : isPair(a) ? (
                       <>
                         <button class="button button--primary" type="submit" name="intent" value="same">
                           Same: merge them
@@ -337,6 +360,7 @@ const SOURCES: Record<string, string> = {
     const button = bulk.querySelector('button')!;
     const status = bulk.querySelector<HTMLElement>('[data-bulk-status]')!;
     button.disabled = true;
+    const kind = bulk.querySelector<HTMLInputElement>('input[name="kind"]')!.value;
     let merged = 0;
     for (;;) {
       const result = await post(bulk, 'merge_matching');
@@ -347,10 +371,9 @@ const SOURCES: Record<string, string> = {
       }
       merged += Number(result.merged ?? 0);
       const left = Number(result.left ?? 0);
-      status.textContent = `Merged ${merged}${left ? `, ${left} to go…` : '.'}`;
+      status.textContent = `${kind === 'version_of_recording' ? 'Linked' : 'Merged'} ${merged}${left ? `, ${left} to go…` : '.'}`;
       if (!left || !Number(result.merged)) break;
     }
-    const kind = bulk.querySelector<HTMLInputElement>('input[name="kind"]')!.value;
     location.assign(`/manage/review?kind=${kind}&done=merge_matching&merged=${merged}`);
   });
 </script>
