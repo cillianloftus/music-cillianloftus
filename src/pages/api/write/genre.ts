@@ -40,6 +40,8 @@ export const POST: APIRoute = async ({ request, redirect }) => {
     switch (text('intent')) {
       case 'rename': {
         const kept = await renameGenre(text('id'), text('name'));
+        // From the genre's own page: back there (the kept genre's, after a merge).
+        if (text('from') === 'genre' && !json) return redirect(`/genre/${kept}`, 303);
         return back(kept === text('id') ? `done=renamed` : `done=merged`, `#genre-${kept}`);
       }
       case 'add_parent':

@@ -74,6 +74,25 @@ const list = (items: string[]) =>
         {genre.tracks} {genre.tracks === 1 ? 'track' : 'tracks'} · {genre.albums} {genre.albums === 1 ? 'album' : 'albums'}
       </p>
       {
+        Astro.locals.user && (
+          <details class="rename">
+            <summary>Edit</summary>
+            <form method="post" action="/api/write/genre">
+              <input type="hidden" name="intent" value="rename" />
+              <input type="hidden" name="id" value={id} />
+              <input type="hidden" name="from" value="genre" />
+              <label class="visually-hidden" for="genre-name">New name</label>
+              <input class="input" id="genre-name" name="name" value={genre.name} required maxlength="80" autocomplete="off" spellcheck="false" />
+              <button class="button" type="submit">Rename</button>
+            </form>
+            <p class="hint">
+              Renaming changes it everywhere; a name another genre already has merges the two.{' '}
+              <a href={`/manage/genres#genre-${id}`}>Move it in the tree</a>
+            </p>
+          </details>
+        )
+      }
+      {
         /* Just this genre, or with everything beneath it: a toggle, not a sentence. */
         genre.children.length > 0 && genre.tracksBeneath !== genre.tracks && (
           <nav class="scope" aria-label="Which tracks">
@@ -419,5 +438,30 @@ const list = (items: string[]) =>
 
   .scope a:hover {
     color: var(--text);
+  }
+
+  .rename summary {
+    width: fit-content;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .rename form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  .rename .input {
+    flex: 1 1 12rem;
+  }
+
+  .rename .hint {
+    margin-top: var(--space-1);
+    color: var(--text-muted);
+    font-size: var(--step--1);
   }
 </style>

@@ -74,6 +74,7 @@ function leafLabel(name: string, r: number): { lines: string[]; size: number } |
   <div class="wrap page">
     <PageHeader title="Genres" count={totalGenres}>
       {view === 'tree' ? <a href="/genres?view=circles">As circles</a> : <a href="/genres">As a tree</a>}
+      {Astro.locals.user && <a href="/manage/genres">Edit</a>}
     </PageHeader>
 
     {
