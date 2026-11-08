@@ -97,6 +97,7 @@ export async function recentReleaseGroups(viewerId: string | null, limit = 24): 
   const { results } = await env.DB.prepare(
     `SELECT ${SUMMARY_COLUMNS}
      FROM release_group g ${SUMMARY_JOINS}
+     WHERE coalesce(g.official, 1) = 1 OR g.keep_unofficial = 1
      ORDER BY g.created_at DESC
      LIMIT ?2`,
   )

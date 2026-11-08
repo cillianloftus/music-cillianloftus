@@ -87,6 +87,8 @@ albums AS (
   FROM release_group g
   LEFT JOIN v_release_score s ON s.release_group_id = g.id AND s.user_id = ?1
   WHERE g.status = 'released'
+    -- Bootlegs waiting to be cleared are not worth a rating.
+    AND (coalesce(g.official, 1) = 1 OR g.keep_unofficial = 1)
     AND NOT EXISTS (SELECT 1 FROM latest_rating lr
                     WHERE lr.entity_type = 'release_group' AND lr.entity_id = g.id)
 ),
