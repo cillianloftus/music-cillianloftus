@@ -24,6 +24,15 @@ export function enhancePreviews(root: Document | HTMLElement = document): void {
       const n = Number(field.value);
       return Number.isFinite(n) && n >= 0 && n <= 10 ? n : null;
     };
+    // The impact note only once there is an impact (one already written stays in view).
+    const note = form.querySelector<HTMLElement>('[data-impact-note]');
+    const noteText = note?.querySelector('textarea');
+    const showNote = () => {
+      if (note) note.hidden = !(value('impact') ?? 0) && !noteText?.value.trim();
+    };
+    form.addEventListener('input', showNote);
+    showNote();
+
     const update = () => {
       const axes = Object.fromEntries([...CRAFT_KEYS, ...ALBUM_KEYS].map((k) => [k, value(k)]));
       const composite = entityType === 'recording' ? craftComposite(axes, weights) : albumComposite(axes, weights);

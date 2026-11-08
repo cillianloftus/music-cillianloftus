@@ -6,6 +6,10 @@
  */
 import { scoreHue } from '../format';
 
+/** When the page last scrolled: a tap just after is stopping a scroll, not rating. */
+let lastScroll = 0;
+if (typeof window !== 'undefined') addEventListener('scroll', () => (lastScroll = Date.now()), { passive: true, capture: true });
+
 const CLEAR_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>';
 
 export function enhanceAxes(root: Document | HTMLElement = document): void {
@@ -82,16 +86,63 @@ export function enhanceAxes(root: Document | HTMLElement = document): void {
     };
     na?.addEventListener('change', applyNa);
 
-    range.addEventListener('input', () => {
+    const commit = () => {
       if (na?.checked) {
         na.checked = false;
         applyNa();
       }
       set(Number(range.value));
+    };
+
+    // A finger landing on a slider may be starting a scroll, not a rating.
+    // The slider jumps under it at once (the browser's doing), so nothing is
+    // kept until the touch shows what it is: sideways is a drag and counts;
+    // up or down is a scroll, and the slider goes back to what it was. A
+    // plain tap counts too, unless the page was just scrolling (that tap is
+    // stopping the scroll, not choosing a score).
+    let gesture: { before: string; x: number; y: number; state: 'pending' | 'drag' | 'scroll' } | null = null;
+    let ignoreClick = false;
+    const revert = () => {
+      if (!gesture) return;
+      set(gesture.before === '' ? null : Number(gesture.before), false);
+      if (na?.checked) applyNa();
+      ignoreClick = true;
+    };
+    range.addEventListener('pointerdown', (event) => {
+      ignoreClick = false;
+      gesture = event.pointerType === 'touch' ? { before: number.value, x: event.clientX, y: event.clientY, state: 'pending' } : null;
+    });
+    range.addEventListener('pointermove', (event) => {
+      if (gesture?.state !== 'pending') return;
+      const dx = Math.abs(event.clientX - gesture.x);
+      const dy = Math.abs(event.clientY - gesture.y);
+      if (dy > 8 && dy > dx) {
+        gesture.state = 'scroll';
+        revert();
+      } else if (dx > 6) {
+        gesture.state = 'drag';
+        commit();
+      }
+    });
+    const end = (cancelled: boolean) => {
+      if (!gesture) return;
+      if (gesture.state === 'scroll' || (gesture.state === 'pending' && (cancelled || Date.now() - lastScroll < 400))) revert();
+      else if (gesture.state === 'pending') commit();
+      gesture = null;
+    };
+    range.addEventListener('pointerup', () => end(false));
+    // The browser took the touch over for scrolling.
+    range.addEventListener('pointercancel', () => end(true));
+
+    range.addEventListener('input', () => {
+      // Mid-touch, it waits to see whether this is a drag (above).
+      if (gesture && gesture.state !== 'drag') return;
+      commit();
     });
     // A tap exactly on the resting position changes nothing, so a click on
     // an unset slider sets it too.
     range.addEventListener('click', () => {
+      if (ignoreClick) return;
       if (row.classList.contains('is-unset')) set(Number(range.value));
     });
     clear.addEventListener('click', () => {

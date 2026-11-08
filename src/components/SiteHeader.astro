@@ -205,6 +205,24 @@ const next = theme === 'dark' ? 'light' : 'dark';
     if (tab && last?.startsWith('/') && !here) tab.href = last;
   } catch {}
 
+  // A tab answers the moment it is touched, as an app's would: it shows as
+  // the current one at once, while the page it leads to is on its way.
+  const drawnCurrent = document.querySelector('.tabbar a[aria-current]');
+  const markCurrent = (link: Element | null) => {
+    for (const other of document.querySelectorAll('.tabbar a[aria-current]')) other.removeAttribute('aria-current');
+    link?.setAttribute('aria-current', 'page');
+  };
+  for (const link of document.querySelectorAll<HTMLAnchorElement>('.tabbar a:not(.search-link)')) {
+    link.addEventListener('click', (event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.defaultPrevented) return;
+      markCurrent(link);
+    });
+  }
+  // Coming back to this page by Back: the tabs as this page drew them.
+  addEventListener('pageshow', (event) => {
+    if (event.persisted) markCurrent(drawnCurrent);
+  });
+
   // Progressive enhancement: without JS the form posts and reloads.
   const form = document.querySelector<HTMLFormElement>('[data-theme-toggle]');
   form?.addEventListener('submit', (event) => {

@@ -36,13 +36,15 @@ interface Here {
   album_id: string | null;
   album_title: string | null;
   quality: number | null;
+  personal: number | null;
 }
 
 // The song in the catalogue: by its Spotify id, or as a listen already matched to it.
 const here = song
   ? await env.DB.prepare(
       `SELECT rec.id, rec.title, g.id AS album_id, g.title AS album_title,
-              (SELECT s.quality_score FROM v_recording_score s WHERE s.recording_id = rec.id AND s.user_id = ?2) AS quality
+              (SELECT s.quality_score FROM v_recording_score s WHERE s.recording_id = rec.id AND s.user_id = ?2) AS quality,
+              (SELECT s.personal_score FROM v_recording_score s WHERE s.recording_id = rec.id AND s.user_id = ?2) AS personal
        FROM recording rec
        LEFT JOIN track t ON t.recording_id = rec.id
        LEFT JOIN release r ON r.id = t.release_id
@@ -180,17 +182,14 @@ const ICON = {
             {
               song && here && (
                 <>
-                  <div class="links">
-                    <a href={`/track/${here.id}`}>Track page</a>
-                    {here.album_id && <a href={`/album/${here.album_id}`}>{here.album_title}</a>}
-                    {here.quality != null && (
-                      <span class="current-score">
-                        <Score quality={here.quality} size="s" /> now
+                  <section aria-labelledby="rate-heading" class="rate" data-rate>
+                    <div class="rate-head">
+                      <h2 id="rate-heading">Your rating</h2>
+                      {/* Redrawn after each save (the script below). */}
+                      <span data-now-score>
+                        <Score quality={here.quality} personal={here.personal} size="m" />
                       </span>
-                    )}
-                  </div>
-                  <section aria-labelledby="rate-heading">
-                    <h2 id="rate-heading" class="visually-hidden">Rate {here.title}</h2>
+                    </div>
                     <RatingSheet entityType="recording" entityId={here.id} current={history[0]} returnTo="/now" preview={{ weights: weights!, offset: calibration ?? 0 }} />
                   </section>
                   {credits.size > 0 && (
@@ -241,6 +240,7 @@ const ICON = {
 
 <script>
   import { enhanceAxes } from '../lib/client/axis-slider';
+  import { scoreTone } from '../lib/format';
   import { NowClock, fetchNow, type Track } from '../lib/client/now-clock';
   import { enhanceAutosave, flushAutosave } from '../lib/client/rating-autosave';
   import { enhancePreviews } from '../lib/client/rating-preview';
@@ -536,6 +536,43 @@ const ICON = {
       void send({ action: 'seek', positionMs: Math.round(Number(seek.value)) });
     });
 
+    // Each save says what the score is now: redraw it as the Score component
+    // draws it (same classes and scoping attributes, so its styles apply).
+    root.addEventListener('rating:saved', (event) => {
+      const { quality, personal } = (event as CustomEvent<{ quality: number | null; personal: number | null }>).detail;
+      const old = root.querySelector('[data-now-score] .score');
+      if (!old || quality == null) return;
+      const scoped = [...old.attributes].filter((a) => a.name.startsWith('data-astro-cid'));
+      const make = (className: string) => {
+        const el = document.createElement('span');
+        el.className = className;
+        for (const a of scoped) el.setAttribute(a.name, a.value);
+        return el;
+      };
+      const rounded = Math.round(quality);
+      const impact = personal != null ? Math.round(personal - quality) : 0;
+      const level = impact <= 0 ? 0 : impact <= 4 ? 1 : impact <= 7 ? 2 : 3;
+      const tone = scoreTone(rounded);
+      const score = make('score score--m');
+      const number = make(`tabular ${tone.className}`);
+      number.setAttribute('aria-hidden', 'true');
+      if (tone.style) number.setAttribute('style', tone.style);
+      number.textContent = String(rounded);
+      score.appendChild(number);
+      if (level > 0) {
+        const mark = make('mark');
+        mark.dataset.level = String(level);
+        mark.setAttribute('aria-hidden', 'true');
+        mark.title = `Impact ${impact} of 10`;
+        mark.textContent = '✦';
+        score.appendChild(mark);
+      }
+      const label = make('visually-hidden');
+      label.textContent = `Score ${rounded} out of 100${impact > 0 ? `, and an impact of ${impact} out of 10` : ''}`;
+      score.appendChild(label);
+      old.replaceWith(score);
+    });
+
     // Import the album of a song not in the library yet.
     root.addEventListener('click', async (event) => {
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-import]');
@@ -599,17 +636,19 @@ const ICON = {
     width: 100%;
   }
 
-  /* The names lead to their pages, but read as titles, not a row of links. */
+  /* The names lead to their pages: titles first, with a faint underline
+     that says they can be followed. */
   .titles :global(a) {
     color: inherit;
-    text-decoration: none;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 30%, transparent);
+    text-decoration-thickness: from-font;
+    text-underline-offset: 0.18em;
     border-radius: var(--radius-s);
   }
 
   .titles :global(a:hover) {
-    text-decoration: underline;
-    text-decoration-thickness: from-font;
-    text-underline-offset: 0.15em;
+    text-decoration-color: currentColor;
   }
 
   h1 {
@@ -771,21 +810,17 @@ const ICON = {
     gap: var(--space-4);
   }
 
-  .links {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-2) var(--space-4);
-    font-size: var(--step--1);
-    font-weight: 600;
+  .rate {
+    display: grid;
+    gap: var(--space-2);
   }
 
-  .current-score {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    margin-left: auto;
-    color: var(--text-muted);
+  /* "Your rating" with the score it makes, kept current as it saves. */
+  .rate-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
   }
 
   h2 {

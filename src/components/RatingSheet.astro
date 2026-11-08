@@ -61,12 +61,12 @@ const capitalise = (s: string) => s[0]!.toUpperCase() + s.slice(1);
 
   <div class="impact">
     <AxisSlider name="impact" label="Impact" hint="Rare: life before it and after." value={current?.impact} tone="accent" />
-    <details class="note" open={current?.impact_note ? true : undefined}>
-      <summary>When and what</summary>
-      <label for="impact_note" class="visually-hidden">When and what</label>
+    {/* Only once there is an impact to describe (rating-preview.ts shows and hides it). */}
+    <div class="note" data-impact-note hidden={!current?.impact && !current?.impact_note}>
+      <label for="impact_note">When and what</label>
       <textarea class="input" id="impact_note" name="impact_note" rows="2" maxlength="500" aria-describedby="impact-note-hint">{current?.impact_note ?? ''}</textarea>
       <span class="muted" id="impact-note-hint">Public. A line about where you were.</span>
-    </details>
+    </div>
   </div>
 
   <div class="save-row">
@@ -123,19 +123,20 @@ const capitalise = (s: string) => s[0]!.toUpperCase() + s.slice(1);
     font-size: var(--step--1);
   }
 
-  .note summary {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
+  .note {
+    display: grid;
+    gap: var(--space-1);
+    padding-bottom: var(--space-2);
+  }
+
+  .note[hidden] {
+    display: none;
+  }
+
+  .note label {
     color: var(--text-muted);
     font-size: var(--step--1);
     font-weight: 600;
-    cursor: pointer;
-  }
-
-  .note[open] {
-    display: grid;
-    gap: var(--space-1);
   }
 
   .save-row {

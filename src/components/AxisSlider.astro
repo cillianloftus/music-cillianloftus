@@ -151,6 +151,8 @@ const hintId = hint ? `${name}-hint` : undefined;
   .axis :global(input[type='range']) {
     flex: 1;
     min-width: 0;
+    /* Up and down is the page scrolling, not a rating (axis-slider.ts). */
+    touch-action: pan-y;
     height: var(--target);
     margin: 0;
     background: transparent;

@@ -1,4 +1,5 @@
 import type { APIRoute } from 'astro';
+import { env } from 'cloudflare:workers';
 import { addRating, ratingFormFields, ratingInput, safeReturnPath } from '../../../lib/ratings';
 
 /**
@@ -28,7 +29,19 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
 
   try {
     const id = await addRating(user.id, parsed.data);
-    if (wantsJson) return Response.json({ id });
+    if (wantsJson) {
+      // The score it makes now, for the page to show without reloading.
+      const { entity_type: type, entity_id: entity } = parsed.data;
+      const score = await env.DB.prepare(
+        type === 'recording'
+          ? 'SELECT quality_score AS quality, personal_score AS personal FROM v_recording_score WHERE recording_id = ? AND user_id = ?'
+          : 'SELECT quality_score AS quality, personal_score AS personal FROM v_release_score WHERE release_group_id = ? AND user_id = ?',
+      )
+        .bind(entity, user.id)
+        .first<{ quality: number | null; personal: number | null }>()
+        .catch(() => null);
+      return Response.json({ id, quality: score?.quality ?? null, personal: score?.personal ?? null });
+    }
   } catch (error) {
     console.error('Rating insert failed', error);
     if (wantsJson) return Response.json({ error: 'That rating could not be saved.' }, { status: 500 });

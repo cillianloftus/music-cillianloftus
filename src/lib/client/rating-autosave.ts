@@ -68,10 +68,12 @@ export function enhanceAutosave(root: Document | HTMLElement = document): void {
           // Still delivered when the page is going away.
           keepalive: leaving,
         });
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        const data = (await res.json().catch(() => ({}))) as { error?: string; quality?: number | null; personal?: number | null };
         if (res.ok) {
           saved = now;
           everSaved = true;
+          // For a page showing the score: what this rating makes it now.
+          form.dispatchEvent(new CustomEvent('rating:saved', { bubbles: true, detail: { quality: data.quality ?? null, personal: data.personal ?? null } }));
           say(snapshot(form) === saved ? 'Saved' : 'Unsaved changes');
           // Pages showing scores are out of date now.
           try {

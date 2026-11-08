@@ -40,6 +40,14 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
+    {/* Pages behind the tabs and the mini player start loading as a finger
+        lands, a beat before the tap completes. Only then, not ahead of time:
+        every fetch after a rating misses the page cache and reads D1. */}
+    <script
+      type="speculationrules"
+      is:inline
+      set:html={JSON.stringify({ prefetch: [{ where: { selector_matches: '.tabbar a, now-bar a' }, eagerness: 'conservative' }] })}
+    />
     <script is:inline>
       // The text size chosen on Manage, applied before anything paints.
       try {
