@@ -240,6 +240,16 @@ const onNow = Astro.url.pathname === '/now';
     text-decoration: none;
   }
 
+  /* Pressed: a slight give, in place of the browser's tap flash. */
+  .nb-link:active,
+  .nb-btn:active {
+    opacity: 0.7;
+  }
+
+  .nb-btn:active {
+    transform: scale(0.92);
+  }
+
   .nb-art {
     width: 2.5rem;
     height: 2.5rem;

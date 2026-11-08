@@ -113,6 +113,8 @@
 
 html {
   background: var(--bg);
+  /* No blue flash on every tap (Android): controls show their own pressed state. */
+  -webkit-tap-highlight-color: transparent;
   font-size: calc(100% * var(--ui-scale, 1));
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
