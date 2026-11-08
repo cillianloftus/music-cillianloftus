@@ -11,6 +11,7 @@ import {
   artistAppearances,
   artistCollaborators,
   artistReleaseGroups,
+  hiddenUnofficial,
   artistTopTracks,
   redirectFor,
 } from '../../lib/catalogue';
@@ -50,7 +51,12 @@ const [albums, appearances, topTracks, collaborators, about, images, genres, bre
 // singles; otherwise they join the section above. Live albums, compilations
 // and soundtracks are always their own, since they are a different thing.
 const ENOUGH = 3;
-const ofType = (t: string) => albums.filter((a) => a.type === t).length;
+// Remix singles and EPs ("Illusion (Honey Dijon remix)") are versions of a
+// song, not releases to browse past: their own shelf, folded until opened.
+const isVersion = (a: { type: string; title: string }) => (a.type === 'single' || a.type === 'ep') && splitVersion(a.title).version !== null;
+const versionReleases = albums.filter(isVersion);
+const releases = albums.filter((a) => !isVersion(a));
+const ofType = (t: string) => releases.filter((a) => a.type === t).length;
 const ownMixtapes = ofType('mixtape') >= ENOUGH;
 const ownEps = ofType('ep') >= ENOUGH;
 const ownSingles = ofType('single') >= ENOUGH;
@@ -86,9 +92,13 @@ const SHELVES = [
   { key: 'compilations', heading: 'Compilations', types: ['compilation'] },
   { key: 'soundtracks', heading: 'Soundtracks', types: ['soundtrack'] },
 ];
-const shelves = SHELVES.map((s) => ({ ...s, items: albums.filter((a) => s.types.includes(a.type)) })).filter((s) => s.items.length > 0);
+const shelves = [
+  ...SHELVES.map((s) => ({ ...s, items: releases.filter((a) => s.types.includes(a.type)), closed: false })),
+  { key: 'versions', heading: 'Remixes and versions', types: [], items: versionReleases, closed: true },
+].filter((s) => s.items.length > 0);
 const user = Astro.locals.user;
 const refreshed = Astro.url.searchParams.get('refreshed');
+const hidden = user ? await hiddenUnofficial(artist.id) : 0;
 
 // "Born 14 November 2000 (25) · Los Angeles". Their kind (person, group)
 // stays behind the scenes: it decides "Born" or "Formed", nothing more.
@@ -179,6 +189,7 @@ const facts = [
   active && count ? null : span,
   average !== null ? `averaging ${average} across ${rated.length} rated` : null,
 ].filter(Boolean);
+import { splitVersion } from '../../lib/versions';
 ---
 
 <Base
@@ -501,7 +512,7 @@ const facts = [
       ) : (
         shelves.map((shelf) => (
           <section aria-labelledby={`releases-${shelf.key}`}>
-            <details class="shelf" open data-shelf={shelf.key}>
+            <details class="shelf" open={!shelf.closed} data-shelf={shelf.key} data-closed={shelf.closed ? '' : undefined}>
               <summary>
                 <h2 id={`releases-${shelf.key}`}>
                   {shelf.heading} <span class="count tabular">{shelf.items.length}</span>
@@ -522,22 +533,38 @@ const facts = [
         ))
       )
     }
+    {
+      hidden > 0 && (
+        <p class="hidden-note">
+          {hidden} not-official {hidden === 1 ? 'release' : 'releases'} kept off this page. <a href="/manage/unofficial">Clear them</a>
+        </p>
+      )
+    }
     {/* Inline, straight after the shelves: folded kinds close before they paint. */}
     <script is:inline>
       (() => {
-        const KEY = 'folded-shelves';
-        let folded = [];
-        try {
-          folded = JSON.parse(localStorage.getItem(KEY) || '[]');
-        } catch {}
+        // Folded shelves, and opened ones that start folded (remixes).
+        const read = (key) => {
+          try {
+            return JSON.parse(localStorage.getItem(key) || '[]');
+          } catch {
+            return [];
+          }
+        };
+        let folded = read('folded-shelves');
+        let opened = read('opened-shelves');
         for (const shelf of document.querySelectorAll('details[data-shelf]')) {
-          if (folded.includes(shelf.dataset.shelf)) shelf.open = false;
+          const kind = shelf.dataset.shelf;
+          const closedFirst = shelf.hasAttribute('data-closed');
+          shelf.open = closedFirst ? opened.includes(kind) : !folded.includes(kind);
           shelf.addEventListener('toggle', () => {
-            const kind = shelf.dataset.shelf;
             folded = folded.filter((k) => k !== kind);
-            if (!shelf.open) folded.push(kind);
+            opened = opened.filter((k) => k !== kind);
+            if (closedFirst && shelf.open) opened.push(kind);
+            if (!closedFirst && !shelf.open) folded.push(kind);
             try {
-              localStorage.setItem(KEY, JSON.stringify(folded));
+              localStorage.setItem('folded-shelves', JSON.stringify(folded));
+              localStorage.setItem('opened-shelves', JSON.stringify(opened));
             } catch {}
           });
         }
@@ -757,6 +784,11 @@ const facts = [
 </script>
 
 <style>
+  .hidden-note {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
   /* Release shelves fold away; which kinds are folded is remembered. */
   .shelf > summary {
     display: flex;

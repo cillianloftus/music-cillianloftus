@@ -7,6 +7,8 @@ describe('splitVersion', () => {
     expect(splitVersion('Song - Sped Up')).toEqual({ song: 'song', version: 'Sped Up' });
     expect(splitVersion('Song [Acoustic] (feat. Someone)')).toEqual({ song: 'song', version: 'Acoustic' });
     expect(splitVersion('Song (Live at Wembley)').version).toBe('Live at Wembley');
+    expect(splitVersion('Cold Heart Remixes')).toEqual({ song: 'cold heart', version: 'Remixes' });
+    expect(splitVersion('Pretty Please (Midland refix)').version).toBe('Midland refix');
   });
 
   it('leaves the song itself, and brackets that are part of a title, alone', () => {

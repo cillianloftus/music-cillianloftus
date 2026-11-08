@@ -13,7 +13,7 @@ import { normaliseTitle } from './text';
 
 /** Words that make a bracket or a " - " tail name a version. */
 const VERSION_WORDS =
-  /\b(re-?mix(es|ed)?|mix|edit|re-?work(ed)?|flip|vip|bootleg|sped[ -]?up|speed ?up|slowed|reverb|nightcore|acoustic|live|demo|instrumental|a ?cappella|acapella|version|stripped|extended|piano|orchestral|mash-?up|remake|re-?recorded|unplugged|rendition|dub|session|cover|visualiz?ser|8d|chopped|screwed)\b/i;
+  /\b(re-?mix(es|ed)?|rmx|refix|re-?edit|mix|edit|re-?work(ed)?|flip|vip|bootleg|sped[ -]?up|speed ?up|slowed|reverb|nightcore|acoustic|live|demo|instrumental|a ?cappella|acapella|version|stripped|extended|piano|orchestral|mash-?up|remake|re-?recorded|unplugged|rendition|dub|session|cover|visualiz?ser|8d|chopped|screwed)\b/i;
 
 /** "feat. X", "ft. X", "with X" in brackets, and a trailing "feat. X". */
 const FEATURING = /\s*[([](?:feat\.?|ft\.?|featuring|with)\s[^)\]]*[)\]]|\s+(?:feat\.?|ft\.?|featuring)\s.+$/giu;
@@ -31,6 +31,11 @@ export function splitVersion(title: string): TitleParts {
   rest = rest.replace(/\s*[([]([^)\]]+)[)\]]/gu, (match, inner: string) => {
     if (!VERSION_WORDS.test(inner)) return match;
     versions.push(inner.trim());
+    return '';
+  });
+  // A bare "Remixes" or "The Remixes" at the end: "Cold Heart Remixes".
+  rest = rest.replace(/\s+((?:the\s+)?re-?mix(?:es|ed)|the\s+remix)$/iu, (_match, tail: string) => {
+    versions.push(tail.trim());
     return '';
   });
   rest = rest.replace(/\s+[-–—]\s+([^-–—]+)$/u, (match, tail: string) => {

@@ -306,11 +306,27 @@ export async function artistReleaseGroups(artistId: string, viewerId: string | n
        SELECT entity_id FROM artist_credit
        WHERE entity_type = 'release_group' AND artist_id = ?2 AND role IN ('primary', 'featured')
      )
+       -- Bootlegs and fan-made releases stay off the page while they wait
+       -- to be cleared on Manage › Not official, unless kept on purpose.
+       AND (coalesce(g.official, 1) = 1 OR g.keep_unofficial = 1)
      ORDER BY g.first_release_date IS NULL, g.first_release_date DESC`,
   )
     .bind(viewerId, artistId)
     .all<Omit<ReleaseGroupSummary, 'credits'>>();
   return withArtistLines(results);
+}
+
+/** How many of an artist's releases are hidden as not official, waiting to be cleared. */
+export async function hiddenUnofficial(artistId: string): Promise<number> {
+  return (
+    (await env.DB.prepare(
+      `SELECT count(*) AS n FROM release_group g
+       WHERE g.official = 0 AND g.keep_unofficial = 0
+         AND g.id IN (SELECT entity_id FROM artist_credit WHERE entity_type = 'release_group' AND artist_id = ? AND role IN ('primary', 'featured'))`,
+    )
+      .bind(artistId)
+      .first<number>('n')) ?? 0
+  );
 }
 
 /** Credits on other people's records: production, writing, features. */
