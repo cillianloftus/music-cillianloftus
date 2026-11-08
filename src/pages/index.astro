@@ -316,7 +316,7 @@ const statItems = [
                     <CoverArt artKey={t.art_key} title={t.title} sizes="11rem" />
                   </a>
                   <a class="track-title" href={`/track/${t.id}`}>{t.title}</a>
-                  <span class="muted small"><CreditLine credits={t.credits} /></span>
+                  <span class="muted small track-by"><CreditLine credits={t.credits} /></span>
                   <span class="track-foot">
                     {t.album_id ? <a class="muted small album-link" href={`/album/${t.album_id}`}>{t.album_title}</a> : <span />}
                     <Score quality={t.quality_score} personal={t.personal_score} size="s" />
@@ -443,6 +443,7 @@ const statItems = [
                       )}
                     </span>
                   </p>
+                  <time class="when-inline" datetime={r.rated_at}>{formatRelative(r.rated_at)}</time>
                   {r.impact_note && <p class="rating-note">“{r.impact_note}”</p>}
                 </div>
                 <div class="rating-side">
@@ -852,6 +853,25 @@ const statItems = [
     white-space: nowrap;
   }
 
+  /* Phones: the time under the title, the score alone at the side. */
+  .when-inline {
+    display: none;
+  }
+
+  @media (max-width: 39.99rem) {
+    .rating-side time {
+      display: none;
+    }
+
+    .when-inline {
+      display: block;
+    }
+
+    .ratings li {
+      gap: var(--space-3);
+    }
+  }
+
   /* Recently added */
   .grid {
     display: grid;
@@ -948,10 +968,23 @@ const statItems = [
   }
 
   /* A favourite track: its cover, title, artists, album and score. */
+  /* Cards in a row share a height; the album and score keep to the
+     bottom of each, so they line up however long a title runs. */
   .track-card {
     position: relative;
     display: grid;
+    grid-template-rows: auto auto auto 1fr;
     gap: 2px;
+  }
+
+  .track-foot {
+    align-self: end;
+  }
+
+  .track-by {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .track-art {
