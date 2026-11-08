@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildGenreTree, deriveAlbumGenres, packGenres, type GenreRow } from './genres';
+import { buildGenreTree, deriveAlbumGenres, type GenreRow } from './genres';
 
 const row = (id: string, name: string, parent_id: string | null, tracks: number, also: string[] = []): GenreRow => ({
   id,
@@ -49,29 +49,6 @@ describe('buildGenreTree', () => {
     expect(under('blues').map((c) => [c.name, c.secondary, c.key])).toEqual([['blues rock', true, 'blues/br']]);
     // Each parent's total includes it: blues rock is blues.
     expect(tree.find((n) => n.name === 'blues')!.total).toBe(7);
-  });
-});
-
-describe('packGenres', () => {
-  const circles = packGenres(buildGenreTree(rows), 800);
-
-  it('gives a parent’s own tracks a circle of their own', () => {
-    const self = circles.find((c) => c.id === 'pop#self');
-    expect(self?.genreId).toBe('pop');
-    expect(self).toMatchObject({ self: true, value: 4, leaf: true });
-  });
-
-  it('sizes area by track count', () => {
-    const area = (id: string) => Math.PI * circles.find((c) => c.id === id)!.r ** 2;
-    // indie pop's own 10 tracks against rock's 5: twice the area.
-    expect(area('pop/indie#self') / area('rock')).toBeCloseTo(2, 1);
-  });
-
-  it('keeps every circle inside the canvas', () => {
-    for (const c of circles) {
-      expect(c.x - c.r).toBeGreaterThanOrEqual(-0.001);
-      expect(c.x + c.r).toBeLessThanOrEqual(800.001);
-    }
   });
 });
 

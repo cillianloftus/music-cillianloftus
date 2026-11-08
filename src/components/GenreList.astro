@@ -12,7 +12,7 @@ const plural = (n: number) => `${n} ${n === 1 ? 'track' : 'tracks'}`;
 <ul role="list">
   {
     nodes.map((node) => (
-      <li>
+      <li data-name={node.name}>
         <a class="name" href={`/genre/${node.id}`}>{node.name}</a>{' '}
         <span class="count">
           {plural(node.total)}

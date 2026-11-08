@@ -6,7 +6,6 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { hierarchy, pack } from 'd3-hierarchy';
 
 export interface GenreRow {
   id: string;
@@ -42,6 +41,28 @@ export async function genreRows(): Promise<GenreRow[]> {
      ORDER BY g.name`,
   ).all<Omit<GenreRow, 'also'> & { also: string }>();
   return results.map((r) => ({ ...r, also: JSON.parse(r.also ?? '[]') as string[] }));
+}
+
+/**
+ * Everything beneath one genre, on its primary parents only, counted the
+ * same way as genreRows: its subgenres' map on the genre's page, without
+ * counting the whole library.
+ */
+export async function genreSubtreeRows(id: string): Promise<GenreRow[]> {
+  const { results } = await env.DB.prepare(
+    `WITH RECURSIVE below(id) AS (
+       SELECT id FROM genre WHERE parent_id = ?1
+       UNION SELECT g.id FROM genre g JOIN below b ON g.parent_id = b.id
+     )
+     SELECT g.id, g.name, g.parent_id,
+            (SELECT count(DISTINCT vg.recording_id) FROM v_recording_genre vg WHERE vg.genre_id = g.id) AS tracks
+     FROM genre g WHERE g.id IN (SELECT id FROM below)
+     ORDER BY g.name`,
+  )
+    .bind(id)
+    .all<Omit<GenreRow, 'also'>>();
+  // The genre itself is not among them, so its children are the roots.
+  return results.map((r) => ({ ...r, also: [] }));
 }
 
 /**
@@ -86,87 +107,6 @@ export function buildGenreTree(rows: GenreRow[]): GenreTreeNode[] {
     .map((c) => build(c.row, false, c.row.id, new Set()))
     .filter((node) => node.total > 0)
     .sort((a, b) => b.total - a.total);
-}
-
-export interface PackedCircle {
-  /** Unique per circle (a genre under two parents is two circles). */
-  id: string;
-  /** The genre itself, for links. */
-  genreId: string;
-  name: string;
-  /** Drawn under one of its further parents. */
-  secondary: boolean;
-  x: number;
-  y: number;
-  r: number;
-  depth: number;
-  /** Tracks this circle's area stands for. */
-  value: number;
-  /** True for the circle holding a parent genre's own tracks. */
-  self: boolean;
-  leaf: boolean;
-  /** The top-level genre it sits under (itself, at the top): its colour family. */
-  family: string;
-  /** The enclosing circle's id; null at the top level. */
-  parent: string | null;
-}
-
-interface PackDatum {
-  id: string;
-  genreId: string;
-  name: string;
-  value: number;
-  self: boolean;
-  secondary: boolean;
-  children?: PackDatum[];
-}
-
-/**
- * Circle-packing layout, computed on the server. In a pack, only leaves
- * have area, so a parent's own tracks get a child circle of their own
- * ("self"); otherwise a parent tagged directly would look empty.
- */
-export function packGenres(roots: GenreTreeNode[], size: number): PackedCircle[] {
-  const toDatum = (node: GenreTreeNode): PackDatum => {
-    const base = { id: node.key, genreId: node.id, name: node.name, secondary: node.secondary };
-    if (node.children.length === 0) return { ...base, value: node.tracks, self: false };
-    const children = node.children.map(toDatum);
-    if (node.tracks > 0) children.push({ ...base, id: `${node.key}#self`, value: node.tracks, self: true });
-    return { ...base, value: 0, self: false, children };
-  };
-
-  const root = hierarchy<PackDatum>({
-    id: 'root',
-    genreId: 'root',
-    name: 'All genres',
-    value: 0,
-    self: false,
-    secondary: false,
-    children: roots.map(toDatum),
-  })
-    .sum((d) => (d.children ? 0 : d.value))
-    .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
-
-  return pack<PackDatum>()
-    .size([size, size])
-    .padding((node) => (node.depth === 0 ? 6 : 4))(root)
-    .descendants()
-    .filter((node) => node.depth > 0)
-    .map((node) => ({
-      id: node.data.id,
-      genreId: node.data.genreId,
-      name: node.data.name,
-      secondary: node.data.secondary,
-      x: node.x,
-      y: node.y,
-      r: node.r,
-      depth: node.depth,
-      value: node.value ?? 0,
-      self: node.data.self,
-      leaf: !node.children,
-      family: node.ancestors().find((a) => a.depth === 1)?.data.name ?? node.data.name,
-      parent: node.parent && node.parent.depth > 0 ? node.parent.data.id : null,
-    }));
 }
 
 export class GenreError extends Error {}

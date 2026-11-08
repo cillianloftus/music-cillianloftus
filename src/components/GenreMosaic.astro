@@ -1,0 +1,278 @@
+---
+/**
+ * The genre map (src/lib/genre-mosaic.ts): one tall layout for phones and
+ * one wide for everything larger, each a set of positioned links. Every
+ * tile is a real link with its full name and count, whether or not the
+ * name fits on it; the list beneath the map carries the same as text.
+ */
+import { hueOf } from '../lib/art/playlist';
+import { layoutMosaic, SHAPES, SUB_SHAPES, type MosaicTile } from '../lib/genre-mosaic';
+import type { GenreTreeNode } from '../lib/genres';
+
+interface Props {
+  nodes: GenreTreeNode[];
+  /** On a genre's own page: that genre, whose own tracks get a tile. */
+  self?: { id: string; name: string; tracks: number };
+  /** Colour everything as this family. */
+  family?: string;
+  label: string;
+  /** Shorter shapes, for a genre's page. */
+  compact?: boolean;
+  /** Where a "+N more" leads when it has no genre of its own to open. */
+  moreHref?: string;
+}
+
+const { nodes, self, family, label, compact = false, moreHref = '#all-genres' } = Astro.props;
+const sizes = compact ? SUB_SHAPES : SHAPES;
+const shapes = (['tall', 'wide'] as const).map((name) => ({
+  name,
+  shape: sizes[name],
+  tiles: layoutMosaic(nodes, sizes[name], { self, family }),
+}));
+
+const n = (x: number) => x.toLocaleString('en-GB');
+const tracks = (x: number) => `${n(x)} ${x === 1 ? 'track' : 'tracks'}`;
+const href = (t: MosaicTile) => (t.kind === 'more' && (!t.genreId || t.genreId === self?.id) ? moreHref : t.genreId ? `/genre/${t.genreId}` : moreHref);
+const describe = (t: MosaicTile) =>
+  t.kind === 'more'
+    ? `${t.folded} smaller genres: ${t.names.join(', ')}`
+    : t.kind === 'group'
+      ? t.name
+      : t.kind === 'self'
+        ? `${t.name} itself, ${tracks(t.value)}`
+        : `${t.name}, ${tracks(t.value)}`;
+const style = (t: MosaicTile) =>
+  [
+    `--x:${t.x}`,
+    `--y:${t.y}`,
+    `--w:${t.w}`,
+    `--h:${t.h}`,
+    `--hue:${hueOf(t.family) + t.shift}`,
+    `--shade:${t.shade.toFixed(3)}`,
+    t.label ? `--fs:${t.label}` : '',
+    `--i:${Math.min(t.order, 60)}`,
+  ]
+    .filter(Boolean)
+    .join(';');
+---
+
+{
+  shapes[0]!.tiles.length > 0 && (
+    <nav class="mosaics" aria-label={label}>
+      {shapes.map(({ name, shape, tiles }) => (
+        <div class="mosaic" data-shape={name} style={`aspect-ratio:${shape.width}/${shape.height};--u:${(100 / shape.width).toFixed(4)}`}>
+          {tiles.map((t) =>
+            t.kind === 'group' ? (
+              <div class="t group" style={style(t)}>
+                <a class="head" href={href(t)} aria-label={describe(t)} title={describe(t)}>
+                  {t.label && <span class="name">{t.name}</span>}
+                </a>
+              </div>
+            ) : (
+              <a class:list={['t', t.kind]} href={href(t)} style={style(t)} aria-label={describe(t)} title={describe(t)}>
+                {t.kind === 'more' && (
+                  <span class="names" aria-hidden="true">
+                    {t.names.join(' · ')}
+                  </span>
+                )}
+                {t.label && <span class="name">{t.kind === 'more' ? `+${t.name}` : t.name}</span>}
+                {t.label && t.count && <span class="n">{n(t.value)}</span>}
+              </a>
+            ),
+          )}
+        </div>
+      ))}
+    </nav>
+  )
+}
+
+<style>
+  .mosaics {
+    width: 100%;
+  }
+
+  .mosaic {
+    position: relative;
+    width: 100%;
+    container-type: inline-size;
+  }
+
+  @media (max-width: 39.99rem) {
+    .mosaic[data-shape='wide'] {
+      display: none;
+    }
+  }
+
+  @media (min-width: 40rem) {
+    .mosaic[data-shape='tall'] {
+      display: none;
+    }
+  }
+
+  /* Units of the layout, as a share of the map's width. */
+  .t {
+    --unit: calc(var(--u) * 1cqi);
+    position: absolute;
+    left: calc(var(--x) * 1%);
+    top: calc(var(--y) * 1%);
+    width: calc(var(--w) * 1%);
+    height: calc(var(--h) * 1%);
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: calc(2 * var(--unit));
+    padding: calc(6 * var(--unit)) calc(8 * var(--unit));
+    overflow: hidden;
+    border-radius: calc(7 * var(--unit));
+    font-size: calc(var(--fs, 12) * 1cqi);
+    line-height: 1.12;
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Colour: the family's hue, deeper and richer the bigger the genre.
+     Lightness ranges keep labels above 5:1 on every hue in both modes. */
+  .tile,
+  .self {
+    color: oklch(0.98 0.015 var(--hue));
+    background: linear-gradient(
+      150deg,
+      oklch(calc(0.4 + 0.13 * var(--shade)) calc(0.06 + 0.1 * var(--shade)) var(--hue)),
+      oklch(calc(0.32 + 0.12 * var(--shade)) calc(0.055 + 0.07 * var(--shade)) calc(var(--hue) + 16))
+    );
+    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.1);
+    text-shadow: 0 1px 2px oklch(0 0 0 / 0.25);
+  }
+
+  .more {
+    color: oklch(0.85 0.04 var(--hue));
+    background: repeating-linear-gradient(
+      135deg,
+      oklch(0.32 0.04 var(--hue) / 0.55) 0 calc(1.5 * var(--unit)),
+      transparent calc(1.5 * var(--unit)) calc(6 * var(--unit))
+    );
+    box-shadow: inset 0 0 0 1px oklch(0.36 0.04 var(--hue));
+  }
+
+  /* What a "more" holds, set small behind its label, fading out where
+     the tile runs out of room. */
+  .names {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    font-size: calc(11 * var(--unit));
+    font-weight: 600;
+    line-height: 1.45;
+    opacity: 0.5;
+    -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent 85%);
+    mask-image: linear-gradient(to bottom, #000 30%, transparent 85%);
+  }
+
+  .group {
+    justify-content: flex-start;
+    padding: 0;
+    background: oklch(0.2 0.03 var(--hue));
+    box-shadow: inset 0 0 0 1px oklch(0.33 0.06 var(--hue));
+    font-size: calc(var(--fs, 12) * 1cqi);
+  }
+
+  .head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    height: calc(24 * var(--unit));
+    padding: calc(5 * var(--unit)) calc(8 * var(--unit)) 0;
+    color: oklch(0.88 0.1 var(--hue));
+    font-weight: 750;
+    letter-spacing: 0.01em;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .name {
+    font-weight: 750;
+    letter-spacing: -0.01em;
+    hyphens: none;
+    text-wrap: balance;
+  }
+
+  .n {
+    font-size: max(0.72em, calc(10.5 * var(--unit)));
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.78;
+  }
+
+  .head .n {
+    font-size: 0.85em;
+  }
+
+  :global([data-theme='light']) .tile,
+  :global([data-theme='light']) .self {
+    color: var(--text);
+    background: linear-gradient(
+      150deg,
+      oklch(calc(0.93 - 0.13 * var(--shade)) calc(0.03 + 0.07 * var(--shade)) var(--hue)),
+      oklch(calc(0.89 - 0.12 * var(--shade)) calc(0.03 + 0.06 * var(--shade)) calc(var(--hue) + 22))
+    );
+    box-shadow: inset 0 0 0 1px oklch(0.8 0.05 var(--hue) / 0.6);
+    text-shadow: none;
+  }
+
+  :global([data-theme='light']) .more {
+    color: oklch(0.4 0.06 var(--hue));
+    background: repeating-linear-gradient(
+      135deg,
+      oklch(0.85 0.05 var(--hue) / 0.7) 0 calc(1.5 * var(--unit)),
+      transparent calc(1.5 * var(--unit)) calc(6 * var(--unit))
+    );
+    box-shadow: inset 0 0 0 1px oklch(0.82 0.05 var(--hue));
+  }
+
+  :global([data-theme='light']) .group {
+    background: oklch(0.965 0.02 var(--hue));
+    box-shadow: inset 0 0 0 1px oklch(0.84 0.05 var(--hue));
+  }
+
+  :global([data-theme='light']) .head {
+    color: oklch(0.4 0.11 var(--hue));
+  }
+
+  @media (hover: hover) {
+    a.t,
+    .head {
+      transition: filter 0.15s ease;
+    }
+
+    a.t:hover,
+    .group:has(.head:hover) {
+      filter: brightness(1.18) saturate(1.1);
+    }
+
+    :global([data-theme='light']) a.t:hover,
+    :global([data-theme='light']) .group:has(.head:hover) {
+      filter: brightness(0.96) saturate(1.15);
+    }
+  }
+
+  a.t:focus-visible,
+  .head:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: -3px;
+    z-index: 1;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .t {
+      animation: tile-in 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      animation-delay: calc(var(--i) * 9ms);
+    }
+
+    @keyframes tile-in {
+      from {
+        opacity: 0;
+        transform: scale(0.94);
+      }
+    }
+  }
+</style>

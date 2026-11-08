@@ -1,154 +1,67 @@
 ---
 /**
- * The genre tree, drawn as a tree (GenreTreeArt) or, with ?view=circles,
- * as a circle packing: each circle's area is the number of tracks in that
- * genre. Laid out on the server (d3-hierarchy) and sent as
- * plain SVG, so it renders without JavaScript and without layout shift.
- * The nested list below carries the same information as text.
+ * Every genre in the library as a map (GenreMosaic): area is tracks, each
+ * family a panel of its subgenres. Below it, the whole tree as a list,
+ * one family at a time, with a box to find a genre by name.
  */
 import Base from '../layouts/Base.astro';
 import PageHeader from '../components/PageHeader.astro';
 import GenreList from '../components/GenreList.astro';
-import GenreTreeArt from '../components/GenreTreeArt.astro';
-import { growTree } from '../lib/genre-tree-art';
-import { hueOf } from '../lib/art/playlist';
-import { buildGenreTree, genreRows, packGenres } from '../lib/genres';
+import GenreMosaic from '../components/GenreMosaic.astro';
+import { buildGenreTree, genreRows, type GenreTreeNode } from '../lib/genres';
 
-const SIZE = 800;
 const rows = await genreRows();
 const tree = buildGenreTree(rows);
-const view = Astro.url.searchParams.get('view') === 'circles' ? 'circles' : 'tree';
-const art = view === 'tree' ? growTree(rows) : null;
-const circles = view === 'circles' ? packGenres(tree, SIZE) : [];
-const largestLeaf = Math.max(1, ...circles.filter((c) => c.leaf).map((c) => c.value));
-const totalGenres = art ? art.count : circles.filter((c) => !c.self).length;
-
-// A group's name goes along its top edge, but only where its children leave
-// that strip clear; otherwise it would sit on top of a child's label.
-const clearAtTop = (group: (typeof circles)[number]) =>
-  circles.filter((c) => c.parent === group.id).every((c) => c.y - c.r > group.y - group.r + 30);
-
-/**
- * Leaf colour strength, 0 to 1 by square root so small genres stay
- * visible. Hue is the genre family's, the same hash the playlist art uses,
- * so a family looks alike everywhere. Fills are OKLCH, whose lightness is
- * perceptual: the ranges in the styles keep labels at 5.8:1 or better
- * against every hue in both modes, where HSL would let yellows fail.
- */
-const mix = (value: number) => Math.sqrt(value / largestLeaf).toFixed(3);
-
-/** Average glyph width of the bold label face, as a share of its size. */
-const GLYPH = 0.58;
-const MIN_SIZE = 8.5;
-
-/**
- * Fits a genre's whole name inside its circle: one line, shrinking as far
- * as it must; or two lines, broken at a space or hyphen, when that allows
- * a larger size. Only a circle too small for either gets a shortened name.
- */
-function leafLabel(name: string, r: number): { lines: string[]; size: number } | null {
-  if (r < 13) return null;
-  const cap = Math.min(22, r / 2.4);
-  const one = Math.min(cap, (1.7 * r) / (name.length * GLYPH));
-
-  let two: { lines: string[]; size: number } | null = null;
-  for (const m of name.matchAll(/[ -]/g)) {
-    const i = m.index!;
-    const first = name.slice(0, m[0] === '-' ? i + 1 : i);
-    const second = name.slice(i + 1);
-    const longest = Math.max(first.length, second.length);
-    // Two lines sit off-centre, where the circle is narrower.
-    const size = Math.min(cap, (1.5 * r) / (longest * GLYPH), r / 1.5);
-    if (!two || size > two.size) two = { lines: [first, second], size };
-  }
-
-  if (two && two.size > one * 1.15 && two.size >= MIN_SIZE) return two;
-  if (one >= MIN_SIZE) return { lines: [name], size: one };
-  if (two && two.size >= MIN_SIZE) return two;
-  const fits = Math.floor((1.7 * r) / (MIN_SIZE * GLYPH));
-  return fits >= 4 ? { lines: [`${name.slice(0, fits - 1)}…`], size: MIN_SIZE } : null;
-}
+const ids = new Set<string>();
+const walk = (nodes: GenreTreeNode[]) => nodes.forEach((node) => (ids.add(node.id), walk(node.children)));
+walk(tree);
+const n = (x: number) => x.toLocaleString('en-GB');
 ---
 
-<Base title="Genres" description="Genres in the library, sized by how many tracks sit in each.">
+<Base title="Genres" description="Every genre in the library, sized by how many tracks sit in it.">
   <div class="wrap page">
-    <PageHeader title="Genres" count={totalGenres}>
-      {view === 'tree' ? <a href="/genres?view=circles">As circles</a> : <a href="/genres">As a tree</a>}
+    <PageHeader title="Genres" count={ids.size}>
       {Astro.locals.user && <a href="/manage/genres">Edit</a>}
     </PageHeader>
 
     {
-      art ? (
-        <>
-          <GenreTreeArt art={art} />
-          <section aria-labelledby="list-heading" class="genre-list">
-            <h2 id="list-heading">All genres</h2>
-            <GenreList nodes={tree} />
-          </section>
-        </>
-      ) : circles.length === 0 ? (
+      tree.length === 0 ? (
         <p class="empty">No genres yet. Imports bring them in.</p>
       ) : (
         <>
           <figure>
-            <svg viewBox={`0 0 ${SIZE} ${SIZE}`} aria-hidden="true" focusable="false">
-              {circles.map((c) => {
-                const label = c.leaf ? leafLabel(c.name, c.r) : null;
-                const groupSize = Math.min(22, Math.max(13, c.r / 7));
-                const genreId = c.genreId;
-                const parentName = c.parent ? circles.find((p) => p.id === c.parent)?.name : null;
-                return (
-                  <a href={`/genre/${genreId}`} tabindex="-1" class="genre-link">
-                    <title>
-                      {`${c.name}: ${c.value} ${c.value === 1 ? 'track' : 'tracks'}${c.self ? ` tagged just “${c.name}”` : ''}${c.secondary && !c.self && parentName ? ` (also filed under ${parentName})` : ''}`}
-                    </title>
-                    <circle
-                      cx={c.x.toFixed(1)}
-                      cy={c.y.toFixed(1)}
-                      r={c.r.toFixed(1)}
-                      class:list={[c.leaf ? 'leaf' : `group depth-${Math.min(c.depth, 3)}`, { secondary: c.secondary && !c.self }]}
-                      style={`--h: ${hueOf(c.family)}${c.leaf ? `; --mix: ${mix(c.value)}` : ''}`}
-                    />
-                    {label && (
-                      <text
-                        x={c.x.toFixed(1)}
-                        y={c.y.toFixed(1)}
-                        class="label"
-                        font-size={label.size.toFixed(1)}
-                        text-anchor="middle"
-                        dominant-baseline="central"
-                      >
-                        {label.lines.map((line, i) => (
-                          <tspan x={c.x.toFixed(1)} dy={i === 0 ? `${(-(label.lines.length - 1) * 0.55).toFixed(2)}em` : '1.1em'}>
-                            {line}
-                          </tspan>
-                        ))}
-                      </text>
-                    )}
-                    {!c.leaf && c.r >= 60 && clearAtTop(c) && (
-                      <text
-                        x={c.x.toFixed(1)}
-                        y={(c.y - c.r + groupSize * 1.35).toFixed(1)}
-                        class="group-label"
-                        font-size={groupSize.toFixed(1)}
-                        text-anchor="middle"
-                        style={`--h: ${hueOf(c.family)}`}
-                      >
-                        {c.name}
-                      </text>
-                    )}
-                  </a>
-                );
-              })}
-            </svg>
-            <figcaption class="muted">
-              {totalGenres} {totalGenres === 1 ? 'genre' : 'genres'}. Coloured by family, deeper for bigger genres; hover a circle for its count.
-            </figcaption>
+            <GenreMosaic nodes={tree} label="Genre map" />
+            <figcaption>Each tile’s size is the tracks tagged with it. Tap a family for its subgenres.</figcaption>
           </figure>
 
-          <section aria-labelledby="list-heading" class="genre-list">
-            <h2 id="list-heading">All genres</h2>
-            <GenreList nodes={tree} />
+          <section id="all-genres" aria-labelledby="list-heading" class="genre-list">
+            <div class="list-head">
+              <h2 id="list-heading">All genres</h2>
+              <label class="visually-hidden" for="genre-filter">Find a genre</label>
+              <input id="genre-filter" class="input" type="search" placeholder="Find a genre" autocomplete="off" spellcheck="false" data-genre-filter />
+            </div>
+            <ul role="list" class="families" data-genre-tree>
+              {tree.map((node) =>
+                node.children.length > 0 ? (
+                  <li data-name={node.name}>
+                    <details>
+                      <summary>
+                        <a class="name" href={`/genre/${node.id}`}>{node.name}</a>
+                        <span class="count">{n(node.total)}</span>
+                        <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                      </summary>
+                      <GenreList nodes={node.children} />
+                    </details>
+                  </li>
+                ) : (
+                  <li data-name={node.name} class="single">
+                    <a class="name" href={`/genre/${node.id}`}>{node.name}</a>
+                    <span class="count">{n(node.total)}</span>
+                  </li>
+                ),
+              )}
+            </ul>
+            <p class="none" hidden data-genre-none>No genre by that name.</p>
           </section>
         </>
       )
@@ -156,133 +69,116 @@ function leafLabel(name: string, r: number): { lines: string[]; size: number } |
   </div>
 </Base>
 
+<script>
+  // Find a genre: show what matches and the families holding it, opened.
+  const box = document.querySelector<HTMLInputElement>('[data-genre-filter]');
+  const tree = document.querySelector<HTMLElement>('[data-genre-tree]');
+  const none = document.querySelector<HTMLElement>('[data-genre-none]');
+  if (box && tree && none) {
+    const items = [...tree.querySelectorAll<HTMLLIElement>('li[data-name]')].reverse();
+    box.addEventListener('input', () => {
+      const q = box.value.trim().toLowerCase();
+      // Deepest first, so a parent knows whether anything beneath it matched.
+      for (const li of items) {
+        const self = !q || li.dataset.name!.toLowerCase().includes(q);
+        const below = q !== '' && [...li.querySelectorAll<HTMLLIElement>(':scope > ul > li, :scope > details > ul > li')].some((c) => !c.hidden);
+        li.hidden = !(self || below);
+        const details = li.querySelector<HTMLDetailsElement>(':scope > details');
+        if (details) details.open = below;
+      }
+      none.hidden = !q || items.some((li) => !li.hidden);
+    });
+  }
+</script>
+
 <style>
   .page {
     display: grid;
     gap: var(--space-6);
   }
 
-  header {
-    display: grid;
-    gap: var(--space-2);
-  }
-
-
-  h2 {
-    font-size: var(--step-1);
-    margin-bottom: var(--space-3);
-  }
-
-  .muted {
-    color: var(--text-muted);
-  }
-
   figure {
     display: grid;
     gap: var(--space-3);
     margin: 0;
-    justify-items: center;
   }
 
-  svg {
-    width: 100%;
-    max-width: 44rem;
-    height: auto;
-    aspect-ratio: 1;
-    font-family: var(--font-sans);
-  }
-
-  /* Groups: a wash of their family's colour with an outline of it,
-     deepening with depth, so a family reads as one body. */
-  .group {
-    stroke: oklch(0.42 0.07 var(--h));
-    stroke-width: 1.5;
-  }
-
-  .depth-1 {
-    fill: oklch(0.23 0.04 var(--h));
-  }
-
-  .depth-2 {
-    fill: oklch(0.27 0.05 var(--h));
-  }
-
-  .depth-3 {
-    fill: oklch(0.31 0.06 var(--h));
-  }
-
-  /* Leaves: 0.34 to 0.48 lightness under light text. */
-  .leaf {
-    fill: oklch(calc(0.34 + var(--mix) * 0.14) calc(0.05 + var(--mix) * 0.05) var(--h));
-    transition: fill 0.2s;
-  }
-
-  :global([data-theme='light']) .group {
-    stroke: oklch(0.78 0.07 var(--h));
-  }
-
-  :global([data-theme='light']) .depth-1 {
-    fill: oklch(0.94 0.03 var(--h));
-  }
-
-  :global([data-theme='light']) .depth-2 {
-    fill: oklch(0.91 0.04 var(--h));
-  }
-
-  :global([data-theme='light']) .depth-3 {
-    fill: oklch(0.88 0.05 var(--h));
-  }
-
-  /* Light mode: 0.88 down to 0.72 under dark text. */
-  :global([data-theme='light']) .leaf {
-    fill: oklch(calc(0.88 - var(--mix) * 0.16) calc(0.04 + var(--mix) * 0.06) var(--h));
-  }
-
-  .genre-link {
-    cursor: pointer;
-  }
-
-  /* A genre drawn again under a further parent: the same colour, but as an
-     outline, so it reads as a reference to the genre filed elsewhere. */
-  .leaf.secondary {
-    fill-opacity: 0.25;
-    stroke: oklch(0.7 0.1 var(--h));
-    stroke-width: 2;
-    stroke-dasharray: 5 4;
-  }
-
-  :global([data-theme='light']) .leaf.secondary {
-    stroke: oklch(0.55 0.1 var(--h));
-  }
-
-  .genre-link:hover > .leaf {
-    stroke: var(--text);
-    stroke-width: 2;
-  }
-
-  .label {
-    fill: var(--text);
-    font-weight: 650;
-    pointer-events: none;
-  }
-
-  /* Group names in their family's colour: 0.85 lightness on the dark wash,
-     0.38 on the light one, both well over 4.5:1. */
-  .group-label {
-    fill: oklch(0.85 0.07 var(--h));
-    font-weight: 750;
-    letter-spacing: -0.01em;
-    pointer-events: none;
-  }
-
-  :global([data-theme='light']) .group-label {
-    fill: oklch(0.38 0.08 var(--h));
-  }
-
+  figcaption,
+  .count,
+  .none,
   .empty {
-    padding: var(--space-6);
-    border: 1px dashed var(--border);
-    border-radius: var(--radius-l);
     color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .list-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .list-head .input {
+    flex: 1 1 14rem;
+    max-width: 22rem;
+  }
+
+  .families {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .families > li {
+    border-bottom: 1px solid var(--border);
+  }
+
+  summary,
+  .single {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--target);
+  }
+
+  summary {
+    cursor: pointer;
+    list-style: none;
+  }
+
+  summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .name {
+    font-weight: 650;
+  }
+
+  .chevron {
+    width: 1.1rem;
+    height: 1.1rem;
+    margin-left: auto;
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform 0.15s ease;
+  }
+
+  details[open] .chevron {
+    transform: rotate(90deg);
+  }
+
+  details > :global(ul) {
+    margin: 0 0 var(--space-3) var(--space-2);
   }
 </style>

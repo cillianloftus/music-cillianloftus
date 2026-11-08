@@ -13,6 +13,8 @@ import ResultList from '../../components/ResultList.astro';
 import { hueOf } from '../../lib/art/playlist';
 import { ownerId } from '../../lib/auth/user';
 import { genreAlbums, genreArtists, genreDetail, genreTopTracks } from '../../lib/pages';
+import GenreMosaic from '../../components/GenreMosaic.astro';
+import { buildGenreTree, genreSubtreeRows } from '../../lib/genres';
 import Score from '../../components/Score.astro';
 import { encodeDefinition } from '../../lib/query/builder';
 import { hydrateTracks } from '../../lib/query/run';
@@ -30,10 +32,12 @@ if (!genre) {
 
 const user = Astro.locals.user;
 const viewerId = user?.id ?? (await ownerId());
-const [albums, trackIds, artists] = await Promise.all([
+const [albums, trackIds, artists, subtree] = await Promise.all([
   genreAlbums(id, viewerId, 18, deep),
   genreTopTracks(id, viewerId, 10, deep),
   genreArtists(id, viewerId, 8, deep),
+  // Its subgenres as a map, once there are enough to be worth one.
+  genre.children.length > 3 ? genreSubtreeRows(id).then(buildGenreTree) : Promise.resolve([]),
 ]);
 const [tracks, genreFacts] = await Promise.all([hydrateTracks(trackIds, viewerId), viewerId && !deep ? trackFacts(viewerId, { genreId: id }) : Promise.resolve([])]);
 // What stands out within the genre: who makes your favourite of it, which era, and so on.
@@ -120,17 +124,42 @@ const list = (items: string[]) =>
         )
       }
       {
-        genre.children.length > 0 && (
-          <ul role="list" class="children" aria-label="Beneath it">
-            {genre.children.map((c) => (
-              <li>
-                <a href={`/genre/${c.id}`}>
-                  {c.name}
-                  {c.tracks > 0 && <span class="count tabular">{c.tracks}</span>}
-                </a>
-              </li>
-            ))}
-          </ul>
+        subtree.length > 1 ? (
+          <>
+            <GenreMosaic
+              nodes={subtree}
+              family={family}
+              label={`Inside ${genre.name}`}
+              compact
+              moreHref="#beneath"
+            />
+            <details class="all-beneath" id="beneath">
+              <summary>Every subgenre ({genre.children.length}) <span aria-hidden="true">›</span></summary>
+              <ul role="list" class="children" aria-label="Beneath it">
+              {genre.children.map((c) => (
+                <li>
+                  <a href={`/genre/${c.id}`}>
+                    {c.name}
+                    {c.tracks > 0 && <span class="count tabular">{c.tracks}</span>}
+                  </a>
+                </li>
+              ))}
+            </ul>
+            </details>
+          </>
+        ) : (
+          genre.children.length > 0 && (
+            <ul role="list" class="children" aria-label="Beneath it">
+              {genre.children.map((c) => (
+                <li>
+                  <a href={`/genre/${c.id}`}>
+                    {c.name}
+                    {c.tracks > 0 && <span class="count tabular">{c.tracks}</span>}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )
         )
       }
       {user && (
@@ -226,6 +255,19 @@ const list = (items: string[]) =>
     display: grid;
     gap: var(--space-4);
     padding-top: var(--space-6);
+  }
+
+  .all-beneath summary {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .all-beneath[open] summary {
+    margin-bottom: var(--space-3);
   }
 
   .crumbs {
