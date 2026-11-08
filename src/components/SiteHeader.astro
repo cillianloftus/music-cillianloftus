@@ -13,6 +13,7 @@ const links = [
   { href: '/insights', label: 'Insights' },
   { href: '/diary', label: 'Diary' },
   { href: '/artists', label: 'Artists' },
+  { href: '/albums', label: 'Albums' },
   { href: '/genres', label: 'Genres' },
   { href: '/playlists', label: 'Playlists' },
 ];
@@ -26,12 +27,13 @@ const under = (href: string) => path === href || path.startsWith(`${href}/`);
  */
 const LIBRARY = [
   { href: '/artists', label: 'Artists', owns: '/artist' },
+  { href: '/albums', label: 'Albums', owns: '/album' },
   { href: '/genres', label: 'Genres', owns: '/genre' },
   { href: '/playlists', label: 'Playlists', owns: '/playlist' },
   { href: '/diary', label: 'Diary', owns: '/year' },
 ];
 const section = LIBRARY.find((s) => under(s.href) || under(s.owns));
-const inLibrary = Boolean(section) || under('/album') || under('/track');
+const inLibrary = Boolean(section) || under('/track');
 const onSectionPage = LIBRARY.some((s) => path === s.href);
 const inYou = under('/manage') || under('/edit') || path === '/queue' || path === '/query';
 

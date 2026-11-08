@@ -4,6 +4,7 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { splitVersion } from './versions';
 import type { DatePrecision } from './dates';
 import type { CreditEntity, CreditRole, ReleaseGroupType } from './import/plan';
 
@@ -432,4 +433,41 @@ export async function artistCollaborators(artistId: string, limit = 8): Promise<
     .bind(artistId, limit)
     .all<Collaborator>();
   return results;
+}
+
+export type ShelfKind = 'albums' | 'eps' | 'singles' | 'other';
+export type ShelfSort = 'score' | 'newest' | 'added' | 'name';
+
+const SHELF_TYPES: Record<ShelfKind, string[]> = {
+  albums: ['album', 'mixtape'],
+  eps: ['ep'],
+  singles: ['single'],
+  other: ['live', 'compilation', 'soundtrack'],
+};
+
+const SHELF_ORDER: Record<ShelfSort, string> = {
+  score: 's.quality_score IS NULL, s.quality_score DESC, g.first_release_date DESC',
+  newest: 'g.first_release_date IS NULL, g.first_release_date DESC, g.title COLLATE NOCASE',
+  added: 'g.created_at DESC',
+  name: 'g.title COLLATE NOCASE',
+};
+
+/**
+ * Every release of one kind in the library, in one order: the Albums
+ * page. Not-official releases waiting to be cleared are left out, and so
+ * are remix singles and EPs, which live with their songs.
+ */
+export async function shelfOfKind(viewerId: string | null, kind: ShelfKind, sort: ShelfSort): Promise<ReleaseGroupSummary[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT ${SUMMARY_COLUMNS}
+     FROM release_group g ${SUMMARY_JOINS}
+     WHERE g.type IN (SELECT value FROM json_each(?2))
+       AND (coalesce(g.official, 1) = 1 OR g.keep_unofficial = 1)
+     ORDER BY ${SHELF_ORDER[sort]}`,
+  )
+    .bind(viewerId, json(SHELF_TYPES[kind]))
+    .all<Omit<ReleaseGroupSummary, 'credits'>>();
+  // The same test as the artist page's "Remixes and versions" shelf.
+  const versions = kind === 'singles' || kind === 'eps';
+  return withArtistLines(versions ? results.filter((g) => splitVersion(g.title).version === null) : results);
 }

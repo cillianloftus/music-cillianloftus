@@ -1,0 +1,195 @@
+---
+/**
+ * Every release in the library, one kind at a time: albums (with
+ * mixtapes), EPs, singles, and the rest (live, compilations, soundtracks).
+ * Best first by default. Sixty at a time; "Show more" adds the next sixty
+ * in place, and is an ordinary link without JavaScript.
+ */
+import Base from '../layouts/Base.astro';
+import PageHeader from '../components/PageHeader.astro';
+import AlbumCard from '../components/AlbumCard.astro';
+import { ownerId } from '../lib/auth/user';
+import { byLibrary } from '../lib/library-cache';
+import { shelfOfKind, type ShelfKind, type ShelfSort } from '../lib/catalogue';
+
+const PAGE = 60;
+const params = Astro.url.searchParams;
+const KINDS: [ShelfKind, string][] = [
+  ['albums', 'Albums'],
+  ['eps', 'EPs'],
+  ['singles', 'Singles'],
+  ['other', 'Live and more'],
+];
+const SORTS: [ShelfSort, string][] = [
+  ['score', 'Highest scored'],
+  ['newest', 'Newest'],
+  ['added', 'Recently added'],
+  ['name', 'A–Z'],
+];
+const kind = (KINDS.find(([k]) => k === params.get('kind'))?.[0] ?? 'albums') as ShelfKind;
+const sort = (SORTS.find(([s]) => s === params.get('sort'))?.[0] ?? 'score') as ShelfSort;
+const page = Math.max(1, Math.min(200, Number(params.get('page')) || 1));
+
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+// The whole shelf is kept per library state, and sliced here.
+const all = await byLibrary(`shelf:v1:${kind}:${sort}`, viewerId, () => shelfOfKind(viewerId, kind, sort));
+const shown = all.slice((page - 1) * PAGE, page * PAGE);
+const more = all.length > page * PAGE;
+
+const href = (next: { kind?: ShelfKind; sort?: ShelfSort; page?: number }) => {
+  const q = new URLSearchParams();
+  const k = next.kind ?? kind;
+  const s = next.sort ?? sort;
+  if (k !== 'albums') q.set('kind', k);
+  if (s !== 'score') q.set('sort', s);
+  if (next.page && next.page > 1) q.set('page', String(next.page));
+  const query = q.toString();
+  return query ? `/albums?${query}` : '/albums';
+};
+const heading = KINDS.find(([k]) => k === kind)![1];
+---
+
+<Base title={heading === 'Albums' ? 'Albums' : `${heading} · Albums`} description={`${all.length} ${heading.toLowerCase()} in the library, best first.`}>
+  <div class="wrap page">
+    <PageHeader title={heading === 'Live and more' ? 'Live and more' : heading} count={all.length} />
+
+    <div class="tools">
+      <nav aria-label="Kind" class="pills kinds">
+        {KINDS.map(([value, label]) => (
+          <a href={href({ kind: value, page: 1 })} aria-current={kind === value ? 'page' : undefined}>
+            {label}
+          </a>
+        ))}
+      </nav>
+      <nav aria-label="Order" class="pills">
+        {SORTS.map(([value, label]) => (
+          <a href={href({ sort: value, page: 1 })} aria-current={sort === value ? 'page' : undefined}>
+            {label}
+          </a>
+        ))}
+      </nav>
+    </div>
+
+    {
+      all.length === 0 ? (
+        <p class="muted">Nothing of this kind yet.</p>
+      ) : (
+        <>
+          <ul role="list" class="grid" data-shelf-grid>
+            {shown.map((album) => (
+              <li>
+                <AlbumCard album={album} />
+              </li>
+            ))}
+          </ul>
+          {more && (
+            <p class="more">
+              <a class="button" href={href({ page: page + 1 })} data-more>
+                Show more
+              </a>
+              <span class="muted small" data-more-count>
+                {Math.min(page * PAGE, all.length)} of {all.length}
+              </span>
+            </p>
+          )}
+        </>
+      )
+    }
+  </div>
+</Base>
+
+<script>
+  // "Show more" adds the next page under this one, keeping your place.
+  const link = document.querySelector<HTMLAnchorElement>('[data-more]');
+  const grid = document.querySelector<HTMLElement>('[data-shelf-grid]');
+  link?.addEventListener('click', async (event) => {
+    if (!grid || event.metaKey || event.ctrlKey) return;
+    event.preventDefault();
+    link.setAttribute('aria-busy', 'true');
+    try {
+      const doc = new DOMParser().parseFromString(await (await fetch(link.href)).text(), 'text/html');
+      grid.append(...doc.querySelectorAll('[data-shelf-grid] > li'));
+      const next = doc.querySelector<HTMLAnchorElement>('[data-more]');
+      const count = document.querySelector('[data-more-count]');
+      const nextCount = doc.querySelector('[data-more-count]');
+      if (next) {
+        link.href = next.href;
+        if (count && nextCount) count.textContent = nextCount.textContent;
+      } else {
+        link.closest('p')?.remove();
+      }
+    } catch {
+      location.href = link.href;
+    } finally {
+      link.removeAttribute('aria-busy');
+    }
+  });
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .tools {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  /* A row of pills; on a phone it scrolls sideways rather than wrapping. */
+  .pills {
+    display: flex;
+    gap: var(--space-1);
+    max-width: 100%;
+    width: fit-content;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .pills::-webkit-scrollbar {
+    display: none;
+  }
+
+  .pills a {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    min-height: calc(var(--target) - 6px);
+    padding: 0 var(--space-4);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .pills a[aria-current='page'] {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .kinds a[aria-current='page'] {
+    background: var(--text);
+    color: var(--bg);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));
+    gap: var(--space-6) var(--space-4);
+    margin: 0;
+    padding: 0;
+  }
+
+  .more {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+  }
+</style>
