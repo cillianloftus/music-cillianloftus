@@ -81,7 +81,7 @@ function groupBy<T>(rows: T[], key: (row: T) => string | null): Map<string, T[]>
 
 /** Runs every rule over the whole catalogue. Reads only. */
 export async function findAnomalies(): Promise<Finding[]> {
-  const [artists, recordings, groups, counts, unlinked, noArt, orphans] = await env.DB.batch([
+  const [artists, recordings, groups, counts, noArt, orphans] = await env.DB.batch([
     env.DB.prepare(`SELECT id, name FROM artist`),
     env.DB.prepare(
       // studio: on at least one release that is neither live nor unofficial.
@@ -108,11 +108,6 @@ export async function findAnomalies(): Promise<Finding[]> {
        HAVING count(*) >= 2 AND min(n) > 0
           AND max(n) >= ?1 * min(n) AND max(n) - min(n) >= ?2`,
     ).bind(REVIEW_RULES.trackCountRatio, REVIEW_RULES.trackCountGap),
-    env.DB.prepare(
-      `SELECT DISTINCT r.id FROM recording r
-       JOIN rating x ON x.entity_type = 'recording' AND x.entity_id = r.id
-       WHERE r.work_id IS NULL`,
-    ),
     env.DB.prepare(
       `SELECT c.release_group_id AS id FROM v_release_group_canonical c
        JOIN release r ON r.id = c.release_id
@@ -186,7 +181,9 @@ export async function findAnomalies(): Promise<Finding[]> {
   const single = (kind: AnomalyKind, entity_type: EntityType) => (r: { id?: string; release_group_id?: string }) =>
     ({ kind, entity_type, entity_a: (r.id ?? r.release_group_id)!, entity_b: null }) satisfies Finding;
   findings.push(...rows<{ release_group_id: string }>(counts).map(single('track_count_mismatch', 'release_group')));
-  findings.push(...rows<{ id: string }>(unlinked).map(single('unlinked_rated_recording', 'recording')));
+  // A rated song with no work of its own is no longer raised: a song with
+  // no work is already its own song everywhere, and its versions are found
+  // by the version rule above. Open ones clear on the next run.
   findings.push(...rows<{ id: string }>(noArt).map(single('missing_cover_art', 'release_group')));
   findings.push(...rows<{ id: string }>(orphans).map(single('orphaned_track', 'recording')));
 

@@ -72,12 +72,11 @@ describe('rules', () => {
     expect(has(findings, 'track_count_mismatch', 'rg-a')).toBe(false);
   });
 
-  it('finds rated recordings with no work, albums without art, and recordings on no release', async () => {
+  it('finds albums without art and recordings on no release, but not rated songs without a work', async () => {
     insert(db, 'recording', [{ id: 'loose', title: 'Loose', source: 'manual' }]);
     db.exec(`UPDATE release SET art_key = 'art/release/r-b' WHERE id = 'r-b'`);
     const findings = await findAnomalies();
-    expect(has(findings, 'unlinked_rated_recording', 'b1')).toBe(true);
-    expect(has(findings, 'unlinked_rated_recording', 'a1')).toBe(false); // has a work
+    expect(findings.some((f) => f.kind === 'unlinked_rated_recording')).toBe(false);
     expect(has(findings, 'missing_cover_art', 'rg-a')).toBe(true);
     expect(has(findings, 'missing_cover_art', 'rg-b')).toBe(false);
     expect(has(findings, 'orphaned_track', 'loose')).toBe(true);
