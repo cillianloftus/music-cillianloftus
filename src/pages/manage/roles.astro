@@ -8,7 +8,7 @@ import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import { creditRoles, groupCredits, ROLE_FAMILIES } from '../../lib/credits';
 
-const roles = await creditRoles();
+const roles = await creditRoles({ withUses: true });
 const keyRoles = roles.filter((r) => r.key_order != null);
 const groups = groupCredits(
   roles.filter((r) => r.key_order == null && r.family !== 'artist'),

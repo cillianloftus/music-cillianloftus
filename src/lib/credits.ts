@@ -39,12 +39,33 @@ export interface Role {
   uses: number;
 }
 
-export async function creditRoles(): Promise<Role[]> {
+/**
+ * Every role, key ones first. How many credits use each is counted only
+ * when asked (the roles page): it reads every credit once, where a count
+ * per role read them all once per role, about twelve million rows, on every
+ * edit page that only needed the names.
+ */
+export async function creditRoles({ withUses = false } = {}): Promise<Role[]> {
   const { results } = await env.DB.prepare(
-    `SELECT r.id, r.label, r.family, r.key_order, r.builtin, (SELECT count(*) FROM artist_credit c WHERE c.role = r.id) AS uses
-     FROM credit_role r ORDER BY r.key_order IS NULL, r.key_order, r.position, r.label`,
+    withUses
+      ? `SELECT r.id, r.label, r.family, r.key_order, r.builtin, coalesce(u.uses, 0) AS uses
+         FROM credit_role r LEFT JOIN (SELECT role, count(*) AS uses FROM artist_credit GROUP BY role) u ON u.role = r.id
+         ORDER BY r.key_order IS NULL, r.key_order, r.position, r.label`
+      : `SELECT r.id, r.label, r.family, r.key_order, r.builtin, 0 AS uses
+         FROM credit_role r ORDER BY r.key_order IS NULL, r.key_order, r.position, r.label`,
   ).all<Role>();
   return results;
+}
+
+/** How many credits use each of these roles (an index lookup each). */
+export async function roleUses(ids: string[]): Promise<Map<string, number>> {
+  if (ids.length === 0) return new Map();
+  const { results } = await env.DB.prepare(
+    `SELECT role, count(*) AS uses FROM artist_credit WHERE role IN (SELECT value FROM json_each(?)) GROUP BY role`,
+  )
+    .bind(JSON.stringify(ids))
+    .all<{ role: string; uses: number }>();
+  return new Map(results.map((r) => [r.role, r.uses]));
 }
 
 /**

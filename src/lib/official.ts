@@ -37,8 +37,9 @@ export async function checkOfficialReleases({ budgetMs }: { budgetMs: number }):
     `SELECT a.id, a.mbid FROM artist a
      WHERE a.mbid IS NOT NULL AND a.mbid <> ?
        AND (a.releases_checked_at IS NULL OR a.releases_checked_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?))
-       AND EXISTS (SELECT 1 FROM artist_credit c JOIN release_group g ON g.id = c.entity_id
-                   WHERE c.entity_type = 'release_group' AND c.role = 'primary' AND c.artist_id = a.id AND g.mbid IS NOT NULL)
+       -- Worked out once (about 5,000 rows), not per artist (ten million).
+       AND a.id IN (SELECT c.artist_id FROM artist_credit c JOIN release_group g ON g.id = c.entity_id
+                    WHERE c.entity_type = 'release_group' AND c.role = 'primary' AND g.mbid IS NOT NULL)
      ORDER BY a.releases_checked_at IS NOT NULL, a.releases_checked_at
      LIMIT 60`,
   )
@@ -93,8 +94,9 @@ export async function checkProgress(): Promise<CheckProgress> {
   const row = await env.DB.prepare(
     `SELECT count(*) AS artists, count(a.releases_checked_at) AS checked FROM artist a
      WHERE a.mbid IS NOT NULL AND a.mbid <> ?
-       AND EXISTS (SELECT 1 FROM artist_credit c JOIN release_group g ON g.id = c.entity_id
-                   WHERE c.entity_type = 'release_group' AND c.role = 'primary' AND c.artist_id = a.id AND g.mbid IS NOT NULL)`,
+       -- Worked out once (about 5,000 rows), not per artist (ten million).
+       AND a.id IN (SELECT c.artist_id FROM artist_credit c JOIN release_group g ON g.id = c.entity_id
+                    WHERE c.entity_type = 'release_group' AND c.role = 'primary' AND g.mbid IS NOT NULL)`,
   )
     .bind(VARIOUS_ARTISTS_MBID)
     .first<CheckProgress>();

@@ -86,16 +86,20 @@ async function linkTracks(spotify: SpotifyClient, album: Album, spotifyAlbumId: 
     return mine && !mine.spotify_id && normaliseTitle(mine.title) === normaliseTitle(item.name) ? [{ id: mine.id, spotify_id: item.id }] : [];
   });
   if (matches.length === 0) return 0;
-  const result = await env.DB.prepare(
-    `UPDATE recording SET spotify_id = j.value ->> '$.spotify_id'
-     FROM json_each(?1) j
-     WHERE recording.id = j.value ->> '$.id' AND recording.spotify_id IS NULL
-         AND NOT EXISTS (SELECT 1 FROM field_override fo WHERE fo.entity_type = 'recording' AND fo.entity_id = recording.id AND fo.field = 'spotify_id')
-       AND NOT EXISTS (SELECT 1 FROM recording o WHERE o.spotify_id = j.value ->> '$.spotify_id')`,
-  )
-    .bind(JSON.stringify(matches))
-    .run();
-  return result.meta.changes ?? 0;
+  // One keyed update per track, in one batch. A single UPDATE … FROM
+  // json_each walked the whole recording table for each track (430,000
+  // rows a call); these are index lookups.
+  const results = await env.DB.batch(
+    matches.map((m) =>
+      env.DB.prepare(
+        `UPDATE recording SET spotify_id = ?1
+         WHERE id = ?2 AND spotify_id IS NULL
+           AND NOT EXISTS (SELECT 1 FROM field_override fo WHERE fo.entity_type = 'recording' AND fo.entity_id = ?2 AND fo.field = 'spotify_id')
+           AND NOT EXISTS (SELECT 1 FROM recording o WHERE o.spotify_id = ?1)`,
+      ).bind(m.spotify_id, m.id),
+    ),
+  );
+  return results.reduce((sum, r) => sum + (r.meta.changes ?? 0), 0);
 }
 
 export interface LinkReport {

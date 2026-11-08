@@ -72,16 +72,14 @@ async function fillSpotifyIds(result: WriteResult, album: SpotifyAlbum): Promise
   await db.batch([
     db.prepare(`UPDATE release_group SET spotify_id = ?1 WHERE id = ?2 AND spotify_id IS NULL AND ${free('release_group')}`).bind(album.id, result.releaseGroupId),
     db.prepare(`UPDATE release SET spotify_id = ?1 WHERE id = ?2 AND spotify_id IS NULL AND ${free('release')}`).bind(album.id, result.releaseId),
-    db.prepare(
-      `UPDATE recording SET spotify_id = j.value ->> '$.id'
-       FROM json_each(?1) j
-       JOIN track t ON t.release_id = ?2 AND t.disc = j.value ->> '$.disc' AND t.position = j.value ->> '$.position'
-       WHERE recording.id = t.recording_id
-         AND recording.spotify_id IS NULL
-         AND NOT EXISTS (SELECT 1 FROM recording o WHERE o.spotify_id = j.value ->> '$.id')`,
-    ).bind(
-      JSON.stringify(album.tracks.items.map((t) => ({ id: t.id, disc: t.disc_number || 1, position: t.track_number }))),
-      result.releaseId,
+    // One keyed update per track: an UPDATE … FROM json_each walked the
+    // whole recording table for each one.
+    ...album.tracks.items.map((t) =>
+      db.prepare(
+        `UPDATE recording SET spotify_id = ?1
+         WHERE id = (SELECT recording_id FROM track WHERE release_id = ?2 AND disc = ?3 AND position = ?4)
+           AND spotify_id IS NULL AND ${free('recording')}`,
+      ).bind(t.id, result.releaseId, t.disc_number || 1, t.track_number),
     ),
   ]);
 }
