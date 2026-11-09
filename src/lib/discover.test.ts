@@ -58,6 +58,10 @@ function library(): TrackFact[] {
       plays: 0,
       axes: { arrangement: null, sound: null, songwriting: null, lyrics: null, performance: null, originality: null },
       gut: null,
+      bpm: null,
+      loudness: null,
+      explicit: null,
+      listeners: null,
     });
   }
   return facts;
@@ -205,5 +209,21 @@ describe('telling patterns from chance', () => {
     const found = discover(noise, { limit: 40 }).filter((f) => f.p !== undefined);
     expect(found.filter((f) => f.confidence === 'clear')).toEqual([]);
     expect(found.every((f) => f.confidence === 'hunch')).toBe(true);
+  });
+});
+
+describe('tempo and reach', () => {
+  it('finds that fast songs score higher, and lesser-known ones', () => {
+    const facts = library().map((f, i) => ({
+      ...f,
+      lengthMs: null,
+      credits: [credit('solo', 'primary')],
+      bpm: i % 2 === 0 ? 160 : 110,
+      listeners: i % 2 === 0 ? 300 : 30000,
+      score: (i % 2 === 0 ? 92 : 72) + (i % 5),
+    }));
+    const labels = discover(facts, { limit: 20 }).map((f) => f.headline);
+    expect(labels.some((t) => t.includes('Fast songs'))).toBe(true);
+    expect(labels.some((t) => t.includes('fewer than 1,000 people'))).toBe(true);
   });
 });

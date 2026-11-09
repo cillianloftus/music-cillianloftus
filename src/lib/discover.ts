@@ -58,6 +58,11 @@ export interface TrackFact {
   axes: { arrangement: number | null; sound: number | null; songwriting: number | null; lyrics: number | null; performance: number | null; originality: number | null };
   /** The quick gut score (out of 100) given alongside a considered rating, if any. */
   gut: number | null;
+  /** From Deezer and ListenBrainz (migration 0054): tempo, replay gain (more negative, louder), explicit, everyone's listeners. */
+  bpm: number | null;
+  loudness: number | null;
+  explicit: boolean | null;
+  listeners: number | null;
 }
 
 interface Row {
@@ -84,12 +89,17 @@ interface Row {
   performance: number | null;
   originality: number | null;
   gut_score: number | null;
+  bpm: number | null;
+  loudness: number | null;
+  explicit: number | null;
+  listener_count: number | null;
 }
 
 /** Everything known about each rated track; one artist's when given. */
 export async function trackFacts(userId: string, scope: { artistId?: string; albumId?: string; genreId?: string } = {}): Promise<TrackFact[]> {
   const { results } = await env.DB.prepare(
     `SELECT s.recording_id AS id, r.title, s.quality_score AS score, ax.rated_at, r.length_ms,
+            r.bpm, r.loudness, r.explicit, r.listener_count,
             g.id AS album_id, g.title AS album_title, g.type AS album_type,
             coalesce(g.first_release_date, r.first_release_date) AS released,
             t.position, (SELECT count(*) FROM track t2 WHERE t2.release_id = cn.release_id) AS size,
@@ -146,6 +156,10 @@ function toFact(r: Row): TrackFact {
     score: r.score,
     ratedAt: r.rated_at,
     lengthMs: r.length_ms,
+    bpm: r.bpm,
+    loudness: r.loudness,
+    explicit: r.explicit === null || r.explicit === undefined ? null : r.explicit === 1,
+    listeners: r.listener_count,
     albumId: r.album_id,
     albumTitle: r.album_title,
     albumType: r.album_type,
@@ -164,14 +178,14 @@ function toFact(r: Row): TrackFact {
 }
 
 /** The parts of a track's facts that are about the track, not anyone's rating of it. */
-type TrackPart = Pick<Row, 'title' | 'length_ms' | 'album_id' | 'album_title' | 'album_type' | 'released' | 'position' | 'size' | 'on_album' | 'label' | 'credits' | 'genres'>;
+type TrackPart = Pick<Row, 'title' | 'length_ms' | 'bpm' | 'loudness' | 'explicit' | 'listener_count' | 'album_id' | 'album_title' | 'album_type' | 'released' | 'position' | 'size' | 'on_album' | 'label' | 'credits' | 'genres'>;
 /** The parts that are the user's: the rating, its axes, the plays. */
 type RatingPart = Pick<Row, 'id' | 'score' | 'rated_at' | 'plays' | 'arrangement' | 'sound' | 'songwriting' | 'lyrics' | 'performance' | 'originality' | 'gut_score'>;
 
 /** The track part for some recordings (as trackFacts works it out). */
 async function trackParts(ids: string[]): Promise<Record<string, TrackPart>> {
   const { results } = await env.DB.prepare(
-    `SELECT r.id, r.title, r.length_ms,
+    `SELECT r.id, r.title, r.length_ms, r.bpm, r.loudness, r.explicit, r.listener_count,
             g.id AS album_id, g.title AS album_title, g.type AS album_type,
             coalesce(g.first_release_date, r.first_release_date) AS released,
             t.position, (SELECT count(*) FROM track t2 WHERE t2.release_id = cn.release_id) AS size,
@@ -209,7 +223,7 @@ async function trackParts(ids: string[]): Promise<Record<string, TrackPart>> {
 export async function libraryFacts(userId: string): Promise<TrackFact[]> {
   // The whole answer is kept too, until the next rating; then only the
   // ratings are read again, and the one new track's facts.
-  return byLibrary('facts:v4', userId, () => gatherFacts(userId));
+  return byLibrary('facts:v5', userId, () => gatherFacts(userId));
 }
 
 async function gatherFacts(userId: string): Promise<TrackFact[]> {
@@ -226,7 +240,7 @@ async function gatherFacts(userId: string): Promise<TrackFact[]> {
   )
     .bind(userId)
     .all<RatingPart>();
-  const parts = await byLibraryMap('track-parts:v1', null, rated.map((r) => r.id), trackParts);
+  const parts = await byLibraryMap('track-parts:v2', null, rated.map((r) => r.id), trackParts);
   return rated.flatMap((r) => {
     const part = parts[r.id];
     return part ? [toFact({ ...part, ...r })] : [];
@@ -478,6 +492,15 @@ function groupsOf(facts: TrackFact[], opts: Options): Group[] {
         m < 2 ? { field: 'length_seconds', op: 'lt', value: 120 } : m < 3 ? { field: 'length_seconds', op: 'between', value: [120, 180] } : m >= 6 ? { field: 'length_seconds', op: 'gte', value: 360 } : undefined;
       if (band) add('length', band, f, `Songs ${band}`, undefined, where);
     }
+    if (f.bpm) {
+      if (f.bpm < 90) add('tempo', 'slow', f, 'Slow songs (under 90 BPM)', undefined, { field: 'bpm', op: 'lt', value: 90 });
+      else if (f.bpm >= 140) add('tempo', 'fast', f, 'Fast songs (140 BPM and up)', undefined, { field: 'bpm', op: 'gte', value: 140 });
+    }
+    if (f.explicit === true) add('explicit', 'yes', f, 'Explicit songs', undefined, { field: 'explicit', op: 'eq', value: 'yes' });
+    if (f.listeners !== null) {
+      if (f.listeners < 1000) add('reach', 'few', f, 'Songs fewer than 1,000 people listen to on ListenBrainz', undefined, { field: 'listeners', op: 'lt', value: 1000 });
+      else if (f.listeners >= 50000) add('reach', 'many', f, 'Songs 50,000 or more people listen to on ListenBrainz', undefined, { field: 'listeners', op: 'gte', value: 50000 });
+    }
     const writers = new Set(f.credits.filter((c) => ['writer', 'composer', 'lyricist'].includes(c.role)).map((c) => c.id));
     if (writers.size >= 5) add('writers', 'many', f, 'Songs with five or more writers');
     else if (writers.size === 1) add('writers', 'one', f, 'Songs with a single writer');
@@ -563,6 +586,11 @@ function measures(facts: TrackFact[], opts: Options): Measure[] {
   };
   return [
     { key: 'length', value: (f) => (f.lengthMs ? f.lengthMs / 60000 : null), rises: 'The longer the song, the higher you rate it', falls: 'The shorter the song, the higher you rate it' },
+    { key: 'tempo', value: (f) => f.bpm, rises: 'The faster the song, the higher you rate it', falls: 'The slower the song, the higher you rate it' },
+    // On a log scale: the step from 100 listeners to 1,000 is as big as from 10,000 to 100,000.
+    { key: 'reach', value: (f) => (f.listeners ? Math.log10(f.listeners) : null), rises: 'The more people listen to a song, the higher you rate it', falls: 'You rate lesser-known songs higher' },
+    // Gain is how far a player turns it down: more negative is louder, so it is turned round.
+    { key: 'loudness', value: (f) => (f.loudness === null ? null : -f.loudness), rises: 'The louder the master, the higher you rate it', falls: 'The quieter the master, the higher you rate it' },
     {
       key: 'year',
       value: (f) => yearOf(f.released),
