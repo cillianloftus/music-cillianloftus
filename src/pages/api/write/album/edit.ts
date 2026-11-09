@@ -34,7 +34,15 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
     }
     if (form.intent === 'cover') {
       const found = await findCover(form.edition ?? '', { replace: true });
-      return back(found ? { done: `Cover replaced, from ${found === 'spotify' ? 'Spotify' : found === 'itunes' ? 'Apple Music' : 'the Cover Art Archive'}.` } : { error: 'No cover of its own was found for that edition. The old one is kept.' });
+      return back(
+        found
+          ? {
+              done: `Cover replaced, from ${found === 'spotify' ? 'Spotify' : found === 'itunes' ? 'Apple Music' : 'the Cover Art Archive'}.`,
+              // The page refreshes the browser's copy of this edition's art.
+              cover: form.edition ?? '',
+            }
+          : { error: 'No cover of its own was found for that edition. The old one is kept.' },
+      );
     }
     if (form.intent === 'edition') {
       const parsed = editionEdit.safeParse(form);

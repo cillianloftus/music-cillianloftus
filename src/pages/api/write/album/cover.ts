@@ -44,5 +44,6 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
        ON CONFLICT (entity_type, entity_id, field) DO UPDATE SET user_id = excluded.user_id, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
     ).bind(edition, locals.user!.id),
   ]);
-  return back({ done: 'Cover saved. It can take a refresh to show everywhere.' });
+  // `cover` tells the page to refresh the browser's copy of this edition's art.
+  return back({ done: 'Cover saved.', cover: edition });
 };

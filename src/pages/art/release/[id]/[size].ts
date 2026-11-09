@@ -22,8 +22,12 @@ export const GET: APIRoute = async ({ params, request }) => {
     const headers = new Headers();
     object.writeHttpMetadata(headers);
     headers.set('ETag', object.httpEtag);
-    // Revalidated every time (a cheap 304 by ETag), so a replaced cover shows at once.
-  headers.set('Cache-Control', 'public, no-cache');
+    // Kept a minute, then shown from the browser's copy while it checks in
+    // the background (a 304 by ETag), so a replaced cover shows on the next
+    // view. Asked again on every view, a page of 80 covers was 80 requests
+    // waited on. Where a cover is replaced, the edit page refreshes the
+    // browser's copy at once (cache: 'reload').
+    headers.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=604800');
 
     // onlyIf matched the client's ETag: the body is omitted.
     if (!('body' in object)) return new Response(null, { status: 304, headers });
