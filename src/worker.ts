@@ -8,6 +8,7 @@ import { fillCreditsFromGenius, fillSongLinks } from './lib/genius';
 import { fillAlbumsFromSpotify } from './lib/spotify/fill';
 import { fillAlbumSoundFromDeezer, fillAlbumsFromDeezer } from './lib/sources/deezer';
 import { fillPopularity } from './lib/popularity';
+import { fillArtistsFromWiki } from './lib/sources/wikipedia';
 import { fillAlbumsMoreFromMusicBrainz } from './lib/sources/musicbrainz-more';
 import { ownerId } from './lib/auth/user';
 import { deriveAlbumGenres } from './lib/genres';
@@ -74,6 +75,7 @@ export default {
             ['Album genre derivation', deriveAlbumGenres],
             ['Review rules', detectAnomalies],
             ['Artist details', () => enrichArtists({ budgetMs: 20_000 })],
+            ['Awards, labels and influences from Wikidata', () => fillArtistsFromWiki({ budgetMs: 15_000 })],
             ['Artist pictures', picturesForArtistsWithout],
             ['Spotify album links', linkSpotifyAlbums],
             ['Writing credits from Genius', () => fillCreditsFromGenius({ budgetMs: 20_000 })],

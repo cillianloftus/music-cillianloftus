@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { ageOf, applyEnrichment, artistAbout, readArtist } from './artists';
+import { ageOf, applyEnrichment, artistAbout, readArtist, spanOf } from './artists';
 import { buildManualPlan } from './import/manual';
 import { writePlan } from './import/write';
 import type { MbArtistDetails } from './musicbrainz/client';
@@ -78,8 +78,34 @@ describe('applyEnrichment', () => {
   it('links members to their group when both are here', async () => {
     db.prepare(`UPDATE artist SET mbid = ? WHERE id = 'art-y'`).run('22222222-2222-4222-8222-222222222222');
     await applyEnrichment('art-x', { ...readArtist(quadeca), kind: 'group', members: ['22222222-2222-4222-8222-222222222222'] });
-    expect((await artistAbout('art-x')).members).toEqual([{ id: 'art-y', name: 'Yolanda' }]);
-    expect((await artistAbout('art-y')).memberOf).toEqual([{ id: 'art-x', name: 'Xavier' }]);
+    expect((await artistAbout('art-x')).members).toEqual([{ id: 'art-y', name: 'Yolanda', years: null }]);
+    expect((await artistAbout('art-y')).memberOf).toEqual([{ id: 'art-x', name: 'Xavier', years: null }]);
+  });
+
+  it('keeps the years a membership held, from the first spell to the last', async () => {
+    const member = '22222222-2222-4222-8222-222222222222';
+    db.prepare(`UPDATE artist SET mbid = ? WHERE id = 'art-y'`).run(member);
+    const read = readArtist({
+      id: 'g',
+      name: 'Group',
+      type: 'Group',
+      relations: [
+        { type: 'member of band', 'target-type': 'artist', direction: 'backward', artist: { id: member, name: 'Y' }, begin: '1985', end: '1990-06' },
+        { type: 'member of band', 'target-type': 'artist', direction: 'backward', artist: { id: member, name: 'Y' }, begin: '1994', end: '2001' },
+      ],
+    });
+    expect(read.memberYears[member]).toEqual({ begin: 1985, end: 2001 });
+    await applyEnrichment('art-x', read);
+    expect((await artistAbout('art-x')).members).toEqual([{ id: 'art-y', name: 'Yolanda', years: '1985–2001' }]);
+  });
+});
+
+describe('membership years', () => {
+  it('read as a span, an open one, one year, or nothing', () => {
+    expect(spanOf(1985, 1999)).toBe('1985–1999');
+    expect(spanOf(2003, null)).toBe('2003–');
+    expect(spanOf(1999, 1999)).toBe('1999');
+    expect(spanOf(null, null)).toBeNull();
   });
 });
 

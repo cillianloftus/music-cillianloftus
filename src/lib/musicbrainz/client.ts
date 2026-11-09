@@ -24,6 +24,9 @@ export interface MbArtistDetails {
     direction?: 'forward' | 'backward';
     artist?: { id: string; name: string };
     url?: { resource: string };
+    /** When it held: "1985", "1991-04". */
+    begin?: string | null;
+    end?: string | null;
   }[];
 }
 

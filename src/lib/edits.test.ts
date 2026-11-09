@@ -79,13 +79,14 @@ describe('artists', () => {
       links: [],
       members: [],
       memberOf: [],
+      memberYears: {},
     });
     expect(await artistAbout('art-x')).toMatchObject({ kind: 'person', begin_date: '1990-05-01', begin_precision: 'day', area: 'Cork' });
   });
 
   it('links a member to a group, and unlinks it', async () => {
     await addLink('art-y', 'member_of', 'Xavier');
-    expect((await artistAbout('art-x')).members).toEqual([{ id: 'art-y', name: 'Yolanda' }]);
+    expect((await artistAbout('art-x')).members).toEqual([{ id: 'art-y', name: 'Yolanda', years: null }]);
     await removeLink('art-x', 'art-y', 'member_of');
     expect((await artistAbout('art-x')).members).toEqual([]);
   });

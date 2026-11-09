@@ -161,6 +161,24 @@ const sentence = (items: string[]) => {
   const text = words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words.at(-1)}` : (words[0] ?? '');
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
+// What Wikidata says of them, a line each; influences that are artists here lead to them.
+const factsOf = (property: string) => about.facts.filter((f) => f.property === property);
+const named = (property: string) => factsOf(property).map((f) => ({ id: f.artist_id, name: f.label }));
+const factRows = [
+  { term: 'Also called', items: named('nickname') },
+  { term: words.begin === 'Formed' ? 'Formed in' : 'Born in', items: named('birthplace') },
+  { term: 'Died in', items: named('deathplace') },
+  { term: 'Citizen of', items: named('citizenship') },
+  { term: 'Studied at', items: named('educated_at') },
+  { term: 'Labels', items: named('label') },
+  { term: 'Influenced by', items: named('influenced_by') },
+  { term: 'Influenced', items: about.influenced.map((a) => ({ id: a.id as string | null, name: a.name })) },
+]
+  // Born in only when MusicBrainz gave no place: the identity line says it already.
+  .filter((r) => r.items.length > 0 && !(r.term.endsWith(' in') && r.term !== 'Died in' && about.area));
+const awards = factsOf('award');
+const nominations = factsOf('nomination');
+const AWARDS_SHOWN = 5;
 const LINK_NAMES: Record<string, string> = {
   website: 'Website',
   instagram: 'Instagram',
@@ -299,6 +317,7 @@ import { splitVersion } from '../../lib/versions';
                 <>
                   {i > 0 && ', '}
                   <a href={`/artist/${m.id}`}>{m.name}</a>
+                  {m.years && <span class="years"> ({m.years})</span>}
                 </>
               ))}
             </p>
@@ -312,6 +331,7 @@ import { splitVersion } from '../../lib/versions';
                 <>
                   {i > 0 && ', '}
                   <a href={`/artist/${m.id}`}>{m.name}</a>
+                  {m.years && <span class="years"> ({m.years})</span>}
                 </>
               ))}
             </p>
@@ -621,9 +641,9 @@ import { splitVersion } from '../../lib/versions';
     }
 
     {
-      (about.bio || about.occupations.length > 0 || links.length > 0) && (
+      (about.bio || about.occupations.length > 0 || about.facts.length > 0 || about.influenced.length > 0 || links.length > 0) && (
         <section class="about" aria-labelledby="about-heading">
-          <h2 id="about-heading">{about.bio || about.occupations.length > 0 ? 'About' : 'Links'}</h2>
+          <h2 id="about-heading">{about.bio || about.occupations.length > 0 || about.facts.length > 0 ? 'About' : 'Links'}</h2>
           <div class="about-grid">
             {about.bio && (
               <div class="bio">
@@ -637,7 +657,7 @@ import { splitVersion } from '../../lib/versions';
                 )}
               </div>
             )}
-            {(about.occupations.length > 0 || about.instruments.length > 0) && (
+            {(about.occupations.length > 0 || about.instruments.length > 0 || factRows.length > 0 || about.influenced.length > 0) && (
               <dl class="does">
                 {about.occupations.length > 0 && (
                   <div>
@@ -651,9 +671,66 @@ import { splitVersion } from '../../lib/versions';
                     <dd>{sentence(about.instruments)}</dd>
                   </div>
                 )}
+                {factRows.map((row) => (
+                  <div>
+                    <dt>{row.term}</dt>
+                    <dd>
+                      {row.items.map((item, i) => (
+                        <>
+                          {i > 0 && ', '}
+                          {item.id ? <a href={`/artist/${item.id}`}>{item.name}</a> : item.name}
+                        </>
+                      ))}
+                    </dd>
+                  </div>
+                ))}
               </dl>
             )}
           </div>
+          {awards.length + nominations.length > 0 && (
+            <div class="awards">
+              <h3>
+                {[
+                  awards.length ? `${awards.length} ${awards.length === 1 ? 'award' : 'awards'}` : null,
+                  nominations.length ? `${nominations.length} ${nominations.length === 1 ? 'nomination' : 'nominations'}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </h3>
+              <ul role="list">
+                {(awards.length ? awards : nominations).slice(0, AWARDS_SHOWN).map((f) => (
+                  <li>
+                    {f.label}
+                    {f.year && <span class="muted"> · {f.year}</span>}
+                  </li>
+                ))}
+              </ul>
+              {(awards.length > AWARDS_SHOWN || (awards.length > 0 && nominations.length > 0) || nominations.length > AWARDS_SHOWN) && (
+                <details>
+                  <summary>All of them</summary>
+                  {awards.length > AWARDS_SHOWN && (
+                    <ul role="list">
+                      {awards.slice(AWARDS_SHOWN).map((f) => (
+                        <li>
+                          {f.label}
+                          {f.year && <span class="muted"> · {f.year}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {awards.length > 0 && nominations.length > 0 && <h4>Nominated for</h4>}
+                  <ul role="list">
+                    {nominations.slice(awards.length ? 0 : AWARDS_SHOWN).map((f) => (
+                      <li>
+                        {f.label}
+                        {f.year && <span class="muted"> · {f.year}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
           {links.length > 0 && (
             <ul class="links" role="list" aria-label="Elsewhere">
               {links.map((l) => (
@@ -1617,6 +1694,46 @@ import { splitVersion } from '../../lib/versions';
 
   .does dd {
     margin: 2px 0 0;
+  }
+
+  .years {
+    color: var(--text-muted);
+  }
+
+  /* Awards and nominations, from Wikidata: a few, the rest on request. */
+  .awards {
+    display: grid;
+    gap: var(--space-2);
+    max-width: 44rem;
+    margin-top: var(--space-5);
+  }
+
+  .awards h3,
+  .awards h4 {
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .awards h4 {
+    margin-top: var(--space-3);
+  }
+
+  .awards ul {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .awards summary {
+    margin-top: var(--space-1);
+    color: var(--text-muted);
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .about .links {

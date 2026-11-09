@@ -54,7 +54,11 @@ export interface Enrichment {
   /** MBIDs of this artist's members, and of the groups it is a member of. */
   members: string[];
   memberOf: string[];
+  /** The years each membership held, by the other artist's MBID (the earliest start, the latest end). */
+  memberYears: Record<string, { begin: number | null; end: number | null }>;
 }
+
+const yearOf = (d: string | null | undefined) => (d && /^\d{4}/.test(d) ? Number(d.slice(0, 4)) : null);
 
 /** Hosts worth a link on an artist's page, by kind. Streaming services and databases are left out. */
 const LINK_HOSTS: [RegExp, string][] = [
@@ -91,6 +95,17 @@ export function readArtist(mb: MbArtistDetails): Enrichment {
   // "member of band" from the member's side is forward; from the group's, backward.
   const members = [...new Set(memberRels.filter((r) => r.direction === 'backward').map((r) => r.artist!.id))];
   const memberOf = [...new Set(memberRels.filter((r) => r.direction === 'forward').map((r) => r.artist!.id))];
+  // Someone who left and came back has two spells: from the first start to the last end.
+  const memberYears: Enrichment['memberYears'] = {};
+  for (const r of memberRels) {
+    const id = r.artist!.id;
+    const begin = yearOf(r.begin);
+    const end = yearOf(r.end);
+    const had = memberYears[id];
+    memberYears[id] = had
+      ? { begin: had.begin === null || begin === null ? (had.begin ?? begin) : Math.min(had.begin, begin), end: had.end === null ? null : end === null ? null : Math.max(had.end, end) }
+      : { begin, end };
+  }
 
   const types: Record<string, ArtistKind> = {
     Person: 'person',
@@ -136,6 +151,7 @@ export function readArtist(mb: MbArtistDetails): Enrichment {
     links,
     members,
     memberOf,
+    memberYears,
   };
 }
 
@@ -166,17 +182,21 @@ export async function applyEnrichment(artistId: string, e: Enrichment): Promise<
        SELECT ?1, j.value ->> '$.name', j.value ->> '$.kind', 'musicbrainz' FROM json_each(?2) j WHERE true
        ON CONFLICT DO NOTHING`,
     ).bind(artistId, JSON.stringify(e.aliases)),
-    // Members and groups, where both are in the catalogue.
+    // Members and groups, where both are in the catalogue, with the years it held.
     db.prepare(
-      `INSERT INTO artist_link (artist_id, other_id, kind, source)
-       SELECT a.id, ?1, 'member_of', 'musicbrainz' FROM artist a WHERE a.mbid IN (SELECT value FROM json_each(?2)) AND a.id <> ?1
-       ON CONFLICT DO NOTHING`,
-    ).bind(artistId, JSON.stringify(e.members)),
+      `INSERT INTO artist_link (artist_id, other_id, kind, source, begin_year, end_year)
+       SELECT a.id, ?1, 'member_of', 'musicbrainz', j.value ->> '$.begin', j.value ->> '$.end'
+       FROM json_each(?2) j JOIN artist a ON a.mbid = j.value ->> '$.mbid'
+       WHERE a.id <> ?1
+       ON CONFLICT DO UPDATE SET begin_year = coalesce(begin_year, excluded.begin_year), end_year = coalesce(end_year, excluded.end_year)`,
+    ).bind(artistId, JSON.stringify(e.members.map((mbid) => ({ mbid, ...e.memberYears[mbid] })))),
     db.prepare(
-      `INSERT INTO artist_link (artist_id, other_id, kind, source)
-       SELECT ?1, a.id, 'member_of', 'musicbrainz' FROM artist a WHERE a.mbid IN (SELECT value FROM json_each(?2)) AND a.id <> ?1
-       ON CONFLICT DO NOTHING`,
-    ).bind(artistId, JSON.stringify(e.memberOf)),
+      `INSERT INTO artist_link (artist_id, other_id, kind, source, begin_year, end_year)
+       SELECT ?1, a.id, 'member_of', 'musicbrainz', j.value ->> '$.begin', j.value ->> '$.end'
+       FROM json_each(?2) j JOIN artist a ON a.mbid = j.value ->> '$.mbid'
+       WHERE a.id <> ?1
+       ON CONFLICT DO UPDATE SET begin_year = coalesce(begin_year, excluded.begin_year), end_year = coalesce(end_year, excluded.end_year)`,
+    ).bind(artistId, JSON.stringify(e.memberOf.map((mbid) => ({ mbid, ...e.memberYears[mbid] })))),
     db.prepare(
       `INSERT INTO artist_url (artist_id, kind, url, source)
        SELECT ?1, j.value ->> '$.kind', j.value ->> '$.url', 'musicbrainz' FROM json_each(?2) j WHERE true
@@ -202,12 +222,13 @@ export async function enrichArtist(artistId: string): Promise<boolean> {
  * first, within a time budget: MusicBrainz allows about one request a
  * second. Returns how many were done.
  */
-export async function enrichArtists({ budgetMs, limit = 40 }: { budgetMs: number; limit?: number }): Promise<number> {
+export async function enrichArtists({ budgetMs, limit = 40 }: { budgetMs: number; limit?: number }): Promise<{ done: number; left: number }> {
   const deadline = Date.now() + budgetMs;
-  const { results } = await env.DB.prepare(
-    `SELECT a.id FROM artist a
+  const waiting = `FROM artist a
      WHERE a.mbid IS NOT NULL
-       AND (a.enriched_at IS NULL OR a.enriched_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-90 days'))
+       AND (a.enriched_at IS NULL OR a.enriched_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-90 days'))`;
+  const { results } = await env.DB.prepare(
+    `SELECT a.id ${waiting}
      ORDER BY EXISTS (SELECT 1 FROM artist_credit c WHERE c.artist_id = a.id AND c.role = 'primary') DESC,
               a.enriched_at IS NOT NULL, a.created_at
      LIMIT ?`,
@@ -223,7 +244,8 @@ export async function enrichArtists({ budgetMs, limit = 40 }: { budgetMs: number
       console.warn('Artist enrichment failed', id, error);
     }
   }
-  return done;
+  const left = (await env.DB.prepare(`SELECT count(*) AS n ${waiting}`).first<{ n: number }>())?.n ?? 0;
+  return { done, left };
 }
 
 export interface ArtistAbout {
@@ -235,9 +257,9 @@ export interface ArtistAbout {
   area: string | null;
   aliases: { name: string; kind: string }[];
   /** Groups this artist is in, and this group's members. */
-  memberOf: { id: string; name: string }[];
-  members: { id: string; name: string }[];
-  sameAs: { id: string; name: string }[];
+  memberOf: { id: string; name: string; years: string | null }[];
+  members: { id: string; name: string; years: string | null }[];
+  sameAs: { id: string; name: string; years: string | null }[];
   /** The opening of their Wikipedia article, and the article. */
   bio: string | null;
   bio_url: string | null;
@@ -249,10 +271,29 @@ export interface ArtistAbout {
   mbid: string | null;
   spotify_id: string | null;
   discogs_id: string | null;
+  /** Awards, labels, influences, places, from Wikidata. */
+  facts: ArtistFact[];
+  /** Artists here who name this one as an influence. */
+  influenced: { id: string; name: string }[];
+}
+
+export interface ArtistFact {
+  property: 'award' | 'nomination' | 'label' | 'influenced_by' | 'birthplace' | 'deathplace' | 'educated_at' | 'citizenship' | 'nickname';
+  label: string;
+  year: number | null;
+  /** The artist here it names, for an influence. */
+  artist_id: string | null;
+}
+
+/** A membership's years: '1985–1999', '2003–' (still), '1999' (one year), or null when unknown. */
+export function spanOf(begin: number | null, end: number | null): string | null {
+  if (begin === null) return end === null ? null : `until ${end}`;
+  if (end === null) return `${begin}–`;
+  return begin === end ? String(begin) : `${begin}–${end}`;
 }
 
 export async function artistAbout(artistId: string): Promise<ArtistAbout> {
-  const [row, aliases, links, urls] = await env.DB.batch([
+  const [row, aliases, links, urls, factRows, influencedRows] = await env.DB.batch([
     env.DB.prepare(
       `SELECT kind, begin_date, begin_precision, end_date, end_precision, area, bio, bio_url, occupations, instruments, mbid, spotify_id, discogs_id
        FROM artist WHERE id = ?`,
@@ -262,14 +303,28 @@ export async function artistAbout(artistId: string): Promise<ArtistAbout> {
        ORDER BY CASE kind WHEN 'legal' THEN 0 WHEN 'performance' THEN 1 WHEN 'alias' THEN 2 ELSE 3 END, name`,
     ).bind(artistId),
     env.DB.prepare(
-      `SELECT l.kind, 'out' AS dir, a.id, a.name FROM artist_link l JOIN artist a ON a.id = l.other_id WHERE l.artist_id = ?1
+      `SELECT l.kind, 'out' AS dir, a.id, a.name, l.begin_year, l.end_year FROM artist_link l JOIN artist a ON a.id = l.other_id WHERE l.artist_id = ?1
        UNION ALL
-       SELECT l.kind, 'in' AS dir, a.id, a.name FROM artist_link l JOIN artist a ON a.id = l.artist_id WHERE l.other_id = ?1
+       SELECT l.kind, 'in' AS dir, a.id, a.name, l.begin_year, l.end_year FROM artist_link l JOIN artist a ON a.id = l.artist_id WHERE l.other_id = ?1
        ORDER BY 4`,
     ).bind(artistId),
     env.DB.prepare(
       `SELECT kind, url FROM artist_url WHERE artist_id = ?
        ORDER BY CASE kind WHEN 'website' THEN 0 WHEN 'bandcamp' THEN 1 WHEN 'instagram' THEN 2 WHEN 'youtube' THEN 3 ELSE 4 END, kind`,
+    ).bind(artistId),
+    // From Wikidata (migration 0056); an influence that is an artist here leads to them.
+    env.DB.prepare(
+      `SELECT f.property, f.label, f.year,
+              CASE WHEN f.property = 'influenced_by' THEN (SELECT a.id FROM artist a WHERE a.wikidata_id = f.value_id LIMIT 1) END AS artist_id
+       FROM artist_fact f WHERE f.artist_id = ?
+       ORDER BY f.property, f.year IS NULL, f.year DESC, f.label`,
+    ).bind(artistId),
+    // Artists here who name this one as an influence.
+    env.DB.prepare(
+      `SELECT a.id, a.name FROM artist me
+       JOIN artist_fact f ON f.property = 'influenced_by' AND f.value_id = me.wikidata_id
+       JOIN artist a ON a.id = f.artist_id
+       WHERE me.id = ? ORDER BY a.name`,
     ).bind(artistId),
   ]);
   const base = (row!.results[0] ?? {}) as Omit<ArtistAbout, 'aliases' | 'memberOf' | 'members' | 'sameAs' | 'occupations' | 'instruments' | 'urls'> & {
@@ -284,9 +339,9 @@ export async function artistAbout(artistId: string): Promise<ArtistAbout> {
       return [];
     }
   };
-  const linkRows = links!.results as { kind: string; dir: 'in' | 'out'; id: string; name: string }[];
+  const linkRows = links!.results as { kind: string; dir: 'in' | 'out'; id: string; name: string; begin_year: number | null; end_year: number | null }[];
   const pick = (kind: string, dir?: 'in' | 'out') =>
-    linkRows.filter((l) => l.kind === kind && (!dir || l.dir === dir)).map(({ id, name }) => ({ id, name }));
+    linkRows.filter((l) => l.kind === kind && (!dir || l.dir === dir)).map(({ id, name, begin_year, end_year }) => ({ id, name, years: spanOf(begin_year, end_year) }));
   return {
     kind: base.kind ?? null,
     begin_date: base.begin_date ?? null,
@@ -306,6 +361,8 @@ export async function artistAbout(artistId: string): Promise<ArtistAbout> {
     mbid: base.mbid ?? null,
     spotify_id: base.spotify_id ?? null,
     discogs_id: base.discogs_id ?? null,
+    facts: factRows!.results as ArtistFact[],
+    influenced: influencedRows!.results as { id: string; name: string }[],
   };
 }
 

@@ -3,6 +3,8 @@ import { fillSongLinks } from '../../../../lib/genius';
 import { fillPopularity } from '../../../../lib/popularity';
 import { fillAlbumSoundFromDeezer } from '../../../../lib/sources/deezer';
 import { fillAlbumsMoreFromMusicBrainz } from '../../../../lib/sources/musicbrainz-more';
+import { enrichArtists } from '../../../../lib/artists';
+import { fillArtistsFromWiki } from '../../../../lib/sources/wikipedia';
 
 /**
  * One round of a fill the nightly run does a little at a time, for
@@ -18,6 +20,10 @@ const FILLS: Record<string, () => Promise<{ left: number }>> = {
   popularity: () => fillPopularity({ budgetMs: 25_000, batches: 40 }),
   // Track genres and kinds, labels, lists and awards: two MusicBrainz requests an album.
   musicbrainz: () => fillAlbumsMoreFromMusicBrainz({ budgetMs: 25_000, limit: 30 }),
+  // Every artist's details from MusicBrainz (and then Wikidata): one a second.
+  artists: () => enrichArtists({ budgetMs: 25_000, limit: 30 }),
+  // Awards, labels, influences and more from Wikidata, for artists whose id is known.
+  wikidata: () => fillArtistsFromWiki({ budgetMs: 25_000, limit: 60 }),
 };
 
 export const POST: APIRoute = async ({ params }) => {
