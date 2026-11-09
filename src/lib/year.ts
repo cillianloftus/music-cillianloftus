@@ -66,9 +66,8 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
     env.DB.prepare(
       // The year's albums; their scores come from albumScores, below.
       `SELECT g.id FROM release_group g
-       WHERE g.first_release_date >= ?2 AND g.first_release_date < ?3 AND g.type IN ('album', 'mixtape', 'ep')
-         AND ?1 IS NOT NULL`,
-    ).bind(userId, from, to),
+       WHERE g.first_release_date >= ?1 AND g.first_release_date < ?2 AND g.type IN ('album', 'mixtape', 'ep')`,
+    ).bind(from, to),
     env.DB.prepare(
       `WITH firsts AS (
          SELECT entity_id, min(rated_at) AS first FROM rating WHERE user_id = ?1 AND entity_type = 'recording' GROUP BY entity_id

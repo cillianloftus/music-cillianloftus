@@ -364,13 +364,11 @@ async function fillers(viewerId: string | null, today: string): Promise<Pick[]> 
     env.DB.prepare(`SELECT g.id, g.name AS title FROM genre g`),
   ]);
   const trackCounts = await trackCountsByGenre();
-  const genres = {
-    results: ((genreRows?.results ?? []) as { id: string; title: string }[])
-      .map((g) => ({ ...g, tracks: trackCounts[g.id] ?? 0 }))
-      .filter((g) => g.tracks >= 5)
-      .sort((a, b) => b.tracks - a.tracks)
-      .slice(0, 30),
-  } as D1Result;
+  const genres = ((genreRows?.results ?? []) as { id: string; title: string }[])
+    .map((g) => ({ ...g, tracks: trackCounts[g.id] ?? 0 }))
+    .filter((g) => g.tracks >= 5)
+    .sort((a, b) => b.tracks - a.tracks)
+    .slice(0, 30);
 
   type Row = Record<string, string | number | null>;
   const rows = (r: D1Result | undefined) => (r?.results ?? []) as Row[];
@@ -433,7 +431,7 @@ async function fillers(viewerId: string | null, today: string): Promise<Pick[]> 
       reason: `A day with them: ${a.releases} releases here`,
       href: `/artist/${s(a.id)}`,
     })),
-    choose(rows(genres), 'genre', 1).map((g) => ({
+    choose(genres, 'genre', 1).map((g) => ({
       ...blank,
       kind: 'genre' as const,
       id: s(g.id)!,

@@ -5,6 +5,7 @@
 
 import { env } from 'cloudflare:workers';
 import { albumScores, withScores } from './album-scores';
+import { byLibrary } from './library-cache';
 import { splitVersion } from './versions';
 import type { DatePrecision } from './dates';
 import type { CreditEntity, CreditRole, ReleaseGroupType } from './import/plan';
@@ -436,6 +437,11 @@ export interface Collaborator {
 
 /** Who appears most on this artist's own records, in any role but their own. */
 export async function artistCollaborators(artistId: string, limit = 8): Promise<Collaborator[]> {
+  // The library's, not anyone's ratings: kept until it changes (30,000 rows for a big artist).
+  return byLibrary(`collaborators:v1:${artistId}:${limit}`, null, () => findCollaborators(artistId, limit));
+}
+
+async function findCollaborators(artistId: string, limit: number): Promise<Collaborator[]> {
   const { results } = await env.DB.prepare(
     `WITH own AS (
        SELECT entity_type, entity_id FROM artist_credit WHERE artist_id = ?1 AND role = 'primary'

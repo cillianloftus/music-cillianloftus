@@ -5,7 +5,7 @@ import Findings from '../../components/Findings.astro';
 import AlbumShape from '../../components/AlbumShape.astro';
 import { hasShape, shapeOf } from '../../lib/shape';
 import { discover, trackFacts } from '../../lib/discover';
-import { albumScores, albumStanding } from '../../lib/standing';
+import { albumStanding, albumStandings } from '../../lib/standing';
 import CoverArt from '../../components/CoverArt.astro';
 import CreditLine from '../../components/CreditLine.astro';
 import Backdrop from '../../components/Backdrop.astro';
@@ -84,7 +84,7 @@ const [tracks, standardTracks, genres, people, albumFacts] = await Promise.all([
   viewerId ? trackFacts(viewerId, { albumId: album.id }) : Promise.resolve([]),
 ]);
 // What stands out on this album: found in its tracks' ratings, not chosen.
-const albumLines = viewerId && album.quality_score !== null ? albumStanding(await albumScores(viewerId), album.id) : [];
+const albumLines = viewerId && album.quality_score !== null ? albumStanding(await albumStandings(viewerId), album.id) : [];
 const albumFindings = discover(albumFacts, { albumId: album.id, limit: 4, minGroup: 2 }).filter((f) => f.kind !== 'habit');
 
 // Tracks on this edition but not the standard one: bonus tracks, which do

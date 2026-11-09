@@ -11,6 +11,7 @@
 
 import { fillArtistFromWiki } from './sources/wikipedia';
 import { env } from 'cloudflare:workers';
+import { byLibrary } from './library-cache';
 import type { DatePrecision } from './dates';
 import { getArtistDetails, type MbArtistDetails } from './musicbrainz/client';
 
@@ -332,6 +333,11 @@ export interface ArtistGenre {
  * label them.
  */
 export async function artistGenres(artistId: string, limit = 6): Promise<ArtistGenre[]> {
+  // The library's, not anyone's ratings: kept until it changes.
+  return byLibrary(`artist-genres:v1:${artistId}:${limit}`, null, () => findArtistGenres(artistId, limit));
+}
+
+async function findArtistGenres(artistId: string, limit: number): Promise<ArtistGenre[]> {
   // v_recording_genre's rule, driven from this artist's credits and counted
   // here: a track's own tags (manual ones winning) if it has any, otherwise
   // its albums'. Through the view it was 158,000 rows read for an artist

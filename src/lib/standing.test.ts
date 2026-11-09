@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TrackFact } from './discover';
-import { albumStanding, standing, type AlbumScore } from './standing';
+import { albumStanding, standing, type StandingAlbum } from './standing';
 
 const fact = (id: string, score: number, extra: Partial<TrackFact> = {}): TrackFact => ({
   id,
@@ -53,7 +53,7 @@ describe('standing', () => {
 });
 
 describe('album standing', () => {
-  const album = (id: string, score: number, extra: Partial<AlbumScore> = {}): AlbumScore => ({
+  const album = (id: string, score: number, extra: Partial<StandingAlbum> = {}): StandingAlbum => ({
     id,
     score,
     type: 'album',

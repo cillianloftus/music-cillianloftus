@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { migratedDb, seedLibrary } from '../test/db';
-import { fillMonths, insights } from './insights';
+import { byDecade, fillMonths, insights } from './insights';
 
 beforeEach(() => {
   const db = migratedDb();
@@ -28,6 +28,22 @@ describe('insights', () => {
       ['2025-12', 0],
       ['2026-01', 0],
       ['2026-02', 1],
+    ]);
+  });
+});
+
+describe('albums by decade', () => {
+  it('averages each decade, oldest first, leaving undated albums out', () => {
+    expect(
+      byDecade([
+        { quality: 80, released: '2016-05-01' },
+        { quality: 60, released: '2019' },
+        { quality: 90, released: '1999-01' },
+        { quality: 10, released: null },
+      ]),
+    ).toEqual([
+      { key: '1990s', label: '1990s', average: 90, count: 1 },
+      { key: '2010s', label: '2010s', average: 70, count: 2 },
     ]);
   });
 });

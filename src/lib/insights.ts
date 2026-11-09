@@ -6,7 +6,7 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { albumScores } from './album-scores';
+import { albumScores, type ScoredAlbum } from './album-scores';
 import { genresOfRecordings } from './genres';
 
 export interface Headline {
@@ -56,7 +56,8 @@ export interface Insights {
 }
 
 export async function insights(userId: string): Promise<Insights> {
-  const [headline, spread, decades, families, months, artists, years] = await env.DB.batch([
+  // Albums come from the user's album scores (album-scores.ts), read alongside.
+  const [batch, scores] = await Promise.all([env.DB.batch([
     env.DB.prepare(
       `SELECT (SELECT count(*) FROM v_recording_score WHERE user_id = ?1) AS ratedTracks,
               (SELECT avg(quality_score) FROM v_recording_score WHERE user_id = ?1) AS averageTrack,
@@ -69,8 +70,6 @@ export async function insights(userId: string): Promise<Insights> {
       `SELECT min(9, CAST(quality_score / 10 AS INTEGER)) AS band, count(*) AS count
        FROM v_recording_score WHERE user_id = ? GROUP BY band`,
     ).bind(userId),
-    // (Decades: from the album scores, below.)
-    env.DB.prepare('SELECT 1'),
     // Genre families: a track's genres, walked up primary parents to the root.
     env.DB.prepare(
       `WITH RECURSIVE up(id, root_id) AS (
@@ -114,41 +113,43 @@ export async function insights(userId: string): Promise<Insights> {
        WHERE s.user_id = ? AND r.first_release_date IS NOT NULL
        GROUP BY key ORDER BY key DESC`,
     ).bind(userId),
-  ]);
+  ]), albumScores(userId)]);
+  const [headline, spread, families, months, artists, years] = batch;
 
   const h = (headline!.results[0] ?? {}) as Record<string, number | null>;
-  // Albums from the user's album scores (album-scores.ts), not the view
-  // built again twice: about 30,000 rows.
-  const scores = Object.values(await albumScores(userId));
-  const byDecade = new Map<string, { sum: number; count: number }>();
-  for (const s of scores) {
-    if (!s.released) continue;
-    const key = `${s.released.slice(0, 3)}0s`;
-    const d = byDecade.get(key) ?? { sum: 0, count: 0 };
-    d.sum += s.quality;
-    d.count += 1;
-    byDecade.set(key, d);
-  }
-  const decadeGroups = [...byDecade]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, d]) => ({ key, average: d.sum / d.count, count: d.count })) as unknown as Group[];
   const bands = new Map((spread!.results as { band: number; count: number }[]).map((r) => [r.band, r.count]));
   return {
     headline: {
       ratedTracks: h.ratedTracks ?? 0,
-      ratedAlbums: scores.length,
+      ratedAlbums: Object.keys(scores).length,
       averageTrack: h.averageTrack ?? null,
       gutOffset: (h.gutOffset ?? 0) * 10,
       gutSamples: h.gutSamples ?? 0,
       impactTracks: h.impactTracks ?? 0,
     },
     spread: Array.from({ length: 10 }, (_, band) => ({ from: band * 10, to: band === 9 ? 100 : band * 10 + 9, count: bands.get(band) ?? 0 })),
-    decades: decadeGroups,
+    decades: byDecade(Object.values(scores)),
     years: (years!.results as Group[]).filter((y) => /^\d{4}$/.test(y.key)),
     families: families!.results as Group[],
     months: fillMonths(months!.results as Month[]),
     artists: artists!.results as ArtistRow[],
   };
+}
+
+/** Average album score by decade of release, oldest first; undated albums left out. */
+export function byDecade(albums: Pick<ScoredAlbum, 'quality' | 'released'>[]): Group[] {
+  const decades = new Map<string, { sum: number; count: number }>();
+  for (const album of albums) {
+    if (!album.released) continue;
+    const key = `${album.released.slice(0, 3)}0s`;
+    const d = decades.get(key) ?? { sum: 0, count: 0 };
+    d.sum += album.quality;
+    d.count += 1;
+    decades.set(key, d);
+  }
+  return [...decades]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, d]) => ({ key, label: key, average: d.sum / d.count, count: d.count }));
 }
 
 /** Every month from the first to the last, zero where nothing was rated. */

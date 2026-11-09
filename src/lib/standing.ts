@@ -8,7 +8,7 @@
 import { env } from 'cloudflare:workers';
 import type { TrackFact } from './discover';
 import { byLibrary } from './library-cache';
-import { albumScores as albumScoreMap } from './album-scores';
+import { albumScores } from './album-scores';
 
 export interface Standing {
   text: string;
@@ -100,7 +100,7 @@ export function standing(facts: TrackFact[], id: string): Standing[] {
   return out.slice(0, 4);
 }
 
-export interface AlbumScore {
+export interface StandingAlbum {
   id: string;
   score: number;
   type: string;
@@ -110,9 +110,9 @@ export interface AlbumScore {
 }
 
 /** Every scored release for a user, cached by library state. */
-export async function albumScores(userId: string): Promise<AlbumScore[]> {
+export async function albumStandings(userId: string): Promise<StandingAlbum[]> {
   // Scores from the album scores (album-score-map), so only the artists are read here.
-  const scores = await albumScoreMap(userId);
+  const scores = await albumScores(userId);
   return byLibrary('album-standing:v2', userId, async () => {
     const ids = Object.keys(scores).filter((id) => scores[id]!.quality != null);
     const { results } = await env.DB.prepare(
@@ -137,7 +137,7 @@ export async function albumScores(userId: string): Promise<AlbumScore[]> {
 }
 
 /** Where an album stands: among everything, its artist's releases, its year. */
-export function albumStanding(albums: AlbumScore[], id: string): Standing[] {
+export function albumStanding(albums: StandingAlbum[], id: string): Standing[] {
   const me = albums.find((a) => a.id === id);
   if (!me) return [];
   const out: Standing[] = [];

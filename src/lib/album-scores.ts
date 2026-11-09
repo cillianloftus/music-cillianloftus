@@ -11,7 +11,7 @@
 import { env } from 'cloudflare:workers';
 import { byLibrary } from './library-cache';
 
-export interface AlbumScore {
+export interface ScoredAlbum {
   quality: number;
   personal: number;
   rated: number;
@@ -21,7 +21,7 @@ export interface AlbumScore {
   released: string | null;
 }
 
-export type AlbumScores = Record<string, AlbumScore>;
+export type AlbumScores = Record<string, ScoredAlbum>;
 
 export async function albumScores(userId: string | null): Promise<AlbumScores> {
   if (!userId) return {};
@@ -34,7 +34,7 @@ export async function albumScores(userId: string | null): Promise<AlbumScores> {
        WHERE s.user_id = ?1`,
     )
       .bind(userId)
-      .all<AlbumScore & { id: string }>();
+      .all<ScoredAlbum & { id: string }>();
     return Object.fromEntries(results.map(({ id, ...score }) => [id, score]));
   });
 }

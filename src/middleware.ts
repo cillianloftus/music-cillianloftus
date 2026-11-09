@@ -1,3 +1,4 @@
+import type { APIContext, MiddlewareNext } from 'astro';
 import { defineMiddleware } from 'astro:middleware';
 import { env } from 'cloudflare:workers';
 import { verifyAccessJwt, type AccessIdentity } from './lib/auth/access';
@@ -56,28 +57,27 @@ function movedTo(pathname: string): string | null {
   return m[1] ? `/manage/${m[1]}${m[2] ?? ''}` : '/manage';
 }
 
-// Each request in its own scope (src/lib/request-scope.ts).
-export const onRequest = defineMiddleware((context, next) => inRequest(() => scoped(context, next)));
+// Each request in its own scope (src/lib/request-scope.ts); in development, metered.
+export const onRequest = defineMiddleware((context, next) =>
+  inRequest(() => (import.meta.env.DEV ? metered(context, next) : handle(context, next))),
+);
 
-const scoped: Parameters<typeof defineMiddleware>[0] = async (context, next) => {
-  // Development: log each page's D1 rows read (src/lib/dev/rows-meter.ts).
-  if (import.meta.env.DEV) {
-    const meter = await import('./lib/dev/rows-meter');
-    meter.meterRows(env.DB);
-    const report = meter.startCount();
-    // ?__cold: as after a rating, with the library cache empty.
-    const cold = context.url.searchParams.has('__cold');
-    devCold.on = cold;
-    const response = await handle(context, next);
-    return meter.reportWhenDone(response, () => {
-      devCold.on = false;
-      report(`${context.request.method} ${context.url.pathname}${cold ? ' (cold)' : ''}`);
-    });
-  }
-  return handle(context, next);
-};
+/** Development: logs each page's D1 rows read (src/lib/dev/rows-meter.ts). */
+async function metered(context: APIContext, next: MiddlewareNext): Promise<Response> {
+  const meter = await import('./lib/dev/rows-meter');
+  meter.meterRows(env.DB);
+  const report = meter.startCount();
+  // ?__cold: as after a rating, with the library cache empty.
+  const cold = context.url.searchParams.has('__cold');
+  devCold.on = cold;
+  const response = await handle(context, next);
+  return meter.reportWhenDone(response, () => {
+    devCold.on = false;
+    report(`${context.request.method} ${context.url.pathname}${cold ? ' (cold)' : ''}`);
+  });
+}
 
-async function handle(context: Parameters<Parameters<typeof defineMiddleware>[0]>[0], next: () => Promise<Response>): Promise<Response> {
+async function handle(context: APIContext, next: MiddlewareNext): Promise<Response> {
   const moved = movedTo(context.url.pathname);
   if (moved) return context.redirect(`${moved}${context.url.search}`, 301);
 
