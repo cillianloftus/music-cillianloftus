@@ -6,7 +6,7 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { byLibrary } from './library-cache';
+import { byDay } from './library-cache';
 
 export interface Kin {
   id: string;
@@ -31,8 +31,9 @@ export function cosine(a: Map<string, number>, b: Map<string, number>): number {
   return na && nb ? dot / Math.sqrt(na * nb) : 0;
 }
 
+/** Worked out once a day per artist: one import barely moves it, and it is dear (byDay). */
 export async function kinOf(artistId: string, limit = 6): Promise<Kin[]> {
-  return byLibrary(`kin:v1:${artistId}:${limit}`, null, () => findKin(artistId, limit));
+  return byDay(`kin:v2:${artistId}:${limit}`, () => findKin(artistId, limit));
 }
 
 /**

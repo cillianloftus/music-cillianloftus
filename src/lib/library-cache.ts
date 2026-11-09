@@ -83,6 +83,31 @@ const BUILD = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'test';
 export const devCold = { on: false };
 
 /**
+ * The value under name for today (UTC), worked out at most once a day. For
+ * readings that one import barely moves and that are dear to work out
+ * (which artists are close to which: 90,000 rows for a big artist), where
+ * byLibrary would work them out again after every album imported.
+ */
+export async function byDay<T>(name: string, work: () => Promise<T>, now = new Date()): Promise<T> {
+  const key = `day:${BUILD}:${name}:${now.toISOString().slice(0, 10)}`;
+  return perRequest(key, async () => {
+    try {
+      const hit = devCold.on ? null : await env.CACHE.get<{ value: T }>(key, 'json');
+      if (hit) return hit.value;
+    } catch {
+      /* No cache: work it out. */
+    }
+    const value = await work();
+    try {
+      await env.CACHE.put(key, JSON.stringify({ value }), { expirationTtl: 2 * 24 * 60 * 60 });
+    } catch {
+      /* Uncached is only slower. */
+    }
+    return value;
+  });
+}
+
+/**
  * The value under name for this library state, worked out and kept when
  * missing. Within one request it is looked up once, however many sections
  * ask for it at the same time (a user's album scores, say).
