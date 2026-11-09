@@ -222,19 +222,37 @@ export async function enrichArtist(artistId: string): Promise<boolean> {
  * first, within a time budget: MusicBrainz allows about one request a
  * second. Returns how many were done.
  */
-export async function enrichArtists({ budgetMs, limit = 40 }: { budgetMs: number; limit?: number }): Promise<{ done: number; left: number }> {
+export async function enrichArtists({
+  budgetMs,
+  limit = 40,
+  count = false,
+}: {
+  budgetMs: number;
+  limit?: number;
+  /** Also count how many are still due (for a catch-up that runs until none are). */
+  count?: boolean;
+}): Promise<{ done: number; left: number }> {
   const deadline = Date.now() + budgetMs;
   const waiting = `FROM artist a
      WHERE a.mbid IS NOT NULL
        AND (a.enriched_at IS NULL OR a.enriched_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-90 days'))`;
-  const { results } = await env.DB.prepare(
+  // Artists with records of their own first, then everyone else credited.
+  // Two short reads that stop once they have enough, where sorting every
+  // due artist by whether they had a record read about 11,000 rows a time.
+  const { results: primary } = await env.DB.prepare(
     `SELECT a.id ${waiting}
-     ORDER BY EXISTS (SELECT 1 FROM artist_credit c WHERE c.artist_id = a.id AND c.role = 'primary') DESC,
-              a.enriched_at IS NOT NULL, a.created_at
+       AND EXISTS (SELECT 1 FROM artist_credit c WHERE c.artist_id = a.id AND c.role = 'primary')
      LIMIT ?`,
   )
     .bind(limit)
     .all<{ id: string }>();
+  const { results: others } =
+    primary.length < limit
+      ? await env.DB.prepare(`SELECT a.id ${waiting} AND a.id NOT IN (SELECT value FROM json_each(?1)) LIMIT ?2`)
+          .bind(JSON.stringify(primary.map((p) => p.id)), limit - primary.length)
+          .all<{ id: string }>()
+      : { results: [] as { id: string }[] };
+  const results = [...primary, ...others];
   let done = 0;
   for (const { id } of results) {
     if (Date.now() > deadline) break;
@@ -244,7 +262,7 @@ export async function enrichArtists({ budgetMs, limit = 40 }: { budgetMs: number
       console.warn('Artist enrichment failed', id, error);
     }
   }
-  const left = (await env.DB.prepare(`SELECT count(*) AS n ${waiting}`).first<{ n: number }>())?.n ?? 0;
+  const left = count ? ((await env.DB.prepare(`SELECT count(*) AS n ${waiting}`).first<{ n: number }>())?.n ?? 0) : 0;
   return { done, left };
 }
 

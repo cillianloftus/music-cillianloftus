@@ -40,6 +40,19 @@ describe('settling after imports', () => {
     expect(flag()).toBe('0');
     expect(await settleIfIdle()).toBe(false);
   });
+
+  it('settles at most every twenty minutes, keeping the mark until it can', async () => {
+    const { settleIfIdle, SETTLE_EVERY_MS } = await import('./runner');
+    const start = new Date('2026-11-10T00:00:00.000Z');
+    db.exec(`INSERT INTO app_setting (key, value) VALUES ('library_settle_due', '1')`);
+    expect(await settleIfIdle(start)).toBe(true);
+    // Another album in, ten minutes later: due, but too soon.
+    db.exec(`UPDATE app_setting SET value = '1' WHERE key = 'library_settle_due'`);
+    expect(await settleIfIdle(new Date(start.getTime() + SETTLE_EVERY_MS / 2))).toBe(false);
+    expect(flag()).toBe('1');
+    expect(await settleIfIdle(new Date(start.getTime() + SETTLE_EVERY_MS + 1000))).toBe(true);
+    expect(flag()).toBe('0');
+  });
 });
 
 describe('running out of requests', () => {

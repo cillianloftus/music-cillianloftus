@@ -21,7 +21,7 @@ const FILLS: Record<string, () => Promise<{ left: number }>> = {
   // Track genres and kinds, labels, lists and awards: two MusicBrainz requests an album.
   musicbrainz: () => fillAlbumsMoreFromMusicBrainz({ budgetMs: 25_000, limit: 30 }),
   // Every artist's details from MusicBrainz (and then Wikidata): one a second.
-  artists: () => enrichArtists({ budgetMs: 25_000, limit: 30 }),
+  artists: () => enrichArtists({ budgetMs: 25_000, limit: 30, count: true }),
   // Awards, labels, influences and more from Wikidata, for artists whose id is known.
   wikidata: () => fillArtistsFromWiki({ budgetMs: 25_000, limit: 60 }),
 };

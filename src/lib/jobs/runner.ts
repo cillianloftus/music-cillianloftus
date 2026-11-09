@@ -60,6 +60,9 @@ async function enrichImportedArtists(releaseGroupId: string): Promise<void> {
 }
 
 const SETTLE_KEY = 'library_settle_due';
+const SETTLED_AT_KEY = 'library_settled_at';
+/** The least time between two settles. */
+export const SETTLE_EVERY_MS = 20 * 60 * 1000;
 
 /** The library has changed: the whole-library passes are due once the queue empties. */
 async function markSettleDue(): Promise<void> {
@@ -78,11 +81,24 @@ async function markSettleDue(): Promise<void> {
  * waiting; the run that empties the queue does it. Taking the flag is one
  * UPDATE, so two overlapping runs never both settle.
  */
-export async function settleIfIdle(): Promise<boolean> {
+export async function settleIfIdle(now = new Date()): Promise<boolean> {
   const waiting = await env.DB.prepare(`SELECT 1 AS yes FROM job WHERE status = 'queued' LIMIT 1`).first();
   if (waiting) return false;
-  const taken = await env.DB.prepare(`UPDATE app_setting SET value = '0' WHERE key = ?1 AND value = '1'`).bind(SETTLE_KEY).run();
+  // At most every SETTLE_EVERY_MS: a long import drip-fed into the queue
+  // empties it between albums, and settled each time (146 times in a day,
+  // 45 million rows). The mark stays set, so a later run settles it.
+  const since = new Date(now.getTime() - SETTLE_EVERY_MS).toISOString();
+  const taken = await env.DB.prepare(
+    `UPDATE app_setting SET value = '0'
+     WHERE key = ?1 AND value = '1'
+       AND NOT EXISTS (SELECT 1 FROM app_setting t WHERE t.key = ?2 AND t.value > ?3)`,
+  )
+    .bind(SETTLE_KEY, SETTLED_AT_KEY, since)
+    .run();
   if ((taken.meta.changes ?? 0) === 0) return false;
+  await env.DB.prepare(`INSERT INTO app_setting (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value`)
+    .bind(SETTLED_AT_KEY, now.toISOString())
+    .run();
   await detectAnomalies().catch((error) => console.warn('Review check after imports failed', error));
   await deriveAlbumGenres().catch((error) => console.warn('Genre derivation after imports failed', error));
   return true;
