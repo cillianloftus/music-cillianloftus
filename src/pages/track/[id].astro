@@ -47,7 +47,6 @@ const [appearances, credits, versions, genres, history, plays, songLinks] = awai
   trackLinks(id),
 ]);
 // What it takes from and what takes from it, each kind only when there is some.
-const LINKS_SHOWN = 5;
 const linkGroups = [
   { key: 'samples', label: 'Samples', tracks: songLinks.samples },
   { key: 'interpolates', label: 'Interpolates', tracks: songLinks.interpolates },
@@ -239,6 +238,15 @@ function ordinalOf(n: number): string {
               Edit
             </a>
           )}
+          {/* Its pages elsewhere, as small icons: there, without a row of their own. Spotify is Listen. */}
+          {links
+            .filter((l) => l.icon !== 'spotify')
+            .map((l) => (
+              <a class="button button--quiet icon-link" href={l.href} rel="external noopener" target="_blank" title={l.label}>
+                <LinkIcon name={l.icon} />
+                <span class="visually-hidden">{l.label} (opens in a new tab)</span>
+              </a>
+            ))}
         </p>
       </div>
     </header>
@@ -259,16 +267,6 @@ function ordinalOf(n: number): string {
             labelEvery={Math.max(1, Math.ceil(listening.months.length / 8))}
             bars={listening.months.map((m) => ({ label: monthName(m.month), value: m.count, detail: `${m.count} ${m.count === 1 ? 'play' : 'plays'}` }))}
           />
-        </section>
-      )
-    }
-    {
-      home && homeShape && (
-        <section aria-labelledby="place-heading">
-          <h2 id="place-heading">
-            Track {homeOrder.findIndex((t) => t.id === id) + 1} of {homeOrder.length} on <a href={`/album/${home.album.id}`}>{home.album.title}</a>
-          </h2>
-          <AlbumShape tracks={homeOrder} shape={homeShape} albumTitle={home.album.title} highlight={id} />
         </section>
       )
     }
@@ -294,6 +292,16 @@ function ordinalOf(n: number): string {
               </li>
             ))}
           </ul>
+        </section>
+      )
+    }
+    {
+      home && homeShape && (
+        <section aria-labelledby="place-heading">
+          <h2 id="place-heading">
+            Track {homeOrder.findIndex((t) => t.id === id) + 1} of {homeOrder.length} on <a href={`/album/${home.album.id}`}>{home.album.title}</a>
+          </h2>
+          <AlbumShape tracks={homeOrder} shape={homeShape} albumTitle={home.album.title} highlight={id} />
         </section>
       )
     }
@@ -355,67 +363,6 @@ function ordinalOf(n: number): string {
       )
     }
 
-        {
-          linkGroups.length > 0 && (
-            <section aria-labelledby="song-links-heading" class="song-links">
-              <h2 id="song-links-heading">{linksHeading}</h2>
-              {linkGroups.map((g) => {
-                const row = (t: LinkedTrack) => (
-                  <li class:list={{ here: t.recording_id !== null }}>
-                    {t.recording_id ? (
-                      <a href={`/track/${t.recording_id}`}>{t.title}</a>
-                    ) : (
-                      <a href={t.url} rel="external noopener" target="_blank">
-                        {t.title}
-                        <span class="visually-hidden"> on Genius (opens in a new tab)</span>
-                      </a>
-                    )}
-                    <span class="muted small">
-                      {t.artist}
-                      {t.year && ` · ${t.year}`}
-                    </span>
-                  </li>
-                );
-                return (
-                  <div class="link-group">
-                    <h3 id={`links-${g.key}`}>
-                      {g.label} {g.tracks.length > 1 && <span class="count tabular">{g.tracks.length}</span>}
-                    </h3>
-                    <ul role="list" aria-labelledby={`links-${g.key}`}>
-                      {g.tracks.slice(0, LINKS_SHOWN).map(row)}
-                    </ul>
-                    {g.tracks.length > LINKS_SHOWN && (
-                      <details class="more-versions">
-                        <summary>All {g.tracks.length}</summary>
-                        <ul role="list">{g.tracks.slice(LINKS_SHOWN).map(row)}</ul>
-                      </details>
-                    )}
-                  </div>
-                );
-              })}
-              <p class="muted small">From Genius</p>
-            </section>
-          )
-        }
-
-        {
-          links.length > 0 && (
-            <section class="links" aria-labelledby="links-heading">
-              <h2 id="links-heading">Links</h2>
-              <ul role="list">
-                {links.map((l) => (
-                  <li>
-                    <a href={l.href} rel="external noopener" target="_blank">
-                      <LinkIcon name={l.icon} />
-                      {l.label}
-                      <span class="visually-hidden"> (opens in a new tab)</span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )
-        }
       </div>
 
     {
@@ -445,6 +392,55 @@ function ordinalOf(n: number): string {
         </aside>
       )
     }
+
+    {/* After the credits: who made it, then what it took from and gave. */}
+        {
+          linkGroups.length > 0 && (
+            <section aria-labelledby="song-links-heading" class="song-links">
+              <h2 id="song-links-heading">{linksHeading}</h2>
+              {linkGroups.map((g, gi) => {
+                const row = (t: LinkedTrack) => (
+                  <li class:list={{ here: t.recording_id !== null }}>
+                    {t.recording_id ? (
+                      <a href={`/track/${t.recording_id}`}>{t.title}</a>
+                    ) : (
+                      <a href={t.url} rel="external noopener" target="_blank">
+                        {t.title}
+                        <span class="visually-hidden"> on Genius (opens in a new tab)</span>
+                      </a>
+                    )}
+                    <span class="muted small">
+                      {t.artist}
+                      {t.year && ` · ${t.year}`}
+                    </span>
+                  </li>
+                );
+                // As release kinds on artist pages: a tile each, one open at
+                // a time (name), the open one across the whole row.
+                return (
+                  <details class="link-group" name="song-links" open={gi === 0}>
+                    <summary>
+                      <h3 id={`links-${g.key}`}>
+                        {g.label} <span class="count tabular">{g.tracks.length}</span>
+                      </h3>
+                      <span class="peek muted small" aria-hidden="true">
+                        {g.tracks[0]!.title} · {g.tracks[0]!.artist}
+                        {g.tracks.length > 1 && ` and ${g.tracks.length - 1} more`}
+                      </span>
+                      <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="m6 9 6 6 6-6" />
+                      </svg>
+                    </summary>
+                    <ul role="list" aria-labelledby={`links-${g.key}`}>
+                      {g.tracks.map(row)}
+                    </ul>
+                  </details>
+                );
+              })}
+              <p class="muted small">From Genius</p>
+            </section>
+          )
+        }
     </div>
 
     {
@@ -888,36 +884,122 @@ function ordinalOf(n: number): string {
     font-weight: 600;
   }
 
-  .links h2 {
-    margin-bottom: var(--space-3);
+  /* A round button holding just the site's icon. */
+  .icon-link {
+    justify-content: center;
+    width: var(--target);
+    padding: 0;
   }
 
-  /* Samples and interpolations: a short list per kind; songs in the library stand out. */
+  /* Wide screens: samples under the main column, the credits beside both. */
+  @media (min-width: 60rem) {
+    .below > .credits-panel {
+      grid-row: span 2;
+    }
+
+    .below > .song-links {
+      grid-column: 1;
+    }
+  }
+
+  /* Samples and interpolations, as release kinds on artist pages: a tile
+     per kind, two to a row, showing how many and the first; open, one
+     takes the whole row for its list. Songs in the library stand out. */
   .song-links {
     display: grid;
-    gap: var(--space-4);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: row dense;
+    gap: var(--space-3);
     max-width: 44rem;
   }
 
-  .song-links h2 {
+  .song-links > h2,
+  .song-links > p {
+    grid-column: 1 / -1;
     margin-bottom: 0;
   }
 
+  .link-group[open] {
+    grid-column: 1 / -1;
+  }
+
+  .link-group > summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'name chevron' 'peek peek';
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
+    padding: var(--space-3);
+    border-radius: var(--radius-m);
+    background: color-mix(in srgb, var(--surface-1) 85%, transparent);
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .link-group > summary::-webkit-details-marker {
+    display: none;
+  }
+
   .link-group h3 {
-    margin-bottom: var(--space-2);
-    color: var(--text-subtle);
-    font-size: var(--step--1);
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    grid-area: name;
+    margin: 0;
+    font-size: var(--step-0);
+    line-height: 1.2;
   }
 
   .link-group h3 .count {
-    font-size: inherit;
+    margin-left: var(--space-1);
+    color: var(--text-subtle);
+    font-size: 0.8em;
+    font-weight: 700;
   }
 
+  .link-group .peek {
+    grid-area: peek;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Open: a plain heading over its list, no tile. */
+  .link-group[open] > summary {
+    grid-template-areas: 'name chevron';
+    margin-bottom: var(--space-2);
+    padding: 0;
+    background: none;
+  }
+
+  .link-group[open] .peek {
+    display: none;
+  }
+
+  .link-group .chevron {
+    grid-area: chevron;
+    width: 1.5rem;
+    height: 1.5rem;
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: rotate 0.2s ease;
+  }
+
+  .link-group:not([open]) .chevron {
+    rotate: -90deg;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .link-group .chevron {
+      transition: none;
+    }
+  }
+
+  /* A long list runs in two columns where there is room. */
   .link-group ul {
     display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr));
+    column-gap: var(--space-5);
     margin: 0;
     padding: 0;
     list-style: none;
@@ -950,33 +1032,6 @@ function ordinalOf(n: number): string {
 
   .link-group a:hover {
     text-decoration: underline;
-  }
-
-  .links ul {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .links a {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-height: var(--target);
-    padding: 0 var(--space-4) 0 var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface-1);
-    font-size: var(--step--1);
-    font-weight: 650;
-    text-decoration: none;
-  }
-
-  .links a:hover {
-    border-color: var(--accent);
   }
 
   .spotify-mark {
