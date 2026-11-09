@@ -40,7 +40,7 @@ export async function findCover(releaseId: string, { replace }: { replace: boole
   if (!row) return null;
   if (row.art_key && !replace) return null;
 
-  // Stored files are overwritten in place; art_key is cleared so each step can set it.
+  // Each step stores a new version (artKeyFor); art_key is cleared so each step can set it.
   const clear = () => env.DB.prepare(`UPDATE release SET art_key = NULL WHERE id = ?`).bind(releaseId).run();
 
   if (row.mbid && row.group_mbid) {

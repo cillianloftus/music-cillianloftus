@@ -502,21 +502,6 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
     <datalist id="artist-list" data-artist-names></datalist>
     <script>
       import '../../../lib/client/artist-names';
-
-      // Back from replacing a cover (?cover=<edition>): fetch the new art past
-      // the browser's copy, which covers keep a minute and then reuse while
-      // they check, and redraw the ones on this page.
-      const edition = new URL(location.href).searchParams.get('cover');
-      if (edition && /^[\w-]+$/.test(edition)) {
-        const base = `/art/release/${edition}`;
-        void Promise.all([250, 500, 1200].map((size) => fetch(`${base}/${size}.jpg`, { cache: 'reload' }).catch(() => null))).then(() => {
-          for (const img of document.querySelectorAll<HTMLImageElement>(`img[src^="${base}/"]`)) {
-            const src = img.src;
-            img.src = '';
-            img.src = src;
-          }
-        });
-      }
     </script>
   </div>
 </Base>

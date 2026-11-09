@@ -20,7 +20,7 @@ interface Props {
 }
 
 const { artKey, src, height = '36rem' } = Astro.props;
-const image = src ?? (artKey ? `/${artKey}/250.jpg` : null);
+const image = src ?? (artKey ? `/${artKey}/250.webp` : null);
 ---
 
 {image && <div class="backdrop" aria-hidden="true" data-backdrop={image} style={`--backdrop-height: ${height}`}></div>}

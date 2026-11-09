@@ -137,7 +137,10 @@ describe('importFromSpotify', () => {
     expect(db.prepare(`SELECT spotify_id, isrc FROM recording WHERE title = 'Opening'`).get()).toEqual({ spotify_id: id('t1'), isrc: 'GBAYE0000001' });
     // The existing Xavier, not a second one, and he takes the Spotify id.
     expect(db.prepare(`SELECT id, spotify_id FROM artist WHERE name = 'Xavier'`).all()).toEqual([{ id: 'art-x', spotify_id: id('ax') }]);
-    expect([...stored.keys()].sort()).toEqual([250, 500, 1200].map((s) => `art/release/${result.releaseId}/${s}.jpg`).sort());
+    // Under a version of their own, which the release's art_key names.
+    const artKey = (db.prepare(`SELECT art_key FROM release WHERE id = ?`).get(result.releaseId) as { art_key: string }).art_key;
+    expect(artKey).toMatch(new RegExp(`^art/release/${result.releaseId}/[0-9a-z]+$`));
+    expect([...stored.keys()].sort()).toEqual([250, 500, 1200].map((s) => `${artKey}/${s}.jpg`).sort());
   });
 
   it('adds nothing on a second import of the same album', async () => {

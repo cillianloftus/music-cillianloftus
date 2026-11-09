@@ -1,8 +1,11 @@
 ---
 /**
- * Album art from stored derivatives. Square and sized up front, so it never
+ * Album art from stored derivatives: WebP at five widths for the browser to
+ * choose from (made once each, src/lib/import/coverart.ts), the JPEG for
+ * anything that ignores srcset. Square and sized up front, so it never
  * shifts layout. Without art, a quiet tile built from the title stands in.
  */
+import { WEBP_SIZES } from '../lib/import/coverart';
 
 interface Props {
   artKey: string | null;
@@ -30,7 +33,7 @@ const initials = title
     <img
       class="cover"
       src={`${base}/500.jpg`}
-      srcset={`${base}/250.jpg 250w, ${base}/500.jpg 500w, ${base}/1200.jpg 1200w`}
+      srcset={WEBP_SIZES.map((w) => `${base}/${w}.webp ${w}w`).join(', ')}
       sizes={sizes}
       width="500"
       height="500"

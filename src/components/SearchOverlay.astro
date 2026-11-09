@@ -134,7 +134,7 @@
         a.href = p.href;
         const pic = document.createElement('span');
         pic.className = round ? 'pic round' : 'pic';
-        const src = p.image ? `/${p.image}` : p.art ? `/${p.art}/250.jpg` : null;
+        const src = p.image ? `/${p.image}` : p.art ? `/${p.art}/128.webp` : null;
         if (src) {
           const img = document.createElement('img');
           img.src = src;
@@ -198,7 +198,7 @@
     art.className = 'art';
     if (r.art) {
       const img = document.createElement('img');
-      img.src = `/${r.art}/250.jpg`;
+      img.src = `/${r.art}/128.webp`;
       img.alt = '';
       img.loading = 'lazy';
       art.appendChild(img);

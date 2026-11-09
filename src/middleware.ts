@@ -78,6 +78,10 @@ async function metered(context: APIContext, next: MiddlewareNext): Promise<Respo
 }
 
 async function handle(context: APIContext, next: MiddlewareNext): Promise<Response> {
+  // Pictures are public and the same for everyone: no sign-in check and no
+  // database read before each one (a page can show eighty).
+  if (context.url.pathname.startsWith('/art/')) return next();
+
   const moved = movedTo(context.url.pathname);
   if (moved) return context.redirect(`${moved}${context.url.search}`, 301);
 
@@ -95,7 +99,7 @@ async function handle(context: APIContext, next: MiddlewareNext): Promise<Respon
   // isolate's next page is worked out afresh.
   if (context.request.method !== 'GET' && context.request.method !== 'HEAD') {
     const response = await next();
-    forgetStamp();
+    forgetStamp();
     return response;
   }
 

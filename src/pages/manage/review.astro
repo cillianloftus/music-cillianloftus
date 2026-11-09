@@ -123,7 +123,7 @@ const singleActions: Partial<Record<AnomalyKind, { intent: string; label: string
   orphaned_track: [{ intent: 'dismiss', label: 'Leave it' }],
 };
 const artSrc = (e: { art: string | null; artKind: string | null }) =>
-  e.art ? (e.artKind === 'cover' ? `/${e.art}/250.jpg` : `/${e.art}`) : null;
+  e.art ? (e.artKind === 'cover' ? `/${e.art}/128.webp` : `/${e.art}`) : null;
 const SOURCES: Record<string, string> = {
   musicbrainz: 'From MusicBrainz',
   spotify: 'From Spotify',

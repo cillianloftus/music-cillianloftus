@@ -53,5 +53,11 @@
 	],
 	"ai": {
 		"binding": "AI"
+	},
+	// Smaller WebP copies of covers, each made once on first request and
+	// kept in R2 beside the JPEGs (src/lib/import/coverart.ts).
+	"images": {
+		"binding": "IMAGES",
+		"remote": true
 	}
 }
