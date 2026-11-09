@@ -1,0 +1,82 @@
+---
+/**
+ * A row of linked choices, one current (a sort, a view, a scope): a pill
+ * track that scrolls sideways when it does not fit. The same on every page
+ * that offers one.
+ */
+interface Props {
+  label: string;
+  /** The main choice of a page (what is shown, not how it is ordered): the current one stands out more. */
+  emphasis?: boolean;
+  items: { href: string; label: string; current: boolean; count?: number | undefined }[];
+}
+
+const { label, items, emphasis = false } = Astro.props;
+---
+
+<nav class:list={['segmented', { emphasis }]} aria-label={label}>
+  {
+    items.map((item) => (
+      <a href={item.href} aria-current={item.current ? 'page' : undefined}>
+        {item.label}
+        {item.count !== undefined && <span class="count tabular">{item.count}</span>}
+      </a>
+    ))
+  }
+</nav>
+
+<style>
+  .segmented {
+    display: flex;
+    gap: var(--space-1);
+    max-width: 100%;
+    width: fit-content;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .segmented::-webkit-scrollbar {
+    display: none;
+  }
+
+  .segmented a {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    min-height: calc(var(--target) - 6px);
+    padding: 0 var(--space-4);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .segmented a:hover {
+    color: var(--text);
+  }
+
+  .count {
+    margin-left: 0.4em;
+    color: var(--text-subtle);
+  }
+
+  .segmented a[aria-current='page'] {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .emphasis a[aria-current='page'] {
+    background: var(--text);
+    color: var(--bg);
+  }
+
+  .emphasis a[aria-current='page'] .count {
+    color: inherit;
+    opacity: 0.7;
+  }
+</style>

@@ -1,4 +1,5 @@
 ---
+import Segmented from '../components/Segmented.astro';
 /**
  * Every artist at once: a wall of faces, filed A to Z (or by how much is
  * rated, or how well), with a filter that narrows as you type.
@@ -53,13 +54,7 @@ const meta = (a: RosterArtist) =>
     <PageHeader title="Artists" count={artists.length} />
 
     <div class="tools">
-      <nav aria-label="Order" class="sorts">
-        {SORTS.map(([value, label]) => (
-          <a href={value === 'score' ? '/artists' : `/artists?sort=${value}`} aria-current={sort === value ? 'page' : undefined}>
-            {label}
-          </a>
-        ))}
-      </nav>
+      <Segmented label="Order" items={SORTS.map(([value, label]) => ({ href: value === 'score' ? '/artists' : `/artists?sort=${value}`, label, current: sort === value }))} />
       <div class="filter" hidden data-filter>
         <label for="filter" class="visually-hidden">Filter artists</label>
         <input class="input" id="filter" type="search" placeholder="Filter by name" autocomplete="off" spellcheck="false" />
@@ -168,44 +163,6 @@ const meta = (a: RosterArtist) =>
     align-items: center;
     justify-content: space-between;
     gap: var(--space-3);
-  }
-
-  /* Five orders: on a phone the row scrolls sideways rather than wrapping. */
-  .sorts {
-    display: flex;
-    gap: var(--space-1);
-    max-width: 100%;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .sorts::-webkit-scrollbar {
-    display: none;
-  }
-
-  .sorts a {
-    flex: none;
-    white-space: nowrap;
-  }
-
-  .sorts a {
-    display: inline-flex;
-    align-items: center;
-    min-height: calc(var(--target) - 6px);
-    padding: 0 var(--space-4);
-    border-radius: 999px;
-    color: var(--text-muted);
-    font-size: var(--step--1);
-    font-weight: 650;
-    text-decoration: none;
-  }
-
-  .sorts a[aria-current='page'] {
-    background: var(--surface-2);
-    color: var(--text);
   }
 
   .filter {

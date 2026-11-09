@@ -10,6 +10,7 @@ import Findings from '../../components/Findings.astro';
 import { discover, trackFacts } from '../../lib/discover';
 import AlbumCard from '../../components/AlbumCard.astro';
 import CardGrid from '../../components/CardGrid.astro';
+import Segmented from '../../components/Segmented.astro';
 import ResultList from '../../components/ResultList.astro';
 import { hueOf } from '../../lib/art/playlist';
 import { ownerId } from '../../lib/auth/user';
@@ -100,14 +101,13 @@ const list = (items: string[]) =>
       {
         /* Just this genre, or with everything beneath it: a toggle, not a sentence. */
         genre.children.length > 0 && genre.tracksBeneath !== genre.tracks && (
-          <nav class="scope" aria-label="Which tracks">
-            <a href={`/genre/${id}`} aria-current={deep ? undefined : 'page'}>
-              {genre.name} <span class="tabular">{genre.tracksDirect}</span>
-            </a>
-            <a href={`/genre/${id}?beneath=1`} aria-current={deep ? 'page' : undefined}>
-              With subgenres <span class="tabular">{genre.tracksBeneath}</span>
-            </a>
-          </nav>
+          <Segmented
+            label="Which tracks"
+            items={[
+              { href: `/genre/${id}`, label: genre.name, count: genre.tracksDirect, current: !deep },
+              { href: `/genre/${id}?beneath=1`, label: 'With subgenres', count: genre.tracksBeneath, current: deep },
+            ]}
+          />
         )
       }
       {
@@ -422,42 +422,6 @@ const list = (items: string[]) =>
 
   .artists li:hover .who a {
     text-decoration: underline;
-  }
-
-  /* Two choices in one pill, as the sort on Artists. */
-  .scope {
-    display: inline-flex;
-    width: fit-content;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--surface-1) 70%, transparent);
-  }
-
-  .scope a {
-    display: inline-flex;
-    gap: var(--space-2);
-    min-height: 2.25rem;
-    align-items: center;
-    padding: 0 var(--space-4);
-    border-radius: 999px;
-    color: var(--text-muted);
-    font-size: var(--step--1);
-    font-weight: 650;
-    text-decoration: none;
-  }
-
-  .scope a span {
-    opacity: 0.7;
-  }
-
-  .scope a[aria-current='page'] {
-    background: var(--surface-2);
-    color: var(--text);
-  }
-
-  .scope a:hover {
-    color: var(--text);
   }
 
   .rename summary {

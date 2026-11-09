@@ -9,6 +9,7 @@ import Base from '../layouts/Base.astro';
 import PageHeader from '../components/PageHeader.astro';
 import AlbumCard from '../components/AlbumCard.astro';
 import CardGrid from '../components/CardGrid.astro';
+import Segmented from '../components/Segmented.astro';
 import { ownerId } from '../lib/auth/user';
 import { byLibrary } from '../lib/library-cache';
 import { shelfOfKind, type ShelfKind, type ShelfSort } from '../lib/catalogue';
@@ -55,20 +56,8 @@ const heading = KINDS.find(([k]) => k === kind)![1];
     <PageHeader title={heading === 'Live and more' ? 'Live and more' : heading} count={all.length} />
 
     <div class="tools">
-      <nav aria-label="Kind" class="pills kinds">
-        {KINDS.map(([value, label]) => (
-          <a href={href({ kind: value, page: 1 })} aria-current={kind === value ? 'page' : undefined}>
-            {label}
-          </a>
-        ))}
-      </nav>
-      <nav aria-label="Order" class="pills">
-        {SORTS.map(([value, label]) => (
-          <a href={href({ sort: value, page: 1 })} aria-current={sort === value ? 'page' : undefined}>
-            {label}
-          </a>
-        ))}
-      </nav>
+      <Segmented label="Kind" emphasis items={KINDS.map(([value, label]) => ({ href: href({ kind: value, page: 1 }), label, current: kind === value }))} />
+      <Segmented label="Order" items={SORTS.map(([value, label]) => ({ href: href({ sort: value, page: 1 }), label, current: sort === value }))} />
     </div>
 
     {
@@ -136,47 +125,6 @@ const heading = KINDS.find(([k]) => k === kind)![1];
   .tools {
     display: grid;
     gap: var(--space-2);
-  }
-
-  /* A row of pills; on a phone it scrolls sideways rather than wrapping. */
-  .pills {
-    display: flex;
-    gap: var(--space-1);
-    max-width: 100%;
-    width: fit-content;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .pills::-webkit-scrollbar {
-    display: none;
-  }
-
-  .pills a {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    min-height: calc(var(--target) - 6px);
-    padding: 0 var(--space-4);
-    border-radius: 999px;
-    color: var(--text-muted);
-    font-size: var(--step--1);
-    font-weight: 650;
-    text-decoration: none;
-    white-space: nowrap;
-  }
-
-  .pills a[aria-current='page'] {
-    background: var(--surface-2);
-    color: var(--text);
-  }
-
-  .kinds a[aria-current='page'] {
-    background: var(--text);
-    color: var(--bg);
   }
 
   .more {
