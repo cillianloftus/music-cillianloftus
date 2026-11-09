@@ -5,7 +5,6 @@
  * lookup, a note) goes in the slot.
  */
 import { creditRoles, groupCredits, roleUses, ROLE_FAMILIES, type CreditRow, type CreditTarget } from '../lib/credits';
-import { env } from 'cloudflare:workers';
 import Edited from './Edited.astro';
 import { editsOf } from '../lib/revert';
 
@@ -30,7 +29,6 @@ const families = groupCredits(roles, (r) => r).map((g) => ({ family: g.key, name
 const custom = roles.filter((r) => !r.builtin);
 const uses = await roleUses(custom.map((r) => r.id));
 const removable = custom.map((r) => ({ ...r, uses: uses.get(r.id) ?? 0 }));
-const names = (await env.DB.prepare(`SELECT name FROM artist UNION SELECT name FROM artist_alias ORDER BY 1`).all<{ name: string }>()).results;
 const listId = `credit-artists-${entity}`;
 const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean>();
 ---
@@ -120,6 +118,7 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
         id={`credit-who-${entity}`}
         name="who"
         list={listId}
+        data-artist-names
         required
         maxlength="200"
         autocomplete="off"
@@ -179,7 +178,8 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
   </details>}
 
   <slot />
-  <datalist id={listId}>{names.map((a) => <option value={a.name} />)}</datalist>
+  <!-- Filled from /api/write/artist-names when a Who field is first used (below). -->
+  <datalist id={listId} data-artist-names></datalist>
 </section>
 
 <script>
@@ -195,6 +195,32 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
    *
    * Without JavaScript every form posts and the page reloads, as before.
    */
+  // Names to suggest for Who, fetched once, the first time one is focused:
+  // thousands of them, so not written into the page.
+  let names: Promise<void> | null = null;
+  const fillNames = () =>
+    (names ??= fetch('/api/write/artist-names')
+      .then((r) => (r.ok ? (r.json() as Promise<string[]>) : []))
+      .then((list) => {
+        for (const datalist of document.querySelectorAll('datalist[data-artist-names]')) {
+          const fragment = document.createDocumentFragment();
+          for (const name of list) {
+            const option = document.createElement('option');
+            option.value = name;
+            fragment.appendChild(option);
+          }
+          datalist.replaceChildren(fragment);
+        }
+      })
+      .catch(() => {
+        names = null; // try again on the next focus
+      }));
+  document.addEventListener('focusin', (event) => {
+    const input = event.target;
+    // Marked on the box itself: the suggestion list (suggest.ts) takes its list attribute away.
+    if (input instanceof HTMLInputElement && input.hasAttribute('data-artist-names')) void fillNames();
+  });
+
   for (const form of document.querySelectorAll<HTMLFormElement>('form[data-credit-add]')) {
     const search = form.querySelector<HTMLInputElement>('[data-role-search]');
     // (Cast: this project's DOM types trip over HTMLSelectElement's own remove().)
