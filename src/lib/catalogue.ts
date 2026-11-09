@@ -24,6 +24,8 @@ export interface Score {
 }
 
 export interface ReleaseGroupSummary extends Partial<Score> {
+  /** What albums are ranked by: the score, as sure as the rating is complete (album-scores.ts). */
+  rank_score?: number | null;
   id: string;
   title: string;
   type: ReleaseGroupType;
@@ -519,6 +521,6 @@ export async function shelfOfKind(viewerId: string | null, kind: ShelfKind, sort
   const versions = kind === 'singles' || kind === 'eps';
   const shelf = await withArtistLines(versions ? results.filter((g) => splitVersion(g.title).version === null) : results, viewerId);
   // Scored first, best first; the query's order (newest) breaks ties. Stable.
-  if (sort === 'score') shelf.sort((a, b) => (a.quality_score === null ? 1 : 0) - (b.quality_score === null ? 1 : 0) || (b.quality_score ?? 0) - (a.quality_score ?? 0));
+  if (sort === 'score') shelf.sort((a, b) => (a.rank_score === null ? 1 : 0) - (b.rank_score === null ? 1 : 0) || (b.rank_score ?? 0) - (a.rank_score ?? 0));
   return shelf;
 }

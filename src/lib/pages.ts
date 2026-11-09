@@ -239,8 +239,8 @@ export async function genreAlbums(id: string, viewerId: string | null, limit = 2
       .all<{ id: string }>(),
     albumScores(viewerId),
   ]);
-  // Rated ones by score first; the rest stay newest first (a stable sort).
-  const score = (i: string) => scores[i]?.personal ?? null;
+  // Rated ones by rank first (album-scores.ts); the rest stay newest first (a stable sort).
+  const score = (i: string) => scores[i]?.rank ?? null;
   const ids = results
     .map((r) => r.id)
     .sort((a, b) => (score(a) === null ? 1 : 0) - (score(b) === null ? 1 : 0) || (score(b) ?? 0) - (score(a) ?? 0))

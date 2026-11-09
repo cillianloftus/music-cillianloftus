@@ -5,7 +5,7 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { albumScores } from './album-scores';
+import { albumScores, byRank } from './album-scores';
 import { genresOfRecordings } from './genres';
 import { artistLines, releaseGroupsByIds, type CreditPart, type ReleaseGroupSummary } from './catalogue';
 
@@ -15,9 +15,10 @@ export async function topByType(userId: string | null, types: string[], limit = 
   const scores = await albumScores(userId);
   const ids = Object.entries(scores)
     .filter(([, s]) => types.includes(s.type))
-    .sort(([a, x], [b, y]) => y.quality - x.quality || y.personal - x.personal || a.localeCompare(b))
-    .slice(0, limit)
-    .map(([id]) => id);
+    .map(([id]) => id)
+    // Fully rated albums rank ahead of a high score on one song (album-scores.ts).
+    .sort(byRank(scores))
+    .slice(0, limit);
   return byIds(ids, userId);
 }
 

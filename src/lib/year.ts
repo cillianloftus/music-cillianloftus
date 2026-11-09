@@ -7,7 +7,7 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { albumScores } from './album-scores';
+import { albumScores, byRank } from './album-scores';
 import { discover, libraryFacts, type Finding } from './discover';
 
 export interface YearReview {
@@ -151,7 +151,7 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
     releases: (releases!.results as { id: string }[])
       .map((r) => r.id)
       .filter((id) => scores[id])
-      .sort((a, b) => scores[b]!.quality - scores[a]!.quality || a.localeCompare(b))
+      .sort(byRank(scores))
       .slice(0, 12),
     discoveries: (discoveries!.results as { id: string }[]).map((r) => r.id),
     found: found!.results as YearReview['found'],

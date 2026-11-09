@@ -917,9 +917,10 @@ export async function artistBreakdown(userId: string, artistId: string): Promise
       .filter((a) => a.scores.length >= 2)
       .map((a) => {
         const scored = albumScoreMap[a.id];
-        return { id: a.id, title: a.title, average: scored?.quality ?? mean(a.scores), tracks: scored?.rated ?? a.scores.length };
+        return { id: a.id, title: a.title, average: scored?.quality ?? mean(a.scores), tracks: scored?.rated ?? a.scores.length, rank: scored?.rank ?? mean(a.scores) };
       })
-      .sort((a, b) => b.average - a.average),
+      .sort((a, b) => b.rank - a.rank)
+      .map(({ rank: _rank, ...a }) => a),
     findings: discover(facts, { artistId, limit: 6, minGroup: 3 }),
   };
 }
