@@ -4,7 +4,7 @@ import { enqueue } from './lib/jobs/queue';
 import { runJobs } from './lib/jobs/runner';
 import { fetchArtistImages } from './lib/artist-images';
 import { enrichArtists } from './lib/artists';
-import { fillCreditsFromGenius } from './lib/genius';
+import { fillCreditsFromGenius, fillSongLinks } from './lib/genius';
 import { fillAlbumsFromSpotify } from './lib/spotify/fill';
 import { fillAlbumsFromDeezer } from './lib/sources/deezer';
 import { ownerId } from './lib/auth/user';
@@ -75,6 +75,7 @@ export default {
             ['Artist pictures', picturesForArtistsWithout],
             ['Spotify album links', linkSpotifyAlbums],
             ['Writing credits from Genius', () => fillCreditsFromGenius({ budgetMs: 20_000 })],
+            ['Samples and interpolations from Genius', () => fillSongLinks({ budgetMs: 15_000 })],
             ['Labels and barcodes from Deezer', () => fillAlbumsFromDeezer({ budgetMs: 15_000 })],
             // Each does nothing until its key is pasted on /manage/connections.
             ['Scrobbles from Last.fm and ListenBrainz', () => syncAllScrobbles({ budgetMs: 25_000 })],

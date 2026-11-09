@@ -36,9 +36,20 @@ interface Hit {
   result: { id: number; title: string; primary_artist?: { name: string } };
 }
 
-interface Song {
+/** A song as Genius lists it in another's relationships. */
+interface SongSummary {
+  title: string;
+  url: string;
+  primary_artist_names?: string;
+  primary_artist?: { name: string };
+  release_date_components?: { year: number | null } | null;
+}
+
+interface Song extends Partial<SongSummary> {
   url?: string;
   album?: { name: string; url: string } | null;
+  /** "samples", "sampled_in", "interpolates", "interpolated_by", and covers, remixes, translations. */
+  song_relationships?: { relationship_type: string; songs: SongSummary[] }[];
   writer_artists?: { name: string }[];
   producer_artists?: { name: string }[];
   /** Everything else Genius lists: "Mixing Engineer", "Guitar", "Label"… */
@@ -81,6 +92,69 @@ export interface GeniusFind {
   url: string | null;
   album: { name: string; url: string } | null;
   credits: { role: CreditRole; name: string }[];
+  /** What it samples and interpolates, and what samples and interpolates it. */
+  links: SongLink[];
+}
+
+/** A song named by its Genius page, as a link holds it. */
+export interface LinkedSong {
+  url: string;
+  title: string;
+  artist: string;
+  year: number | null;
+}
+
+/** `song` samples or interpolates `source`. */
+export interface SongLink {
+  kind: 'samples' | 'interpolates';
+  song: LinkedSong;
+  source: LinkedSong;
+}
+
+const GENIUS_PAGE = /^https:\/\/genius\.com\//;
+
+function linkedSong(s: Partial<SongSummary>): LinkedSong | null {
+  const artist = s.primary_artist_names ?? s.primary_artist?.name;
+  if (!s.url || !GENIUS_PAGE.test(s.url) || !s.title || !artist) return null;
+  return { url: s.url, title: s.title, artist, year: s.release_date_components?.year ?? null };
+}
+
+/** Each relationship the song lists as a link, read the one way round: the song that samples, then the one sampled. */
+export function songLinks(song: Song): SongLink[] {
+  const self = linkedSong(song);
+  if (!self) return [];
+  const ways: Record<string, { kind: SongLink['kind']; selfUses: boolean }> = {
+    samples: { kind: 'samples', selfUses: true },
+    sampled_in: { kind: 'samples', selfUses: false },
+    interpolates: { kind: 'interpolates', selfUses: true },
+    interpolated_by: { kind: 'interpolates', selfUses: false },
+  };
+  const links: SongLink[] = [];
+  for (const relation of song.song_relationships ?? []) {
+    const way = ways[relation.relationship_type];
+    if (!way) continue;
+    for (const other of relation.songs) {
+      const them = linkedSong(other);
+      if (!them || them.url === self.url) continue;
+      links.push(way.selfUses ? { kind: way.kind, song: self, source: them } : { kind: way.kind, song: them, source: self });
+    }
+  }
+  return links;
+}
+
+/** Keeps links not held yet; returns how many were new. */
+export async function keepSongLinks(links: SongLink[]): Promise<number> {
+  if (links.length === 0) return 0;
+  const result = await env.DB.prepare(
+    `INSERT OR IGNORE INTO song_link (kind, song_url, song_title, song_artist, song_year, source_url, source_title, source_artist, source_year)
+     SELECT l.value ->> 'kind',
+            l.value ->> '$.song.url', l.value ->> '$.song.title', l.value ->> '$.song.artist', l.value ->> '$.song.year',
+            l.value ->> '$.source.url', l.value ->> '$.source.title', l.value ->> '$.source.artist', l.value ->> '$.source.year'
+     FROM json_each(?) l`,
+  )
+    .bind(JSON.stringify(links))
+    .run();
+  return result.meta.changes ?? 0;
 }
 
 export async function geniusCredits(
@@ -111,9 +185,9 @@ export async function geniusCredits(
     const role = await roleFor(part.label);
     if (role) for (const a of part.artists) credits.push({ role, name: a.name });
   }
-  const url = song.url && /^https:\/\/genius\.com\//.test(song.url) ? song.url : null;
-  const album = song.album && /^https:\/\/genius\.com\//.test(song.album.url) ? { name: song.album.name, url: song.album.url } : null;
-  return { url, album, credits };
+  const url = song.url && GENIUS_PAGE.test(song.url) ? song.url : null;
+  const album = song.album && GENIUS_PAGE.test(song.album.url) ? { name: song.album.name, url: song.album.url } : null;
+  return { url, album, credits, links: songLinks(song) };
 }
 
 /**
@@ -198,19 +272,76 @@ export async function fillCreditsFromGenius({
         report.added += await fillCredits(row.id, found.credits);
         if (found.url) await env.DB.prepare(`UPDATE recording SET genius_url = ? WHERE id = ? AND genius_url IS NULL`).bind(found.url, row.id).run();
         if (found.album) await linkAlbumPage(row.id, found.album);
+        await keepSongLinks(found.links);
+        await logLookup('genius-links', row.id, true);
       }
-      await env.DB.prepare(
-        `INSERT INTO lookup_log (source, entity_id, found) VALUES ('genius', ?, ?)
-         ON CONFLICT (source, entity_id) DO UPDATE SET found = excluded.found, looked_at = excluded.looked_at`,
-      )
-        .bind(row.id, found ? 1 : 0)
-        .run();
+      await logLookup('genius', row.id, found !== null);
     } catch (error) {
       console.warn('Genius lookup failed', row.title, error);
       if (error instanceof Error && /Genius (401|403|429)/.test(error.message)) break;
     }
   }
   if (albumId && Date.now() < deadline) await fillAlbumPage(token, albumId, fetcher).catch((error) => console.warn('Genius album page failed', error));
+  return report;
+}
+
+async function logLookup(source: 'genius' | 'genius-links', recordingId: string, found: boolean): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO lookup_log (source, entity_id, found) VALUES (?, ?, ?)
+     ON CONFLICT (source, entity_id) DO UPDATE SET found = excluded.found, looked_at = excluded.looked_at`,
+  )
+    .bind(source, recordingId, found ? 1 : 0)
+    .run();
+}
+
+/**
+ * Samples and interpolations for tracks already matched on Genius before
+ * links were kept (their page is known, their links not): looked up once
+ * each, until the time budget runs out. Newly matched tracks get theirs
+ * with their credits.
+ */
+export async function fillSongLinks({
+  budgetMs,
+  limit = 60,
+  fetcher = fetch,
+}: {
+  budgetMs: number;
+  limit?: number;
+  fetcher?: typeof fetch;
+}): Promise<{ looked: number; links: number; left: number }> {
+  const token = await geniusToken();
+  const report = { looked: 0, links: 0, left: 0 };
+  if (!token) return report;
+  const deadline = Date.now() + budgetMs;
+  const waiting = `FROM recording r
+     WHERE r.genius_url IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM lookup_log l WHERE l.source = 'genius-links' AND l.entity_id = r.id)`;
+  const { results } = await env.DB.prepare(
+    `SELECT r.id, r.title, r.genius_url,
+            (SELECT json_group_array(a.name) FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+             WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary') AS artists,
+            (SELECT json_group_array(x.name) FROM artist_credit c JOIN artist_alias x ON x.artist_id = c.artist_id
+             WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary') AS aliases
+     ${waiting} LIMIT ?`,
+  )
+    .bind(limit)
+    .all<{ id: string; title: string; genius_url: string; artists: string; aliases: string }>();
+
+  for (const row of results) {
+    if (Date.now() > deadline) break;
+    report.looked += 1;
+    try {
+      const found = await geniusCredits(token, { title: row.title, artists: [...JSON.parse(row.artists), ...JSON.parse(row.aliases)] }, fetcher);
+      // Only the song already taken for this track: a search that now finds another is not it.
+      const same = found?.url === row.genius_url;
+      if (found && same) report.links += await keepSongLinks(found.links);
+      await logLookup('genius-links', row.id, same);
+    } catch (error) {
+      console.warn('Genius links lookup failed', row.title, error);
+      if (error instanceof Error && /Genius (401|403|429)/.test(error.message)) break;
+    }
+  }
+  report.left = (await env.DB.prepare(`SELECT count(*) AS n ${waiting}`).first<{ n: number }>())?.n ?? 0;
   return report;
 }
 
