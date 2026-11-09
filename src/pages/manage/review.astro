@@ -10,6 +10,7 @@ import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import { missingInfo } from '../../lib/gaps';
+import { byLibrary } from '../../lib/library-cache';
 import { linkableVersions, matchingAlbumPairs, matchingTrackPairs, openAnomalies, openCounts, reviewEntities, type Anomaly, type AnomalyKind } from '../../lib/review';
 
 const PAGE = 25;
@@ -74,7 +75,9 @@ const kind = (showGaps ? null : (kinds.find((k) => k === asked) ?? kinds[0])) ??
 const items = kind ? await openAnomalies(kind, PAGE) : [];
 const [entities, gaps, matching] = await Promise.all([
   reviewEntities(items),
-  missingInfo(),
+  // Kept per state of the library (and ratings, which order it): the
+  // writer list alone checks every track, 112,000 rows.
+  byLibrary('gaps:v1', Astro.locals.user?.id ?? null, missingInfo),
   kind === 'near_duplicate_recording'
     ? matchingTrackPairs()
     : kind === 'near_duplicate_release_group'
