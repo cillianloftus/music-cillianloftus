@@ -4,7 +4,7 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { albumScores, withScores } from './album-scores';
+import { albumScores, withScores, type Completeness } from './album-scores';
 import { byLibrary, byLibraryMap } from './library-cache';
 import { splitVersion } from './versions';
 import type { DatePrecision } from './dates';
@@ -26,6 +26,8 @@ export interface Score {
 export interface ReleaseGroupSummary extends Partial<Score> {
   /** What albums are ranked by: the score, as sure as the rating is complete (album-scores.ts). */
   rank_score?: number | null;
+  /** How much of it is rated, when not all of it. */
+  completeness?: Completeness | null;
   id: string;
   title: string;
   type: ReleaseGroupType;

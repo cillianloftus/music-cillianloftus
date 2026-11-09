@@ -69,11 +69,24 @@ export function byRank(scores: AlbumScores): (a: string, b: string) => number {
 export function withScores<T extends { id: string }>(
   rows: T[],
   scores: AlbumScores,
-): (T & { quality_score: number | null; personal_score: number | null; rank_score: number | null })[] {
+): (T & { quality_score: number | null; personal_score: number | null; rank_score: number | null; completeness: Completeness | null })[] {
   return rows.map((row) => ({
     ...row,
     quality_score: scores[row.id]?.quality ?? null,
     personal_score: scores[row.id]?.personal ?? null,
     rank_score: scores[row.id]?.rank ?? null,
+    completeness: completenessOf(scores[row.id]),
   }));
+}
+
+/** How much of an album is rated, for the mark beside its score (Score.astro). */
+export interface Completeness {
+  rated: number;
+  of: number;
+}
+
+/** How much of an album is rated, or null when all of it is (or its length is unknown). */
+export function completenessOf(score: ScoredAlbum | undefined): Completeness | null {
+  if (!score || !score.tracks || score.rated >= score.tracks) return null;
+  return { rated: score.rated, of: score.tracks };
 }

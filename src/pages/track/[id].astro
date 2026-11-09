@@ -288,7 +288,7 @@ function ordinalOf(n: number): string {
                     {a.position && ` · track ${a.position}`}
                   </span>
                 </span>
-                <Score quality={a.album.quality_score} personal={a.album.personal_score} size="m" quietWhenEmpty />
+                <Score quality={a.album.quality_score} personal={a.album.personal_score} completeness={a.album.completeness} size="m" quietWhenEmpty />
               </li>
             ))}
           </ul>

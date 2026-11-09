@@ -582,7 +582,7 @@ import { splitVersion } from '../../lib/versions';
                     <span class="bar" style={`--share: ${albumShare(a.average)}%`} aria-hidden="true" />
                     <a href={`/album/${a.id}`}>{a.title}</a>
                     <span class="muted small tabular">
-                      {Math.round(a.average)} · {a.tracks} rated
+                      {Math.round(a.average)} · {a.tracks}{a.of && a.of > a.tracks ? ` of ${a.of}` : ''} rated
                     </span>
                   </li>
                 ))}

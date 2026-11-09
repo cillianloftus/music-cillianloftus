@@ -20,15 +20,26 @@ interface Props {
    * ranks them).
    */
   ranked?: boolean;
+  /**
+   * An album not fully rated: a small ring, filled as far as it is rated,
+   * so a lower place in a ranking is no surprise (albums rank by how
+   * complete their rating is, album-scores.ts).
+   */
+  completeness?: { rated: number; of: number } | null | undefined;
 }
 
-const { quality, personal, size = 'm', quietWhenEmpty = false, ranked = false } = Astro.props;
+const { quality, personal, size = 'm', quietWhenEmpty = false, ranked = false, completeness = null } = Astro.props;
+const partial = completeness && completeness.rated < completeness.of ? completeness : null;
+// The ring's filled arc, on a circle of circumference 100.
+const filled = partial ? Math.max(4, Math.round((partial.rated / partial.of) * 100)) : 0;
 const rounded = quality == null ? null : Math.round(quality);
 const impact = quality != null && personal != null ? Math.round(personal - quality) : 0;
 /** 1 to 3: how strongly the mark shows. */
 const level = impact <= 0 ? 0 : impact <= 4 ? 1 : impact <= 7 ? 2 : 3;
 const label =
-  rounded == null ? 'Not rated' : `Score ${rounded} out of 100${impact > 0 ? `, and an impact of ${impact} out of 10` : ''}`;
+  rounded == null
+    ? 'Not rated'
+    : `Score ${rounded} out of 100${impact > 0 ? `, and an impact of ${impact} out of 10` : ''}${partial ? (partial.rated ? `, from ${partial.rated} of ${partial.of} tracks rated` : `, rated as a whole, none of its ${partial.of} tracks yet`) : ''}`;
 const tone = rounded == null ? null : scoreTone(rounded);
 ---
 
@@ -47,6 +58,13 @@ const tone = rounded == null ? null : scoreTone(rounded);
         <span class="mark" data-level={level} aria-hidden="true" title={`Impact ${impact} of 10`}>
           ✦{ranked && <span class="impact tabular">{impact}</span>}
         </span>
+      )}
+      {partial && (
+        <svg class="partial" viewBox="0 0 36 36" aria-hidden="true">
+          <title>{partial.rated ? `${partial.rated} of ${partial.of} tracks rated` : `Rated as a whole; none of its ${partial.of} tracks yet`}</title>
+          <circle class="partial-track" cx="18" cy="18" r="15.9155" />
+          <circle class="partial-fill" cx="18" cy="18" r="15.9155" stroke-dasharray={`${filled} 100`} />
+        </svg>
       )}
       <span class="visually-hidden">{label}</span>
     </span>
@@ -114,6 +132,31 @@ const tone = rounded == null ? null : scoreTone(rounded);
 
   .mark[data-level='2'] {
     opacity: 0.75;
+  }
+
+  /* Not fully rated: a small ring low in the same reserved space, filled
+     as far as the album is rated. Quiet: a cue, not a warning. */
+  .partial {
+    position: absolute;
+    right: -0.05em;
+    bottom: -0.05em;
+    width: 0.58em;
+    height: 0.58em;
+    rotate: -90deg;
+  }
+
+  .partial circle {
+    fill: none;
+    stroke-width: 6;
+  }
+
+  .partial-track {
+    stroke: color-mix(in srgb, var(--text-subtle) 35%, transparent);
+  }
+
+  .partial-fill {
+    stroke: var(--text-subtle);
+    stroke-linecap: round;
   }
 
   .mark[data-level='3'] {

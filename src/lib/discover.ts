@@ -849,7 +849,8 @@ export interface ArtistBreakdown {
   versusLibrary: number;
   /** Among artists with at least three rated tracks: 1 is the best. */
   rank: { position: number; of: number } | null;
-  albums: { id: string; title: string; average: number; tracks: number }[];
+  /** `tracks` rated, `of` on its standard edition. */
+  albums: { id: string; title: string; average: number; tracks: number; of: number | null }[];
   findings: Finding[];
 }
 
@@ -917,7 +918,7 @@ export async function artistBreakdown(userId: string, artistId: string): Promise
       .filter((a) => a.scores.length >= 2)
       .map((a) => {
         const scored = albumScoreMap[a.id];
-        return { id: a.id, title: a.title, average: scored?.quality ?? mean(a.scores), tracks: scored?.rated ?? a.scores.length, rank: scored?.rank ?? mean(a.scores) };
+        return { id: a.id, title: a.title, average: scored?.quality ?? mean(a.scores), tracks: scored?.rated ?? a.scores.length, of: scored?.tracks ?? null, rank: scored?.rank ?? mean(a.scores) };
       })
       .sort((a, b) => b.rank - a.rank)
       .map(({ rank: _rank, ...a }) => a),
