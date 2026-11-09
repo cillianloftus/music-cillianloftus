@@ -96,7 +96,7 @@ const bare = coverage === null && axes.length === 0 && !best && !(rating && rati
           )}
         </div>
 
-        {!bare && <div class:list={['details', { pairs: axes.length >= 4 && coverage === null && !best }]}>
+        {!bare && <div class:list={['details', { pairs: axes.length >= 4 && coverage === null && !best, trio: axes.length === 3 && trackAxes.length === 0 }]}>
           {coverage !== null && (
             <div class="meter">
               <p class="meter-label">
@@ -116,7 +116,7 @@ const bare = coverage === null && axes.length === 0 && !best && !(rating && rati
             </div>
           )}
           {axes.map(([label, value]) => (
-            <div class="meter">
+            <div class="meter axis">
               <p class="meter-label">
                 <span>{label}</span>
                 <span class="tabular">{value === 'n/a' ? 'Doesn’t apply' : value}</span>
@@ -250,10 +250,23 @@ const bare = coverage === null && axes.length === 0 && !best && !(rating && rati
     gap: var(--space-2) var(--space-4);
   }
 
-  .pairs .meter-label {
+  /* An album's three axes side by side in one row, as a track's sit two
+     by two; tracks rated and the best track take the whole width. */
+  .details.trio {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .trio > :not(.axis) {
+    grid-column: 1 / -1;
+  }
+
+  .pairs .meter-label,
+  .trio .meter-label {
     gap: var(--space-2);
   }
 
+  .trio .meter-label > span:first-child,
   .pairs .meter-label > span:first-child {
     min-width: 0;
     overflow: hidden;

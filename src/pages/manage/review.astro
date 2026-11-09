@@ -20,6 +20,7 @@ const ORDER: AnomalyKind[] = [
   'near_duplicate_release_group',
   'near_duplicate_recording',
   'version_of_recording',
+  'outdated_rating',
   'missing_cover_art',
   'unlinked_rated_recording',
   'track_count_mismatch',
@@ -47,6 +48,11 @@ const KINDS: Record<AnomalyKind, { tab: string; question?: string; explain: stri
     question: 'Another version of this song?',
     explain:
       'Remixes, sped-up and slowed takes, acoustic, live and instrumental versions, each beside the song itself. Linked, they show as versions of one track, and a playlist plays the song once.',
+  },
+  outdated_rating: {
+    tab: 'Older ratings',
+    explain:
+      'Tracks rated before arrangement and sound were scored apart, or before originality was asked: one production score stands in for both, and originality is missing. Rate each again to bring it up to date; it leaves this list once rated.',
   },
   missing_cover_art: {
     tab: 'Cover art',
@@ -121,7 +127,11 @@ const singleActions: Partial<Record<AnomalyKind, { intent: string; label: string
   ],
   track_count_mismatch: [{ intent: 'dismiss', label: 'This is fine' }],
   orphaned_track: [{ intent: 'dismiss', label: 'Leave it' }],
+  outdated_rating: [{ intent: 'dismiss', label: 'Keep as it is' }],
 };
+// Back here after rating again, to the same kind.
+const rateAgain = (recordingId: string) =>
+  `/edit/rate/recording/${recordingId}?${new URLSearchParams({ return_to: '/manage/review?kind=outdated_rating' })}`;
 const artSrc = (e: { art: string | null; artKind: string | null }) =>
   e.art ? (e.artKind === 'cover' ? `/${e.art}/128.webp` : `/${e.art}`) : null;
 const SOURCES: Record<string, string> = {
@@ -283,13 +293,20 @@ const SOURCES: Record<string, string> = {
                         </button>
                       </>
                     ) : (
-                      (singleActions[a.kind] ?? []).map((action, i) =>
+                      <>
+                      {a.kind === 'outdated_rating' && (
+                        <a class="button button--primary" href={rateAgain(a.entity_a)}>
+                          Rate again
+                        </a>
+                      )}
+                      {(singleActions[a.kind] ?? []).map((action, i) =>
                         action.intent === 'refetch_art' && !shown[0]?.mbid ? null : (
-                          <button class:list={['button', { 'button--primary': i === 0 }]} type="submit" name="intent" value={action.intent}>
+                          <button class:list={['button', { 'button--primary': i === 0 && a.kind !== 'outdated_rating' }]} type="submit" name="intent" value={action.intent}>
                             {action.label}
                           </button>
                         ),
-                      )
+                      )}
+                      </>
                     )}
                     <button class="button button--quiet" type="submit" name="intent" value="skip">
                       Skip

@@ -111,6 +111,18 @@ export async function addRating(userId: string, input: RatingInput): Promise<str
       input.not_applicable.length ? JSON.stringify(input.not_applicable) : null,
     )
     .run();
+  // Rated again with every axis (or by gut alone): an older rating's review
+  // item is done at once, not at the next check (review.ts, OUTDATED_RATINGS).
+  const stillOutdated = depth === 'detailed' && input.originality === null && !input.not_applicable.includes('originality');
+  if (input.entity_type === 'recording' && !stillOutdated) {
+    await env.DB.prepare(
+      `UPDATE anomaly SET status = 'resolved', resolution = 'rerated'
+       WHERE kind = 'outdated_rating' AND status = 'open' AND entity_a = ?1
+         AND EXISTS (SELECT 1 FROM app_user u WHERE u.id = ?2 AND u.is_owner = 1)`,
+    )
+      .bind(input.entity_id, userId)
+      .run();
+  }
   return id;
 }
 

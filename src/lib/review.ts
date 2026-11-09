@@ -21,7 +21,8 @@ export type AnomalyKind =
   | 'track_count_mismatch'
   | 'unlinked_rated_recording'
   | 'missing_cover_art'
-  | 'orphaned_track';
+  | 'orphaned_track'
+  | 'outdated_rating';
 
 type EntityType = 'artist' | 'recording' | 'release_group';
 
@@ -79,9 +80,25 @@ function groupBy<T>(rows: T[], key: (row: T) => string | null): Map<string, T[]>
   return groups;
 }
 
+/**
+ * The owner's tracks whose latest rating is detailed but older than the
+ * axes it has now: one production score where arrangement and sound are
+ * rated apart (0042), or no originality where it applies (0045). Gut-only
+ * ratings are left alone: they were never meant to have axes.
+ */
+export const OUTDATED_RATINGS = `
+  SELECT r.entity_id AS id
+  FROM rating r JOIN app_user u ON u.id = r.user_id AND u.is_owner = 1
+  WHERE r.entity_type = 'recording' AND r.depth = 'detailed'
+    AND r.rated_at = (SELECT max(r2.rated_at) FROM rating r2
+                      WHERE r2.user_id = r.user_id AND r2.entity_type = 'recording' AND r2.entity_id = r.entity_id)
+    AND (r.production IS NOT NULL
+         OR (r.originality IS NULL AND coalesce(r.not_applicable, '') NOT LIKE '%originality%'))
+    AND EXISTS (SELECT 1 FROM recording x WHERE x.id = r.entity_id)`;
+
 /** Runs every rule over the whole catalogue. Reads only. */
 export async function findAnomalies(): Promise<Finding[]> {
-  const [artists, recordings, groups, counts, noArt, orphans] = await env.DB.batch([
+  const [artists, recordings, groups, counts, noArt, orphans, outdated] = await env.DB.batch([
     env.DB.prepare(`SELECT id, name FROM artist`),
     env.DB.prepare(
       // studio: on at least one release that is neither live nor unofficial.
@@ -114,6 +131,7 @@ export async function findAnomalies(): Promise<Finding[]> {
        WHERE r.art_key IS NULL`,
     ),
     env.DB.prepare(`SELECT r.id FROM recording r WHERE NOT EXISTS (SELECT 1 FROM track t WHERE t.recording_id = r.id)`),
+    env.DB.prepare(OUTDATED_RATINGS),
   ]);
   const rows = <T>(result: D1Result | undefined) => (result?.results ?? []) as T[];
 
@@ -186,6 +204,7 @@ export async function findAnomalies(): Promise<Finding[]> {
   // by the version rule above. Open ones clear on the next run.
   findings.push(...rows<{ id: string }>(noArt).map(single('missing_cover_art', 'release_group')));
   findings.push(...rows<{ id: string }>(orphans).map(single('orphaned_track', 'recording')));
+  findings.push(...rows<{ id: string }>(outdated).map(single('outdated_rating', 'recording')));
 
   // An artist credited twice on one recording would pair a row with itself.
   const seen = new Set<string>();
