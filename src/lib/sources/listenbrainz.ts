@@ -16,6 +16,26 @@ const headers = (token?: string): HeadersInit => ({
   ...(token ? { authorization: `Token ${token}` } : {}),
 });
 
+export interface Popularity {
+  mbid: string;
+  /** Everyone's listens on ListenBrainz; null when it has none. */
+  listens: number | null;
+  listeners: number | null;
+}
+
+/** How widely each recording is heard on ListenBrainz, for up to a hundred at a time. No key needed. */
+export async function recordingPopularity(mbids: string[], fetcher: Fetcher = fetch): Promise<Popularity[]> {
+  if (mbids.length === 0) return [];
+  const res = await fetcher(`${API}/popularity/recording`, {
+    method: 'POST',
+    headers: { ...headers(), 'content-type': 'application/json' },
+    body: JSON.stringify({ recording_mbids: mbids }),
+  });
+  if (!res.ok) throw new Error(`ListenBrainz popularity answered ${res.status}.`);
+  const body = (await res.json()) as { recording_mbid: string; total_listen_count: number | null; total_user_count: number | null }[];
+  return body.map((p) => ({ mbid: p.recording_mbid, listens: p.total_listen_count, listeners: p.total_user_count }));
+}
+
 /** Whether a token is valid; resolves to the user it belongs to. */
 export async function validateToken(token: string, fetcher: Fetcher = fetch): Promise<string> {
   const res = await fetcher(`${API}/validate-token`, { headers: headers(token) });

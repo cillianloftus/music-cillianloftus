@@ -114,6 +114,14 @@ const homeShape = homeOrder.some((t) => t.id === id) && hasShape(homeOrder.map((
 const monthName = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' });
 const dayName = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Dublin' });
 const SOURCE: Record<string, string> = { spotify_export: 'Spotify', lastfm: 'Last.fm', listenbrainz: 'ListenBrainz', manual: 'by hand' };
+// How loud it was mastered, from Deezer's replay gain: how far a player turns
+// it down, so the more negative, the louder.
+function loudnessWords(gain: number | null): string | null {
+  if (gain === null) return null;
+  const db = `${gain < 0 ? '−' : '+'}${Math.abs(gain).toFixed(1)} dB`;
+  return gain <= -10 ? `mastered very loud (${db})` : gain <= -7 ? `mastered loud (${db})` : gain <= -3 ? null : `mastered quietly (${db})`;
+}
+const compact = new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 });
 function ordinalOf(n: number): string {
   const rem = n % 100;
   const suffix = rem >= 11 && rem <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th';
@@ -151,6 +159,9 @@ function ordinalOf(n: number): string {
         <p class="facts muted">
           {[
             track.length_ms ? formatDuration(track.length_ms) : null,
+            track.bpm ? `${Math.round(track.bpm)} BPM` : null,
+            loudnessWords(track.loudness),
+            track.explicit ? 'Explicit' : null,
             user && playCount > 0 ? `you have played it ${playCount} ${playCount === 1 ? 'time' : 'times'}` : null,
           ]
             .filter(Boolean)
@@ -177,6 +188,15 @@ function ordinalOf(n: number): string {
                 <li>{s.href ? <a href={s.href}>{s.text}</a> : s.text}</li>
               ))}
             </ul>
+          )
+        }
+
+        {
+          track.listen_count != null && track.listener_count != null && (
+            <p class="heard muted small">
+              {compact.format(track.listen_count)} {track.listen_count === 1 ? 'listen' : 'listens'} by {compact.format(track.listener_count)}{' '}
+              {track.listener_count === 1 ? 'person' : 'people'} on ListenBrainz
+            </p>
           )
         }
 

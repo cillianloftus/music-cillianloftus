@@ -25,12 +25,20 @@ export interface TrackDetail {
   quality_score: number | null;
   personal_score: number | null;
   depth: 'gut' | 'detailed' | null;
+  /** From Deezer (migration 0054). */
+  bpm: number | null;
+  loudness: number | null;
+  explicit: 0 | 1 | null;
+  /** From ListenBrainz: everyone's listens, and how many people. */
+  listen_count: number | null;
+  listener_count: number | null;
   credits: CreditPart[];
 }
 
 export async function trackDetail(id: string, viewerId: string | null): Promise<TrackDetail | null> {
   const row = await env.DB.prepare(
     `SELECT r.id, r.title, r.length_ms, r.isrc, r.spotify_id, r.work_id, w.title AS work_title, r.genius_url, r.mbid,
+            r.bpm, r.loudness, r.explicit, r.listen_count, r.listener_count,
             s.quality_score, s.personal_score, s.depth
      FROM recording r
      LEFT JOIN work w ON w.id = r.work_id

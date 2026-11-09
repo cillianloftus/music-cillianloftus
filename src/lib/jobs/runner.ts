@@ -6,7 +6,7 @@ import { fetchArtistImages } from '../artist-images';
 import { enrichArtist } from '../artists';
 import { fillCreditsFromGenius } from '../genius';
 import { detectAnomalies } from '../review';
-import { fillFromDeezer } from '../sources/deezer';
+import { fillFromDeezer, fillSoundFromDeezer } from '../sources/deezer';
 import { fillFromDiscogs } from '../sources/discogs';
 import { deriveAlbumGenres } from '../genres';
 import { ownerId } from '../auth/user';
@@ -49,6 +49,8 @@ async function enrichImportedArtists(releaseGroupId: string): Promise<void> {
   // Writers MusicBrainz lacks.
   await fillCreditsFromGenius({ albumId: releaseGroupId, budgetMs: 15_000 }).catch((error) => console.warn('Genius after import failed', error));
   await fillFromDeezer(releaseGroupId).catch((error) => console.warn('Deezer after import failed', error));
+  // Each track's tempo, loudness and explicit flag.
+  await fillSoundFromDeezer(releaseGroupId).catch((error) => console.warn('Deezer tracks after import failed', error));
   // Without a Discogs token this returns at once.
   await fillFromDiscogs(releaseGroupId).catch((error) => console.warn('Discogs after import failed', error));
   await markSettleDue();
