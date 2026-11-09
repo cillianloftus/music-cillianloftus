@@ -973,14 +973,7 @@ import { splitVersion } from '../../lib/versions';
      covers; only one is open at a time (details name). Dense, so the tiles
      after an open one close up rather than leaving a gap. */
 
-
-
-
-
   /* Open: a plain heading over its row of covers, no tile. */
-
-
-
 
   /* A little fan of covers, each over the last. */
   .peek-art {
@@ -994,9 +987,6 @@ import { splitVersion } from '../../lib/versions';
   .peek-art + .peek-art {
     margin-left: -0.9rem;
   }
-
-
-
 
   h2 .count {
     margin-left: var(--space-1);
@@ -1192,12 +1182,6 @@ import { splitVersion } from '../../lib/versions';
     font-style: italic;
   }
 
-  .refresh {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
   /* The tight display name hangs its descenders low: room beneath it. */
   h1 {
     margin-bottom: var(--space-3);
@@ -1371,21 +1355,6 @@ import { splitVersion } from '../../lib/versions';
     scroll-snap-align: start;
   }
 
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));
-    gap: var(--space-6) var(--space-4);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  @media (min-width: 40rem) {
-    .grid {
-      grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
-    }
-  }
-
   .people {
     display: flex;
     flex-wrap: wrap;
@@ -1417,10 +1386,6 @@ import { splitVersion } from '../../lib/versions';
 
   .people li:has(a:hover) a {
     text-decoration: underline;
-  }
-
-  .external {
-    color: var(--text-muted);
   }
 
   /* Role links read as a list, not a row of underlines: the line shows on hover. */

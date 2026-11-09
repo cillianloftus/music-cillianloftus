@@ -14,6 +14,7 @@ import PageActions from '../../components/PageActions.astro';
 import MediaRow from '../../components/MediaRow.astro';
 import CreditsPanel from '../../components/CreditsPanel.astro';
 import EntityHero from '../../components/EntityHero.astro';
+import ImpactNote from '../../components/ImpactNote.astro';
 import Tile from '../../components/Tile.astro';
 import Tiles from '../../components/Tiles.astro';
 import RowList from '../../components/RowList.astro';
@@ -181,13 +182,7 @@ function ordinalOf(n: number): string {
             .join(' · ')}
           {track.length_ms && <span class="visually-hidden"> ({describeDuration(track.length_ms)})</span>}
         </p>
-        {
-          latest?.impact_note && (
-            <blockquote class="epigraph" aria-label="Your note">
-              <p>{latest.impact_note}</p>
-            </blockquote>
-          )
-        }
+        <ImpactNote text={latest?.impact_note} />
         </Fragment>
 
         <Fragment slot="panel">
@@ -432,57 +427,10 @@ function ordinalOf(n: number): string {
 
   /* The tight display title needs air before the artist line. */
 
-  .axes {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    margin: 0;
-  }
-
-  .axes div {
-    display: flex;
-    gap: var(--space-2);
-    padding: 0.25rem 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    font-size: var(--step--1);
-  }
-
-  .axes dt {
-    color: var(--text-muted);
-  }
-
-  .axes dd {
-    margin: 0;
-    font-weight: 700;
-  }
-
-  .note {
-    margin: var(--space-2) 0 0;
-    padding-left: var(--space-4);
-    border-left: 2px solid var(--accent);
-    max-width: 34rem;
-  }
-
-  .note blockquote {
-    margin: 0;
-    font-size: var(--step-1);
-    font-style: italic;
-  }
-
-  .note figcaption {
-    color: var(--text-muted);
-    font-size: var(--step--1);
-  }
-
   h2 {
     margin-bottom: var(--space-3);
     font-size: var(--step-2);
     letter-spacing: -0.02em;
-  }
-
-  .lead {
-    margin: calc(var(--space-2) * -1) 0 var(--space-3);
   }
 
   .count {
@@ -498,21 +446,6 @@ function ordinalOf(n: number): string {
     color: var(--text-muted);
     font-weight: 600;
     cursor: pointer;
-  }
-
-  .credits {
-    display: grid;
-    gap: var(--space-3);
-    margin: 0;
-  }
-
-  .credits dt {
-    color: var(--text-muted);
-    font-size: var(--step--1);
-  }
-
-  .credits dd {
-    margin: 0;
   }
 
   .history {
@@ -536,29 +469,6 @@ function ordinalOf(n: number): string {
 
   /* Long titles step down a size and wrap with a full first line, rather
      than being split evenly into two short ones. */
-
-  /* Your note, under the title like an epigraph: often a favourite line. */
-  .epigraph {
-    position: relative;
-    max-width: 34rem;
-    margin: var(--space-4) 0 0;
-    padding-left: var(--space-6);
-    font-family: Georgia, 'Times New Roman', serif;
-    font-size: var(--step-1);
-    font-style: italic;
-    line-height: 1.4;
-    text-wrap: pretty;
-  }
-
-  .epigraph::before {
-    content: '“';
-    position: absolute;
-    top: -0.3em;
-    left: 0;
-    color: var(--accent);
-    font-size: 2.6em;
-    line-height: 1;
-  }
 
   .history-box summary {
     display: flex;

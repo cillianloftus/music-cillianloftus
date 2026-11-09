@@ -1,0 +1,43 @@
+---
+/**
+ * Your note on a track or album, under its title like an epigraph: often a
+ * favourite line, or why it matters. One look on track and album pages.
+ */
+interface Props {
+  text: string | null | undefined;
+}
+
+const { text } = Astro.props;
+---
+
+{
+  text && (
+    <blockquote class="epigraph" aria-label="Your note">
+      <p>{text}</p>
+    </blockquote>
+  )
+}
+
+<style>
+  .epigraph {
+    position: relative;
+    max-width: 34rem;
+    margin: var(--space-4) 0 0;
+    padding-left: var(--space-6);
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: var(--step-1);
+    font-style: italic;
+    line-height: 1.4;
+    text-wrap: pretty;
+  }
+
+  .epigraph::before {
+    content: '“';
+    position: absolute;
+    top: -0.3em;
+    left: 0;
+    color: var(--accent);
+    font-size: 2.6em;
+    line-height: 1;
+  }
+</style>
