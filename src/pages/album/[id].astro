@@ -15,7 +15,9 @@ import { ratingHistory } from '../../lib/ratings';
 import { similarAlbums } from '../../lib/pages';
 import AlbumCard from '../../components/AlbumCard.astro';
 import Shelf from '../../components/Shelf.astro';
-import LinkIcon from '../../components/LinkIcon.astro';
+import PageActions from '../../components/PageActions.astro';
+import GenreChips from '../../components/GenreChips.astro';
+import StandingLines from '../../components/StandingLines.astro';
 import { groupCredits } from '../../lib/credits';
 import { spotifyLink } from '../../lib/spotify/links';
 import { env } from 'cloudflare:workers';
@@ -266,43 +268,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
       </div>
 
       <div class="more">
-        {
-          standingLines.length > 0 && (
-            <ul class="standing" role="list" aria-label="Where it stands">
-              {standingLines.map((s) => (
-                <li>{s.href ? <a href={s.href}>{s.text}</a> : s.text}</li>
-              ))}
-            </ul>
-          )
-        }
-        <p class="actions">
-          <a class="button" href={listenHref} target="_blank" rel="noopener" data-play={albumSpotifyId ? '' : undefined} data-album={albumSpotifyId ?? undefined}>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="9" />
-              <path d="M7.5 10c3-1 6.3-.7 9 .8M8.2 13.2c2.4-.7 5-.5 7.2.6M8.8 16.2c1.8-.4 3.6-.3 5.3.4" />
-            </svg>
-            {albumSpotifyId ? 'Listen' : 'Search'}
-            <span class="visually-hidden">{albumSpotifyId ? ' on Spotify' : ' for it on Spotify'}</span>
-            <span class="visually-hidden"> (opens in a new tab)</span>
-          </a>
-          {user && (
-            <a class="button button--quiet" href={`/edit/album/${album.id}`}>
-              Edit
-            </a>
-          )}
-        </p>
-
-        {
-          genres.length > 0 && (
-            <ul class="genres" aria-label="Genres">
-              {genres.map((genre) => (
-                <li>
-                  <a href={`/genre/${genre.id}`}>{genre.name}</a>
-                </li>
-              ))}
-            </ul>
-          )
-        }
+        <StandingLines lines={standingLines} />
 
         {
           extras.lists.length > 0 && (
@@ -340,6 +306,10 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
             </p>
           )
         }
+
+        <PageActions listenHref={listenHref} spotifyId={albumSpotifyId} kind="album" editHref={user ? `/edit/album/${album.id}` : null} links={links} />
+
+        <GenreChips genres={genres} />
 
         {
           album.impact_note && (
@@ -607,24 +577,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
       }
     </section>
 
-    {
-      links.length > 0 && (
-        <section class="links" aria-labelledby="links-heading">
-          <h2 id="links-heading">Links</h2>
-          <ul role="list">
-            {links.map((l) => (
-              <li>
-                <a href={l.href} rel="external noopener" target="_blank">
-                  <LinkIcon name={l.icon} />
-                  {l.label}
-                  <span class="visually-hidden"> (opens in a new tab)</span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )
-    }
     </div>
     {
       allCreditsShown && (
@@ -742,11 +694,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     min-width: 0;
   }
 
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-  }
 
   .actions .button svg {
     width: 1.2rem;
@@ -814,31 +761,8 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     font-size: var(--step--1);
   }
 
-  .genres {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
 
-  .genres a {
-    display: inline-flex;
-    align-items: center;
-    min-height: 2rem;
-    padding: 0 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    color: var(--text-muted);
-    font-size: var(--step--1);
-    text-decoration: none;
-  }
 
-  .genres a:hover {
-    border-color: var(--text-subtle);
-    color: var(--text);
-  }
 
   .track-link {
     text-decoration: none;
@@ -1327,32 +1251,8 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     font-size: 0.9em;
   }
 
-  .links ul {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
 
-  .links a {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-height: var(--target);
-    padding: 0 var(--space-4) 0 var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface-1);
-    font-size: var(--step--1);
-    font-weight: 650;
-    text-decoration: none;
-  }
 
-  .links a:hover {
-    border-color: var(--accent);
-  }
 
   /* Where it stands: a few quiet lines, each marked like a ranked score. */
   /* Lists and awards it is on: a few quiet lines under the genres. */
@@ -1390,33 +1290,10 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     font-size: var(--step--1);
   }
 
-  .standing {
-    display: grid;
-    gap: var(--space-1);
-    margin: 0 0 var(--space-4);
-    padding: 0;
-    list-style: none;
-    font-size: var(--step--1);
-    font-weight: 600;
-  }
 
-  .standing li {
-    display: flex;
-    gap: var(--space-2);
-  }
 
-  .standing li::before {
-    content: '✦';
-    color: var(--accent);
-  }
 
-  .standing a {
-    text-decoration: none;
-  }
 
-  .standing a:hover {
-    text-decoration: underline;
-  }
 
   /* Phones: the art fills the column, left edge with the text; capped on
      tablets so a square cover never outgrows the screen. */

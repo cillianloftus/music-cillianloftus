@@ -1,0 +1,53 @@
+---
+/**
+ * The ✦ lines under a score: where something stands and what else there is
+ * to say about it ("Your 5th favourite album, of 25", "Best track: …").
+ * One look on track and album pages.
+ */
+interface Props {
+  lines: { text: string; href?: string | undefined }[];
+  label?: string;
+}
+
+const { lines, label = 'Where it stands' } = Astro.props;
+---
+
+{
+  lines.length > 0 && (
+    <ul class="standing" role="list" aria-label={label}>
+      {lines.map((s) => (
+        <li>{s.href ? <a href={s.href}>{s.text}</a> : s.text}</li>
+      ))}
+    </ul>
+  )
+}
+
+<style>
+  .standing {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .standing li {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .standing li::before {
+    content: '✦';
+    color: var(--accent);
+  }
+
+  .standing a {
+    text-decoration: none;
+  }
+
+  .standing a:hover {
+    text-decoration: underline;
+  }
+</style>

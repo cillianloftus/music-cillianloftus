@@ -10,7 +10,9 @@ import CreditLine from '../../components/CreditLine.astro';
 import Score from '../../components/Score.astro';
 import ScorePanel from '../../components/ScorePanel.astro';
 import { groupCredits } from '../../lib/credits';
-import LinkIcon from '../../components/LinkIcon.astro';
+import PageActions from '../../components/PageActions.astro';
+import GenreChips from '../../components/GenreChips.astro';
+import StandingLines from '../../components/StandingLines.astro';
 import { ownerId } from '../../lib/auth/user';
 import { redirectFor, standardTracklist, trackGenres } from '../../lib/catalogue';
 import AlbumShape from '../../components/AlbumShape.astro';
@@ -184,15 +186,7 @@ function ordinalOf(n: number): string {
       </div>
 
       <div class="more">
-        {
-          standingLines.length > 0 && (
-            <ul class="standing" role="list" aria-label="Where it stands">
-              {standingLines.map((s) => (
-                <li>{s.href ? <a href={s.href}>{s.text}</a> : s.text}</li>
-              ))}
-            </ul>
-          )
-        }
+        <StandingLines lines={standingLines} />
 
         {
           (track.listen_count != null || track.mb_rating != null) && (
@@ -211,43 +205,13 @@ function ordinalOf(n: number): string {
           )
         }
 
-        {
-          genres.genres.length > 0 && (
-            <ul class="genres" aria-label={genres.inherited ? 'Genres, from its album' : 'Genres'} title={genres.inherited ? 'From its album' : undefined}>
-              {genres.genres.map((g) => (
-                <li>
-                  <a href={`/genre/${g.id}`}>{g.name}</a>
-                </li>
-              ))}
-            </ul>
-          )
-        }
+        <PageActions listenHref={listenHref} spotifyId={track.spotify_id} kind="track" editHref={user ? `/edit/track/${id}` : null} links={links} />
 
-        <p class="actions">
-          <a class="button" href={listenHref} target="_blank" rel="noopener" data-play={track.spotify_id ? '' : undefined} data-track={track.spotify_id ?? undefined}>
-<svg class="spotify-mark" viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="9" />
-              <path d="M7.5 10c3-1 6.3-.7 9 .8M8.2 13.2c2.4-.7 5-.5 7.2.6M8.8 16.2c1.8-.4 3.6-.3 5.3.4" />
-            </svg>
-            {track.spotify_id ? 'Listen' : 'Search'}
-            <span class="visually-hidden">{track.spotify_id ? ' on Spotify' : ' for it on Spotify'}</span>
-            <span class="visually-hidden"> (opens in a new tab)</span>
-          </a>
-          {user && (
-            <a class="button button--quiet" href={`/edit/track/${id}`}>
-              Edit
-            </a>
-          )}
-          {/* Its pages elsewhere, as small icons: there, without a row of their own. Spotify is Listen. */}
-          {links
-            .filter((l) => l.icon !== 'spotify')
-            .map((l) => (
-              <a class="button button--quiet icon-link" href={l.href} rel="external noopener" target="_blank" title={l.label}>
-                <LinkIcon name={l.icon} />
-                <span class="visually-hidden">{l.label} (opens in a new tab)</span>
-              </a>
-            ))}
-        </p>
+        <GenreChips
+          genres={genres.genres}
+          label={genres.inherited ? 'Genres, from its album' : 'Genres'}
+          title={genres.inherited ? 'From its album' : undefined}
+        />
       </div>
     </header>
 
@@ -583,11 +547,6 @@ function ordinalOf(n: number): string {
     font-weight: 700;
   }
 
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-  }
 
   .note {
     margin: var(--space-2) 0 0;
@@ -607,31 +566,8 @@ function ordinalOf(n: number): string {
     font-size: var(--step--1);
   }
 
-  .genres {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
 
-  .genres a {
-    display: inline-flex;
-    align-items: center;
-    min-height: 2rem;
-    padding: 0 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    color: var(--text-muted);
-    font-size: var(--step--1);
-    text-decoration: none;
-  }
 
-  .genres a:hover {
-    border-color: var(--text-subtle);
-    color: var(--text);
-  }
 
   h2 {
     margin-bottom: var(--space-3);
@@ -885,11 +821,6 @@ function ordinalOf(n: number): string {
   }
 
   /* A round button holding just the site's icon. */
-  .icon-link {
-    justify-content: center;
-    width: var(--target);
-    padding: 0;
-  }
 
   /* Wide screens: samples under the main column, the credits beside both. */
   @media (min-width: 60rem) {
@@ -1034,20 +965,7 @@ function ordinalOf(n: number): string {
     text-decoration: underline;
   }
 
-  .spotify-mark {
-    width: 1.15rem;
-    height: 1.15rem;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.6;
-    stroke-linecap: round;
-  }
 
-  .actions .button {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
 
   .credits-panel .names a {
     text-decoration: none;
@@ -1060,33 +978,10 @@ function ordinalOf(n: number): string {
   }
 
   /* Where it stands: a few quiet lines, each marked like a ranked score. */
-  .standing {
-    display: grid;
-    gap: var(--space-1);
-    margin: 0 0 var(--space-4);
-    padding: 0;
-    list-style: none;
-    font-size: var(--step--1);
-    font-weight: 600;
-  }
 
-  .standing li {
-    display: flex;
-    gap: var(--space-2);
-  }
 
-  .standing li::before {
-    content: '✦';
-    color: var(--accent);
-  }
 
-  .standing a {
-    text-decoration: none;
-  }
 
-  .standing a:hover {
-    text-decoration: underline;
-  }
 
   @media (min-width: 48rem) {
     .art {

@@ -6,6 +6,7 @@ import Backdrop from '../../components/Backdrop.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import Score from '../../components/Score.astro';
 import LinkIcon from '../../components/LinkIcon.astro';
+import GenreChips from '../../components/GenreChips.astro';
 import { ownerId } from '../../lib/auth/user';
 import {
   artist as getArtist,
@@ -350,17 +351,7 @@ import { splitVersion } from '../../lib/versions';
             </p>
           )
         }
-        {
-          genres.length > 0 && (
-            <ul class="genres" role="list" aria-label="Genres">
-              {genres.map((g) => (
-                <li>
-                  <a href={`/genre/${g.id}`}>{g.name}</a>
-                </li>
-              ))}
-            </ul>
-          )
-        }
+        <GenreChips genres={genres} />
         </div>
         <div class="what">
           {(average !== null || count) && (
@@ -1310,32 +1301,8 @@ import { splitVersion } from '../../lib/versions';
     font-size: var(--step--1);
   }
 
-  .genres {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    margin: var(--space-1) 0 0;
-    padding: 0;
-    list-style: none;
-  }
 
-  .genres a {
-    display: inline-flex;
-    align-items: center;
-    min-height: 2rem;
-    padding: 0 0.85rem;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--surface-1) 60%, transparent);
-    color: var(--text);
-    font-size: var(--step--1);
-    font-weight: 600;
-    text-decoration: none;
-  }
 
-  .genres a:hover {
-    border-color: var(--accent);
-  }
 
   /* Best tracks and their credits side by side where there is room. */
   .pair {

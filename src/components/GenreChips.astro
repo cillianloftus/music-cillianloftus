@@ -1,0 +1,57 @@
+---
+/**
+ * A row of genre pills, each leading to its genre: the same on track,
+ * album and artist pages, so a change here changes them all.
+ */
+interface Props {
+  genres: { id: string; name: string }[];
+  /** Read aloud for the list ("Genres", "Genres, from its album"). */
+  label?: string;
+  /** Shown on hover, for something the reader should know about where they came from. */
+  title?: string | undefined;
+}
+
+const { genres, label = 'Genres', title } = Astro.props;
+---
+
+{
+  genres.length > 0 && (
+    <ul class="genre-chips" role="list" aria-label={label} title={title}>
+      {genres.map((g) => (
+        <li>
+          <a href={`/genre/${g.id}`}>{g.name}</a>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+<style>
+  .genre-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .genre-chips a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2rem;
+    padding: 0 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface-1) 60%, transparent);
+    color: var(--text);
+    font-size: var(--step--1);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .genre-chips a:hover,
+  .genre-chips a:focus-visible {
+    border-color: var(--accent);
+  }
+</style>

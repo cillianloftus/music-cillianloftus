@@ -1,0 +1,88 @@
+---
+/**
+ * The row of actions under a track's or album's title: Listen (on Spotify,
+ * or a search there), Edit for the owner, and the thing's pages elsewhere
+ * as small round icons, so they are at hand without a row of their own.
+ * Shared by track and album pages: change it here, both follow.
+ */
+import LinkIcon from './LinkIcon.astro';
+
+interface Props {
+  /** Where Listen goes: the Spotify page, or a Spotify search. */
+  listenHref: string;
+  /** The Spotify id, when known: Listen plays it in place (data-play). */
+  spotifyId: string | null;
+  kind: 'track' | 'album';
+  editHref?: string | null;
+  /** Pages elsewhere; a Spotify one is left out, as Listen is it. */
+  links?: { label: string; href: string; icon: string }[];
+}
+
+const { listenHref, spotifyId, kind, editHref = null, links = [] } = Astro.props;
+const elsewhere = links.filter((l) => l.icon !== 'spotify');
+---
+
+<p class="actions">
+  <a
+    class="button listen"
+    href={listenHref}
+    target="_blank"
+    rel="noopener"
+    data-play={spotifyId ? '' : undefined}
+    data-track={kind === 'track' ? (spotifyId ?? undefined) : undefined}
+    data-album={kind === 'album' ? (spotifyId ?? undefined) : undefined}
+  >
+    <svg class="spotify-mark" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M7.5 10c3-1 6.3-.7 9 .8M8.2 13.2c2.4-.7 5-.5 7.2.6M8.8 16.2c1.8-.4 3.6-.3 5.3.4" />
+    </svg>
+    {spotifyId ? 'Listen' : 'Search'}
+    <span class="visually-hidden">{spotifyId ? ' on Spotify' : ' for it on Spotify'}</span>
+    <span class="visually-hidden"> (opens in a new tab)</span>
+  </a>
+  {
+    editHref && (
+      <a class="button button--quiet" href={editHref}>
+        Edit
+      </a>
+    )
+  }
+  {
+    elsewhere.map((l) => (
+      <a class="button button--quiet icon-link" href={l.href} rel="external noopener" target="_blank" title={l.label}>
+        <LinkIcon name={l.icon} />
+        <span class="visually-hidden">{l.label} (opens in a new tab)</span>
+      </a>
+    ))
+  }
+</p>
+
+<style>
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .listen {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .spotify-mark {
+    width: 1.15rem;
+    height: 1.15rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+  }
+
+  /* A round button holding just the site's icon. */
+  .icon-link {
+    justify-content: center;
+    width: var(--target);
+    padding: 0;
+  }
+</style>
