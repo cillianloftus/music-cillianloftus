@@ -318,6 +318,18 @@ h1 {
   font-size: var(--step--1);
 }
 
+/* How many, beside a section heading ("Albums 6"): small and quiet, the
+   same on every page. */
+h2 > .count,
+h3 > .count {
+  margin-left: 0.35em;
+  color: var(--text-subtle);
+  font-size: 0.6em;
+  font-weight: 700;
+  letter-spacing: 0;
+  vertical-align: middle;
+}
+
 /* Shared controls */
 
 .button {

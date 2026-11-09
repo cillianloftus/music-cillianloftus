@@ -26,7 +26,7 @@ const Heading = level;
   <summary>
     <Heading class="tile-heading" id={`tile-${key}`}>
       {heading}
-      {count !== undefined && <span class="tile-count tabular">{count}</span>}
+      {count !== undefined && <span class="count tabular">{count}</span>}
     </Heading>
     <span class="tile-peek" aria-hidden="true"><slot name="peek" /></span>
     <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
@@ -65,13 +65,6 @@ const Heading = level;
     line-height: 1.2;
   }
 
-  .tile-count {
-    margin-left: var(--space-1);
-    color: var(--text-subtle);
-    font-size: 0.7em;
-    font-weight: 700;
-    vertical-align: middle;
-  }
 
   .tile-peek {
     grid-area: peek;
