@@ -312,11 +312,12 @@ export async function skip(id: string): Promise<void> {
 }
 
 /** "Same": merges the pair, keeping whichever holds more (merge.ts, survivor). */
-export async function same(id: string): Promise<void> {
+/** Merges a pair judged the same. Albums: 'identical' folds their editions into one; 'edition' keeps both editions. */
+export async function same(id: string, how: 'edition' | 'identical' = 'edition'): Promise<void> {
   const a = await anomaly(id);
   if (!a || a.status !== 'open' || !a.entity_b) throw new ReviewError('That item is no longer open.');
   const { mergeSame } = await import('./merge');
-  await mergeSame(a.entity_type, a.entity_a, a.entity_b);
+  await mergeSame(a.entity_type, a.entity_a, a.entity_b, how);
 }
 
 /**

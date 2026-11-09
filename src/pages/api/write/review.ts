@@ -29,6 +29,9 @@ export const POST: APIRoute = async ({ request, redirect }) => {
       case 'same':
         await same(id);
         return back({ done: 'merge' });
+      case 'same_identical':
+        await same(id, 'identical');
+        return back({ done: 'merge' });
       case 'skip':
         await skip(id);
         return back({ done: 'skip' });

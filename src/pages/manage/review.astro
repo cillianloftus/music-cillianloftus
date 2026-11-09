@@ -33,7 +33,7 @@ const KINDS: Record<AnomalyKind, { tab: string; question?: string; explain: stri
   near_duplicate_release_group: {
     tab: 'Albums',
     question: 'Same album?',
-    explain: 'One album filed twice, usually a deluxe or reissue imported on its own. Merging makes them editions of one album, with both sets of ratings.',
+    explain: 'One album filed twice. Identical: the same release entered twice, folded into one edition. An edition of the other: a deluxe or reissue, kept as its own edition of one album. Both sets of ratings stay either way.',
   },
   near_duplicate_recording: {
     tab: 'Songs',
@@ -255,6 +255,19 @@ const SOURCES: Record<string, string> = {
                         </button>
                         <button class="button" type="submit" name="intent" value="dismiss">
                           Not a version
+                        </button>
+                      </>
+                    ) : isPair(a) && a.kind === 'near_duplicate_release_group' ? (
+                      <>
+                        {/* Two ways to be one album: the same release entered twice, or one an edition (a deluxe, a reissue) of the other. */}
+                        <button class="button button--primary" type="submit" name="intent" value="same_identical">
+                          Identical: one edition
+                        </button>
+                        <button class="button" type="submit" name="intent" value="same">
+                          An edition of the other
+                        </button>
+                        <button class="button" type="submit" name="intent" value="dismiss">
+                          Different
                         </button>
                       </>
                     ) : isPair(a) ? (

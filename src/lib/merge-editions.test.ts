@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { mergeAlbums } from './merge';
+import { mergeAlbums, mergeAlbumsIdentical } from './merge';
 
 let db: DatabaseSync;
 
@@ -69,6 +69,27 @@ describe('merging albums makes editions, folding duplicates', () => {
     db.exec(`DELETE FROM track WHERE id IN ('t-x3', 't-x4')`);
     await mergeAlbums('rg-a', 'rg-x');
     expect(db.prepare(`SELECT count(*) n FROM release WHERE release_group_id = 'rg-a'`).get()).toEqual({ n: 3 });
+  });
+
+  it('identical albums become one edition even when the tracklists differ a little, nothing lost', async () => {
+    seedSpotifyDeluxe();
+    // Not quite the same list: two of the songs, and one the album has nowhere.
+    db.exec(`DELETE FROM track WHERE id IN ('t-x3', 't-x4')`);
+    insert(db, 'recording', [{ id: 'x9', title: 'Hidden Track', source: 'spotify' }]);
+    insert(db, 'track', [{ id: 't-x9', release_id: 'r-x', recording_id: 'x9', position: 3 }]);
+    await mergeAlbumsIdentical('rg-a', 'rg-x');
+
+    // Folded into an existing edition rather than kept as a third.
+    expect(db.prepare(`SELECT count(*) n FROM release WHERE release_group_id = 'rg-a'`).get()).toEqual({ n: 2 });
+    // The shared songs are one record each; the rating followed.
+    expect(db.prepare(`SELECT count(*) n FROM recording WHERE id IN ('x1', 'x2')`).get()).toEqual({ n: 0 });
+    expect(db.prepare(`SELECT entity_id FROM rating WHERE id = 'r-x2'`).get()).toEqual({ entity_id: 'a2' });
+    // The song only it had is on the kept edition now, at the end.
+    const hidden = db.prepare(`SELECT t.release_id, t.position FROM track t WHERE t.recording_id = 'x9'`).get() as { release_id: string; position: number };
+    expect(['r-a', 'r-a-deluxe']).toContain(hidden.release_id);
+    const last = db.prepare(`SELECT max(position) p FROM track WHERE release_id = ?`).get(hidden.release_id) as { p: number };
+    expect(hidden.position).toBe(last.p);
+    expect(db.prepare(`SELECT new_id FROM entity_redirect WHERE entity_type = 'release' AND old_id = 'r-x'`).get()).toEqual({ new_id: hidden.release_id });
   });
 });
 
