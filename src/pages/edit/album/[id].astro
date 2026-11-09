@@ -19,7 +19,7 @@ const id = Astro.params.id!;
 const album = await releaseGroup(id, Astro.locals.user!.id);
 if (!album) return Astro.rewrite('/404');
 
-const [allEditions, manualGenres, otherGenres, overrides, writers, artistNames, sources, allGenres, siblings] = await Promise.all([
+const [allEditions, manualGenres, otherGenres, overrides, writers, sources, allGenres, siblings] = await Promise.all([
   editions(id),
   env.DB.prepare(
     `SELECT g.name FROM genre_tag t JOIN genre g ON g.id = t.genre_id WHERE t.entity_type = 'release_group' AND t.entity_id = ? AND t.source = 'manual' ORDER BY g.name`,
@@ -38,7 +38,6 @@ const [allEditions, manualGenres, otherGenres, overrides, writers, artistNames, 
   )
     .bind(id)
     .first<{ total: number; credited: number }>(),
-  env.DB.prepare(`SELECT name FROM artist ORDER BY sort_name`).all<{ name: string }>(),
   env.DB.prepare(
     `SELECT (SELECT count(*) FROM release WHERE release_group_id = ?1 AND mbid IS NOT NULL) AS mb,
             (SELECT spotify_id IS NOT NULL FROM release_group WHERE id = ?1) AS spotify`,
@@ -312,7 +311,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
               </div>
               <div class="field grow">
                 <label for="bulk-who">Who</label>
-                <input class="input" id="bulk-who" name="who" value={primaryArtist} list="artist-list" required maxlength="200" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+                <input class="input" id="bulk-who" name="who" value={primaryArtist} list="artist-list" data-artist-names required maxlength="200" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
               </div>
             </div>
             <fieldset class="bulk-tracks">
@@ -499,7 +498,11 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
       }
     </script>
 
-    <datalist id="artist-list">{artistNames.results.map((a) => <option value={a.name} />)}</datalist>
+    <!-- Filled from /api/write/artist-names when the box is first used (artist-names.ts). -->
+    <datalist id="artist-list" data-artist-names></datalist>
+    <script>
+      import '../../../lib/client/artist-names';
+    </script>
   </div>
 </Base>
 
