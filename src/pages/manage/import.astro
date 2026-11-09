@@ -287,18 +287,12 @@ const previous = Astro.url.searchParams.get('source') ?? '';
     min-width: 0;
   }
 
-
-  .muted {
-    color: var(--text-muted);
-  }
-
   .importer {
     display: grid;
     /* A column that may be narrower than the bar's content, so it fits a phone. */
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-2);
   }
-
 
   /* One bar: link icon, the box, Paste, Import. Focus rings the whole bar. */
   .bar {
