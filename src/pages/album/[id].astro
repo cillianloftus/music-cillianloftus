@@ -31,6 +31,7 @@ import {
   type Edition,
 } from '../../lib/catalogue';
 import { formatPartialDate, yearOf } from '../../lib/dates';
+import { albumExtras, placeIn } from '../../lib/album-extras';
 import { describeDuration, describeLength, formatDuration, roleLabel, typeLabel } from '../../lib/format';
 import { FORMAT_LABELS, HOLDING_FORMATS, OWNED_PHRASE, holdingsFor } from '../../lib/holdings';
 import { playCounts } from '../../lib/history';
@@ -76,12 +77,13 @@ const albumRating = viewerId ? ((await ratingHistory(viewerId, 'release_group', 
 const holdings = user ? await holdingsFor(user.id, album.id) : [];
 const holdingError = user ? Astro.url.searchParams.get('holding_error') : null;
 
-const [tracks, standardTracks, genres, people, albumFacts] = await Promise.all([
+const [tracks, standardTracks, genres, people, albumFacts, extras] = await Promise.all([
   releaseId ? tracklist(releaseId, viewerId) : Promise.resolve([]),
   standardId && !isStandard ? tracklist(standardId, viewerId) : Promise.resolve([]),
   genresFor('release_group', album.id),
   releaseId ? contributors(releaseId) : Promise.resolve([]),
   viewerId ? trackFacts(viewerId, { albumId: album.id }) : Promise.resolve([]),
+  albumExtras(album.id),
 ]);
 // What stands out on this album: found in its tracks' ratings, not chosen.
 const albumLines = viewerId && album.quality_score !== null ? albumStanding(await albumStandings(viewerId), album.id) : [];
@@ -131,12 +133,15 @@ const discs = [...new Set(tracks.map((t) => t.disc))];
 // date, length of the standard edition, label.
 const standardEdition = allEditions.find((e) => e.id === standardId) ?? null;
 const standardLength = (standardTracks.length ? standardTracks : tracks).reduce((sum, t) => sum + (t.length_ms ?? 0), 0);
+// The standard edition's label, as a page of its own when MusicBrainz knows it.
+const standardLabel = extras.labels.find((l) => l.release_id === standardId) ?? null;
 const facts = [
   formatPartialDate(album.first_release_date, album.date_precision),
   album.track_count ? `${album.track_count} ${album.track_count === 1 ? 'track' : 'tracks'}` : null,
   standardLength > 0 ? describeLength(standardLength) : null,
-  standardEdition?.label ?? null,
+  standardLabel ? null : (standardEdition?.label ?? null),
 ].filter(Boolean);
+const LISTS_SHOWN = 4;
 
 // The best-rated track on the standard edition.
 const bestTrack = (standardTracks.length ? standardTracks : tracks)
@@ -214,7 +219,17 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
           </p>
           <h1 class:list={[{ long: album.title.length > 18, longer: album.title.length > 34 }]}>{album.title}</h1>
           <p class="by"><CreditLine credits={album.credits} /></p>
-          {facts.length > 0 && <p class="facts">{facts.join(' · ')}</p>}
+          {(facts.length > 0 || standardLabel) && (
+            <p class="facts">
+              {facts.join(' · ')}
+              {standardLabel && (
+                <>
+                  {facts.length > 0 && ' · '}
+                  <a href={`/label/${standardLabel.label_id}`}>{standardLabel.name}</a>
+                </>
+              )}
+            </p>
+          )}
         </div>
 
         <ScorePanel
@@ -265,6 +280,43 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                 </li>
               ))}
             </ul>
+          )
+        }
+
+        {
+          extras.lists.length > 0 && (
+            <div class="lists">
+              <h2 class="lists-heading">On {extras.lists.length === 1 ? 'a list' : `${extras.lists.length} lists`}</h2>
+              <ul role="list">
+                {extras.lists.slice(0, LISTS_SHOWN).map((l) => (
+                  <li>
+                    {l.name}
+                    {placeIn(l) && <span class="muted"> · {placeIn(l)}</span>}
+                  </li>
+                ))}
+              </ul>
+              {extras.lists.length > LISTS_SHOWN && (
+                <details>
+                  <summary>All {extras.lists.length}</summary>
+                  <ul role="list">
+                    {extras.lists.slice(LISTS_SHOWN).map((l) => (
+                      <li>
+                        {l.name}
+                        {placeIn(l) && <span class="muted"> · {placeIn(l)}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )
+        }
+
+        {
+          extras.rating && (
+            <p class="community muted">
+              Rated {extras.rating.value.toFixed(1)} of 5 by {extras.rating.votes} on MusicBrainz
+            </p>
           )
         }
 
@@ -473,8 +525,15 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                     `${edition.track_count} tracks`,
                     formatPartialDate(edition.date, edition.date_precision),
                     edition.country,
-                    edition.label,
+                    // Its labels with their catalogue numbers, when MusicBrainz gave them; else the label's name.
+                    extras.labels.some((l) => l.release_id === edition.id)
+                      ? extras.labels
+                          .filter((l) => l.release_id === edition.id)
+                          .map((l) => (l.catalog_number ? `${l.name} ${l.catalog_number}` : l.name))
+                          .join(', ')
+                      : edition.label,
                     edition.format,
+                    extras.packaging.get(edition.id) ?? null,
                   ]
                     .filter(Boolean)
                     .join(' · ')}
@@ -1275,6 +1334,41 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   }
 
   /* Where it stands: a few quiet lines, each marked like a ranked score. */
+  /* Lists and awards it is on: a few quiet lines under the genres. */
+  .lists {
+    display: grid;
+    gap: var(--space-1);
+    font-size: var(--step--1);
+  }
+
+  .lists-heading {
+    margin: 0;
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .lists ul {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .lists summary {
+    color: var(--text-muted);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .community {
+    margin: 0;
+    font-size: var(--step--1);
+  }
+
   .standing {
     display: grid;
     gap: var(--space-1);

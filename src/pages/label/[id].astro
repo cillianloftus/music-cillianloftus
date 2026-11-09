@@ -1,0 +1,77 @@
+---
+/**
+ * A record label: every album in the library released on it (on any
+ * edition), newest first, with what MusicBrainz says of the label.
+ */
+import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import AlbumCard from '../../components/AlbumCard.astro';
+import { ownerId } from '../../lib/auth/user';
+import { labelAlbums, labelDetail } from '../../lib/labels';
+
+const label = await labelDetail(Astro.params.id!);
+if (!label) return Astro.rewrite('/404');
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+const albums = await labelAlbums(label.id, viewerId);
+const rated = albums.filter((a) => a.quality_score != null);
+const average = rated.length ? Math.round(rated.reduce((sum, a) => sum + a.quality_score!, 0) / rated.length) : null;
+const facts = [
+  label.type,
+  label.disambiguation,
+  label.label_code ? `LC ${String(label.label_code).padStart(5, '0')}` : null,
+  average !== null ? `averaging ${average} across ${rated.length} rated` : null,
+].filter(Boolean);
+---
+
+<Base title={label.name} description={`${label.name}: ${albums.length} ${albums.length === 1 ? 'release' : 'releases'} in Cillian Loftus’s music library.`}>
+  <div class="wrap page">
+    <div>
+      <p class="eyebrow">Label</p>
+      <PageHeader title={label.name} count={albums.length}>
+        {label.mbid && (
+          <a class="button button--quiet" href={`https://musicbrainz.org/label/${label.mbid}`} rel="external noopener" target="_blank">
+            MusicBrainz<span class="visually-hidden"> (opens in a new tab)</span>
+          </a>
+        )}
+      </PageHeader>
+      {facts.length > 0 && <p class="facts">{facts.join(' · ')}</p>}
+    </div>
+    <ul role="list" class="grid">
+      {
+        albums.map((album, i) => (
+          <li>
+            <AlbumCard album={album} priority={i < 2} />
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    padding-top: var(--space-6);
+  }
+
+  .facts {
+    margin-top: var(--space-2);
+    color: var(--text-muted);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));
+    gap: var(--space-6) var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  @media (min-width: 40rem) {
+    .grid {
+      grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+    }
+  }
+</style>

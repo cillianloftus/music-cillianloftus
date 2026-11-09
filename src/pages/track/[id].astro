@@ -122,6 +122,9 @@ function loudnessWords(gain: number | null): string | null {
   return gain <= -10 ? `mastered very loud (${db})` : gain <= -7 ? `mastered loud (${db})` : gain <= -3 ? null : `mastered quietly (${db})`;
 }
 const compact = new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 });
+// What kind of recording, from MusicBrainz: "Live cover", "Instrumental".
+const kindText = [track.is_live ? 'live' : null, track.is_cover ? 'cover' : null, track.is_instrumental ? 'instrumental' : null].filter(Boolean).join(' ');
+const kindWords = kindText ? kindText.charAt(0).toUpperCase() + kindText.slice(1) : null;
 function ordinalOf(n: number): string {
   const rem = n % 100;
   const suffix = rem >= 11 && rem <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th';
@@ -158,6 +161,7 @@ function ordinalOf(n: number): string {
         <p class="by"><CreditLine credits={track.credits} /></p>
         <p class="facts muted">
           {[
+            kindWords,
             track.length_ms ? formatDuration(track.length_ms) : null,
             track.bpm ? `${Math.round(track.bpm)} BPM` : null,
             loudnessWords(track.loudness),
@@ -192,10 +196,18 @@ function ordinalOf(n: number): string {
         }
 
         {
-          track.listen_count != null && track.listener_count != null && (
+          (track.listen_count != null || track.mb_rating != null) && (
             <p class="heard muted small">
-              {compact.format(track.listen_count)} {track.listen_count === 1 ? 'listen' : 'listens'} by {compact.format(track.listener_count)}{' '}
-              {track.listener_count === 1 ? 'person' : 'people'} on ListenBrainz
+              {[
+                track.listen_count != null && track.listener_count != null
+                  ? `${compact.format(track.listen_count)} ${track.listen_count === 1 ? 'listen' : 'listens'} by ${compact.format(track.listener_count)} ${track.listener_count === 1 ? 'person' : 'people'} on ListenBrainz`
+                  : null,
+                track.mb_rating != null
+                  ? `rated ${track.mb_rating.toFixed(1)} of 5 by ${track.mb_rating_votes} on MusicBrainz`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
             </p>
           )
         }

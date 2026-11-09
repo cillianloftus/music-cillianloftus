@@ -32,6 +32,12 @@ export interface TrackDetail {
   /** From ListenBrainz: everyone's listens, and how many people. */
   listen_count: number | null;
   listener_count: number | null;
+  /** From MusicBrainz (migration 0055). */
+  is_cover: 0 | 1 | null;
+  is_live: 0 | 1 | null;
+  is_instrumental: 0 | 1 | null;
+  mb_rating: number | null;
+  mb_rating_votes: number | null;
   credits: CreditPart[];
 }
 
@@ -39,6 +45,7 @@ export async function trackDetail(id: string, viewerId: string | null): Promise<
   const row = await env.DB.prepare(
     `SELECT r.id, r.title, r.length_ms, r.isrc, r.spotify_id, r.work_id, w.title AS work_title, r.genius_url, r.mbid,
             r.bpm, r.loudness, r.explicit, r.listen_count, r.listener_count,
+            r.is_cover, r.is_live, r.is_instrumental, r.mb_rating, r.mb_rating_votes,
             s.quality_score, s.personal_score, s.depth
      FROM recording r
      LEFT JOIN work w ON w.id = r.work_id
