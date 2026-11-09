@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, computeScores, rank, type Weights } from './scoring';
+import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, computeScores, rank, smallPart, type Weights } from './scoring';
 import { activateVersion, activeWeights, saveWeights, scoreInputs, weightsForm, weightsVersions } from './weights';
 
 let db: DatabaseSync;
@@ -161,14 +161,32 @@ describe('ranking', () => {
     expect(rank(scores, 'personal')).toEqual(['c', 'b', 'a']);
   });
 
-  it('trimming the lowest track changes an album score', async () => {
+  it('leaves out the lowest track only when it is a small part of the album', async () => {
     // Album A's canonical tracks: a1 90, a2 70, a3 50 (the deluxe-only a4 is excluded).
-    const inputs = await scoreInputs('u-owner');
+    const untrimmed = { ...DEFAULT_WEIGHTS, release: { ...DEFAULT_WEIGHTS.release, trim_lowest: false } };
+    // Lengths unknown: each is a third of its three tracks, so none is left out.
+    let inputs = await scoreInputs('u-owner');
+    expect(computeScores(inputs, DEFAULT_WEIGHTS).albums.get('rg-a')!.quality).toBeCloseTo(70);
+    // A short a3 on a long album: 100 s of 1,300 s, under 15%, so left out.
+    db.exec(`UPDATE recording SET length_ms = CASE id WHEN 'a3' THEN 100000 ELSE 600000 END WHERE id IN ('a1', 'a2', 'a3')`);
+    inputs = await scoreInputs('u-owner');
     const trimmed = computeScores(inputs, DEFAULT_WEIGHTS).albums.get('rg-a')!;
-    const plain = computeScores(inputs, { ...DEFAULT_WEIGHTS, release: { ...DEFAULT_WEIGHTS.release, trim_lowest: false } }).albums.get('rg-a')!;
     expect(trimmed.quality).toBeCloseTo(80);
-    expect(plain.quality).toBeCloseTo(70);
     expect(trimmed.ratedTracks).toBe(3);
+    expect(computeScores(inputs, untrimmed).albums.get('rg-a')!.quality).toBeCloseTo(70);
+    // The view agrees.
+    expect((db.prepare(`SELECT quality_score FROM v_release_score WHERE release_group_id = 'rg-a' AND user_id = 'u-owner'`).get() as { quality_score: number }).quality_score).toBeCloseTo(80);
+    // Long enough to matter (a third of the album): kept.
+    db.exec(`UPDATE recording SET length_ms = 600000 WHERE id = 'a3'`);
+    expect(computeScores(await scoreInputs('u-owner'), DEFAULT_WEIGHTS).albums.get('rg-a')!.quality).toBeCloseTo(70);
+    expect((db.prepare(`SELECT quality_score FROM v_release_score WHERE release_group_id = 'rg-a' AND user_id = 'u-owner'`).get() as { quality_score: number }).quality_score).toBeCloseTo(70);
+  });
+
+  it('counts a track of unknown length as one of the album’s tracks', () => {
+    expect(smallPart(undefined, { ms: null, tracks: 12 })).toBe(true);
+    expect(smallPart(undefined, { ms: null, tracks: 4 })).toBe(false);
+    expect(smallPart(180_000, { ms: 3_600_000, tracks: 15 })).toBe(true);
+    expect(smallPart(240_000, { ms: 900_000, tracks: 4 })).toBe(false);
   });
 });
 

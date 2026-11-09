@@ -111,12 +111,13 @@ describe('score views', () => {
   });
 
   it('blends tracks 70/30 with the album axes', () => {
-    // Tracks part for Album A: (90 + 70) / 2 = 80 after trimming 50. Album axes: 9 -> 90.
+    // Tracks part for Album A: (90 + 70 + 50) / 3 = 70; with three tracks the
+    // lowest is a third of the album, so it counts (0057). Album axes: 9 -> 90.
     insert(db, 'rating', [
       { id: 'alb', user_id: 'u-owner', entity_type: 'release_group', entity_id: 'rg-a', depth: 'detailed', sequencing: 9, cohesion: 9, ambition: 9 },
     ]);
     const row = one("SELECT quality_score, rated_track_count, track_count FROM v_release_score WHERE release_group_id = 'rg-a' AND user_id = 'u-owner'");
-    expect(row.quality_score).toBeCloseTo(83);
+    expect(row.quality_score).toBeCloseTo(76);
     expect(row).toMatchObject({ rated_track_count: 3, track_count: 3 });
   });
 

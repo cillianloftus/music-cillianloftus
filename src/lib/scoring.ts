@@ -61,6 +61,26 @@ export interface ScoreInputs {
   kinds?: Record<string, TrackKind>;
   /** Track lengths in milliseconds, where known. */
   lengths?: Record<string, number>;
+  /**
+   * Each album's standard edition: its running time (the sum of the
+   * lengths known, or null) and how many tracks it has, every one counted.
+   */
+  runtimes?: Record<string, { ms: number | null; tracks: number }>;
+}
+
+/**
+ * The lowest-rated track is left out of an album's score only when it is
+ * less than this share of the album: of its running time, or, its length
+ * unknown, of its tracks (migration 0057). One weak song on an hour-long
+ * album is left out; one of two songs on a single is not.
+ */
+export const TRIM_MAX_SHARE = 0.15;
+
+/** Whether a track this long is a small enough part of the album to leave out. Pure. */
+export function smallPart(length: number | undefined, runtime: { ms: number | null; tracks: number } | undefined): boolean {
+  if (!runtime) return false;
+  if (length !== undefined) return runtime.ms !== null && length < TRIM_MAX_SHARE * runtime.ms;
+  return 1 < TRIM_MAX_SHARE * runtime.tracks;
 }
 
 export interface Score {
@@ -148,7 +168,9 @@ export function computeScores(inputs: ScoreInputs, w: Weights): Scores {
       const known = rated.filter((r) => r.length !== undefined);
       const mean = known.length > 0 ? known.reduce((a, r) => a + r.length!, 0) / known.length : null;
       const ordered = [...rated].sort((a, b) => a.q - b.q || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-      const kept = ordered.length >= 2 && w.release.trim_lowest ? ordered.slice(1) : ordered;
+      const lowest = ordered[0]!;
+      const trim = ordered.length >= 2 && w.release.trim_lowest && smallPart(lowest.length, inputs.runtimes?.[id]);
+      const kept = trim ? ordered.slice(1) : ordered;
       let total = 0;
       let weight = 0;
       for (const r of kept) {

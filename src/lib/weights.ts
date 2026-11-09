@@ -170,7 +170,7 @@ const sample = (r: SampleRow, keys: readonly ((typeof CRAFT_KEYS)[number] | (typ
  * latest row per entity, calibration over all history, canonical editions.
  */
 export async function scoreInputs(userId: string): Promise<ScoreInputs> {
-  const [ratings, canonical, tracks] = await env.DB.batch([
+  const [ratings, canonical, tracks, runtimes] = await env.DB.batch([
     env.DB.prepare(
       `SELECT entity_type, entity_id, rated_at, gut_score, impact,
               coalesce(arrangement, production) AS arrangement, coalesce(sound, production) AS sound,
@@ -189,9 +189,22 @@ export async function scoreInputs(userId: string): Promise<ScoreInputs> {
        LEFT JOIN recording_kind k ON k.recording_id = r.id
        WHERE r.id IN (SELECT entity_id FROM rating WHERE user_id = ? AND entity_type = 'recording')`,
     ).bind(userId),
+    // Running time and track count of the standard edition of each album with a rated track.
+    env.DB.prepare(
+      `SELECT c.release_group_id, sum(r.length_ms) AS ms, count(*) AS tracks
+       FROM v_release_group_canonical c
+       JOIN track t ON t.release_id = c.release_id
+       JOIN recording r ON r.id = t.recording_id
+       WHERE EXISTS (SELECT 1 FROM track t2 JOIN rating ra ON ra.entity_type = 'recording' AND ra.entity_id = t2.recording_id AND ra.user_id = ?
+                     WHERE t2.release_id = c.release_id)
+       GROUP BY c.release_group_id`,
+    ).bind(userId),
   ]);
 
-  const inputs: ScoreInputs = { calibration: [], recordings: {}, albums: {}, canonical: {}, kinds: {}, lengths: {} };
+  const inputs: ScoreInputs = { calibration: [], recordings: {}, albums: {}, canonical: {}, kinds: {}, lengths: {}, runtimes: {} };
+  for (const r of (runtimes!.results ?? []) as { release_group_id: string; ms: number | null; tracks: number }[]) {
+    inputs.runtimes![r.release_group_id] = { ms: r.ms, tracks: r.tracks };
+  }
   for (const t of (tracks!.results ?? []) as { id: string; length_ms: number | null; kind: TrackKind | null }[]) {
     if (t.kind && t.kind !== 'song') inputs.kinds![t.id] = t.kind;
     if (t.length_ms != null) inputs.lengths![t.id] = t.length_ms;
