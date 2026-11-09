@@ -67,11 +67,15 @@ async function resolveExisting(plan: ImportPlan): Promise<Record<Table, Map<stri
     ).bind(JSON.stringify(byIsrc.map((r) => r.isrc))),
     // Everyone answering to a plan artist's name or alias (Benjamin Lasky
     // is Quadeca), for artists no id identifies.
+    // Through the NOCASE name indexes (lower() could use neither: every
+    // artist and alias read, 9,800 rows an import; this way about 30).
+    // NOCASE folds case as lower() does, ASCII only, so the matches are the same.
     env.DB.prepare(
       `SELECT DISTINCT n.id, lower(n.name) AS name, a.mbid, a.spotify_id
-       FROM (SELECT id, name FROM artist UNION SELECT artist_id AS id, name FROM artist_alias) n
-       JOIN artist a ON a.id = n.id
-       WHERE lower(n.name) IN (SELECT lower(value) FROM json_each(?))`,
+       FROM (SELECT a1.id, a1.name FROM json_each(?1) j JOIN artist a1 ON a1.name = j.value COLLATE NOCASE
+             UNION
+             SELECT al.artist_id AS id, al.name FROM json_each(?1) j JOIN artist_alias al ON al.name = j.value) n
+       JOIN artist a ON a.id = n.id`,
     ).bind(JSON.stringify(artistNames)),
   ]);
 

@@ -52,7 +52,8 @@ async function existingAlbum(album: SpotifyAlbum): Promise<string | null> {
      FROM release_group g
      JOIN artist_credit c ON c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary' AND c.position = 1
      JOIN artist a ON a.id = c.artist_id
-     WHERE lower(a.name) = lower(?)`,
+     -- NOCASE (the name index's), not lower(): the same ASCII folding, by index.
+     WHERE a.name = ? COLLATE NOCASE`,
   )
     .bind(album.artists[0]?.name ?? '')
     .all<{ id: string; title: string; name: string }>();
