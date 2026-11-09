@@ -17,6 +17,8 @@ export interface AlbumScore {
   rated: number;
   tracks: number | null;
   type: string;
+  /** The album's first release date, as stored (any precision). */
+  released: string | null;
 }
 
 export type AlbumScores = Record<string, AlbumScore>;
@@ -24,10 +26,10 @@ export type AlbumScores = Record<string, AlbumScore>;
 export async function albumScores(userId: string | null): Promise<AlbumScores> {
   if (!userId) return {};
   // (Not 'album-scores': standing.ts keeps its own list under that name.)
-  return byLibrary('album-score-map:v1', userId, async () => {
+  return byLibrary('album-score-map:v2', userId, async () => {
     const { results } = await env.DB.prepare(
       `SELECT s.release_group_id AS id, s.quality_score AS quality, s.personal_score AS personal,
-              s.rated_track_count AS rated, s.track_count AS tracks, g.type
+              s.rated_track_count AS rated, s.track_count AS tracks, g.type, g.first_release_date AS released
        FROM v_release_score s JOIN release_group g ON g.id = s.release_group_id
        WHERE s.user_id = ?1`,
     )

@@ -8,7 +8,7 @@
 
 import { env } from 'cloudflare:workers';
 import { albumScores } from './album-scores';
-import { discover, trackFacts, type Finding } from './discover';
+import { discover, libraryFacts, type Finding } from './discover';
 
 export interface YearReview {
   year: number;
@@ -139,7 +139,7 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
   });
 
   // This year's ratings against all the others: what was different about it.
-  const facts = await trackFacts(userId);
+  const facts = await libraryFacts(userId);
   const thisYear = facts.filter((f) => f.ratedAt && f.ratedAt >= from && f.ratedAt < to);
   const findings = thisYear.length >= 6 ? discover(thisYear, { limit: 6 }).filter((f) => f.kind !== 'habit') : [];
 

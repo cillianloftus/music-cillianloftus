@@ -166,6 +166,12 @@ describe('track facts', () => {
     expect(facts.find((f) => f.id === 'a2')).toMatchObject({ position: 2, size: 3, extra: false });
   });
 
+  it('the library-wide facts, kept a track at a time, are the same as worked out at once', async () => {
+    const { libraryFacts } = await import('./discover');
+    const byId = (list: Awaited<ReturnType<typeof trackFacts>>) => [...list].sort((a, b) => a.id.localeCompare(b.id));
+    expect(byId(await libraryFacts('u-owner'))).toEqual(byId(await trackFacts('u-owner')));
+  });
+
   it('narrows to a genre: the track’s own genre first, else its album’s', async () => {
     const rock = await trackFacts('u-owner', { genreId: 'g-rock' });
     // b2 is rock itself (on a bedroom-pop album); c1 takes rock from its album.

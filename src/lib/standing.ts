@@ -8,6 +8,7 @@
 import { env } from 'cloudflare:workers';
 import type { TrackFact } from './discover';
 import { byLibrary } from './library-cache';
+import { albumScores as albumScoreMap } from './album-scores';
 
 export interface Standing {
   text: string;
@@ -110,18 +111,28 @@ export interface AlbumScore {
 
 /** Every scored release for a user, cached by library state. */
 export async function albumScores(userId: string): Promise<AlbumScore[]> {
-  return byLibrary('album-standing:v1', userId, async () => {
+  // Scores from the album scores (album-score-map), so only the artists are read here.
+  const scores = await albumScoreMap(userId);
+  return byLibrary('album-standing:v2', userId, async () => {
+    const ids = Object.keys(scores).filter((id) => scores[id]!.quality != null);
     const { results } = await env.DB.prepare(
-      `SELECT s.release_group_id AS id, s.quality_score AS score, g.type, substr(g.first_release_date, 1, 4) AS year,
-              (SELECT json_group_array(c.artist_id) FROM artist_credit c WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary') AS artists,
-              (SELECT json_group_array(a.name) FROM artist_credit c JOIN artist a ON a.id = c.artist_id
-               WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary') AS names
-       FROM v_release_score s JOIN release_group g ON g.id = s.release_group_id
-       WHERE s.user_id = ? AND s.quality_score IS NOT NULL`,
+      `SELECT c.entity_id AS id, c.artist_id, a.name FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+       WHERE c.entity_type = 'release_group' AND c.role = 'primary' AND c.entity_id IN (SELECT value FROM json_each(?1))
+       ORDER BY c.position`,
     )
-      .bind(userId)
-      .all<{ id: string; score: number; type: string; year: string | null; artists: string; names: string }>();
-    return results.map((r) => ({ ...r, artists: JSON.parse(r.artists) as string[], artistNames: JSON.parse(r.names) as string[] }));
+      .bind(JSON.stringify(ids))
+      .all<{ id: string; artist_id: string; name: string }>();
+    const credits = new Map<string, { artists: string[]; artistNames: string[] }>();
+    for (const r of results) {
+      const c = credits.get(r.id) ?? { artists: [], artistNames: [] };
+      c.artists.push(r.artist_id);
+      c.artistNames.push(r.name);
+      credits.set(r.id, c);
+    }
+    return ids.map((id) => {
+      const s = scores[id]!;
+      return { id, score: s.quality, type: s.type, year: s.released?.slice(0, 4) ?? null, ...(credits.get(id) ?? { artists: [], artistNames: [] }) };
+    });
   });
 }
 

@@ -17,7 +17,7 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { byLibrary } from './library-cache';
+import { byLibrary, byLibraryMap } from './library-cache';
 import { encodeDefinition } from './query/builder';
 import type { Where } from './query/schema';
 
@@ -126,14 +126,19 @@ export async function trackFacts(userId: string, scope: { artistId?: string; alb
   )
     .bind(userId, scope.artistId ?? null, scope.albumId ?? null, scope.genreId ?? null)
     .all<Row>();
-  const parse = <T,>(json: string | null): T[] => {
-    try {
-      return (JSON.parse(json ?? '[]') as T[]).filter(Boolean);
-    } catch {
-      return [];
-    }
-  };
-  return results.map((r) => ({
+  return results.map(toFact);
+}
+
+const parse = <T,>(json: string | null): T[] => {
+  try {
+    return (JSON.parse(json ?? '[]') as T[]).filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+
+function toFact(r: Row): TrackFact {
+  return {
     id: r.id,
     title: r.title,
     score: r.score,
@@ -153,16 +158,77 @@ export async function trackFacts(userId: string, scope: { artistId?: string; alb
     axes: { arrangement: r.arrangement, sound: r.sound, songwriting: r.songwriting, lyrics: r.lyrics, performance: r.performance, originality: r.originality },
     // Only where the considered axes are there too: otherwise the score is the gut.
     gut: r.gut_score !== null && (r.arrangement ?? r.sound ?? r.songwriting ?? r.lyrics ?? r.performance ?? r.originality) !== null ? r.gut_score * 10 : null,
-  }));
+  };
+}
+
+/** The parts of a track's facts that are about the track, not anyone's rating of it. */
+type TrackPart = Pick<Row, 'title' | 'length_ms' | 'album_id' | 'album_title' | 'album_type' | 'released' | 'position' | 'size' | 'on_album' | 'label' | 'credits' | 'genres'>;
+/** The parts that are the user's: the rating, its axes, the plays. */
+type RatingPart = Pick<Row, 'id' | 'score' | 'rated_at' | 'plays' | 'arrangement' | 'sound' | 'songwriting' | 'lyrics' | 'performance' | 'originality' | 'gut_score'>;
+
+/** The track part for some recordings (as trackFacts works it out). */
+async function trackParts(ids: string[]): Promise<Record<string, TrackPart>> {
+  const { results } = await env.DB.prepare(
+    `SELECT r.id, r.title, r.length_ms,
+            g.id AS album_id, g.title AS album_title, g.type AS album_type,
+            coalesce(g.first_release_date, r.first_release_date) AS released,
+            t.position, (SELECT count(*) FROM track t2 WHERE t2.release_id = cn.release_id) AS size,
+            (t.recording_id IS NOT NULL) AS on_album,
+            (SELECT x.label FROM release x WHERE x.id = cn.release_id) AS label,
+            (SELECT json_group_array(json_object('id', a.id, 'name', a.name, 'role', ac.role, 'label', cr.label, 'family', cr.family,
+                                                 'position', ac.position, 'born', CASE WHEN a.kind = 'person' THEN a.begin_date END))
+             FROM artist_credit ac JOIN artist a ON a.id = ac.artist_id JOIN credit_role cr ON cr.id = ac.role
+             WHERE ac.entity_type = 'recording' AND ac.entity_id = r.id) AS credits,
+            (SELECT json_group_array(DISTINCT json_object('id', gn.id, 'name', gn.name))
+             FROM genre_tag gt JOIN genre gn ON gn.id = gt.genre_id
+             WHERE (gt.entity_type = 'recording' AND gt.entity_id = r.id)
+                OR (gt.entity_type = 'release_group' AND gt.entity_id = g.id)) AS genres
+     FROM recording r
+     LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
+     LEFT JOIN release_group g ON g.id = ra.release_group_id
+     LEFT JOIN v_release_group_canonical cn ON cn.release_group_id = g.id
+     LEFT JOIN track t ON t.release_id = cn.release_id AND t.recording_id = r.id
+     WHERE r.id IN (SELECT value FROM json_each(?1))
+     GROUP BY r.id`,
+  )
+    .bind(JSON.stringify(ids))
+    .all<TrackPart & { id: string }>();
+  return Object.fromEntries(results.map(({ id, ...part }) => [id, part]));
 }
 
 /**
- * The whole library's facts, cached in KV under a key that changes whenever
- * a rating, a play or the catalogue does, so it is never stale and the
- * home page doesn't gather every track's facts on every visit.
+ * Every rated track's facts, for the home page, Insights and year pages.
+ * The facts about each track (album, credits, genres) are kept per library
+ * state and grown a track at a time (byLibraryMap), so a new rating works
+ * out only its own track; the ratings and plays are read fresh, which is
+ * cheap. Worked out whole after every rating, this was 25,000 rows with
+ * 110 rated tracks and grew with every one.
  */
 export async function libraryFacts(userId: string): Promise<TrackFact[]> {
-  return byLibrary('facts:v3', userId, () => trackFacts(userId));
+  // The whole answer is kept too, until the next rating; then only the
+  // ratings are read again, and the one new track's facts.
+  return byLibrary('facts:v4', userId, () => gatherFacts(userId));
+}
+
+async function gatherFacts(userId: string): Promise<TrackFact[]> {
+  const { results: rated } = await env.DB.prepare(
+    `SELECT s.recording_id AS id, s.quality_score AS score, ax.rated_at,
+            (SELECT count(*) FROM play p WHERE p.user_id = s.user_id AND p.recording_id = s.recording_id AND p.counted = 1) AS plays,
+            coalesce(ax.arrangement, ax.production) AS arrangement, coalesce(ax.sound, ax.production) AS sound,
+            ax.songwriting, ax.lyrics, ax.performance, ax.originality, ax.gut_score
+     FROM v_recording_score s
+     LEFT JOIN rating ax ON ax.user_id = s.user_id AND ax.entity_type = 'recording' AND ax.entity_id = s.recording_id
+          AND ax.rated_at = (SELECT max(y.rated_at) FROM rating y WHERE y.user_id = s.user_id AND y.entity_type = 'recording' AND y.entity_id = s.recording_id)
+     WHERE s.user_id = ?1
+     GROUP BY s.recording_id`,
+  )
+    .bind(userId)
+    .all<RatingPart>();
+  const parts = await byLibraryMap('track-parts:v1', null, rated.map((r) => r.id), trackParts);
+  return rated.flatMap((r) => {
+    const part = parts[r.id];
+    return part ? [toFact({ ...part, ...r })] : [];
+  });
 }
 
 // ---------------------------------------------------------------------------

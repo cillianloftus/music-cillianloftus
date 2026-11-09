@@ -108,6 +108,40 @@ export async function byDay<T>(name: string, work: () => Promise<T>, now = new D
 }
 
 /**
+ * A map by id, kept for this library state and grown as ids are asked for:
+ * only ids it does not hold yet are worked out (`work` gets those and
+ * answers for them), and the grown map is kept. For per-item facts that do
+ * not change when something is rated, asked for over a set that does (every
+ * rated track): a new rating costs one item, not all of them again. An id
+ * `work` gives nothing for is kept as null, so it is not asked again.
+ */
+export async function byLibraryMap<V>(
+  name: string,
+  userId: string | null,
+  ids: string[],
+  work: (missing: string[]) => Promise<Record<string, V>>,
+): Promise<Record<string, V | null>> {
+  const key = `lib:${BUILD}:${name}:${userId ?? '-'}:${await libraryStamp(userId)}`;
+  let held: Record<string, V | null> = {};
+  try {
+    held = (devCold.on ? null : await env.CACHE.get<Record<string, V | null>>(key, 'json')) ?? {};
+  } catch {
+    /* No cache: work it all out. */
+  }
+  const missing = ids.filter((id) => !(id in held));
+  if (missing.length === 0) return held;
+  const found = await work(missing);
+  const grown = { ...held };
+  for (const id of missing) grown[id] = found[id] ?? null;
+  try {
+    await env.CACHE.put(key, JSON.stringify(grown), { expirationTtl: 7 * 24 * 60 * 60 });
+  } catch {
+    /* Uncached is only slower. */
+  }
+  return grown;
+}
+
+/**
  * The value under name for this library state, worked out and kept when
  * missing. Within one request it is looked up once, however many sections
  * ask for it at the same time (a user's album scores, say).
