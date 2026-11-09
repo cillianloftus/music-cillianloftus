@@ -34,30 +34,34 @@ export interface InProgress {
   nextId: string | null;
 }
 
-/** Albums started but not finished: some tracks rated, not all. Closest to done first. */
+/**
+ * Albums started but not finished: some tracks rated, not all. Closest to
+ * done first. The counts are the album scores' (standard edition, skits
+ * left out of both), so only the next track is looked up, for the albums
+ * shown: counting every album's tracks read 43,000 rows.
+ */
 export async function inProgress(userId: string, limit = 10): Promise<InProgress[]> {
+  const chosen = Object.entries(await albumScores(userId))
+    .filter(([, s]) => s.tracks !== null && s.rated > 0 && s.rated < s.tracks && s.tracks >= 4)
+    .map(([id, s]) => ({ id, rated: s.rated, total: s.tracks! }))
+    .sort((a, b) => b.rated / b.total - a.rated / a.total || b.rated - b.total - (a.rated - a.total) || a.id.localeCompare(b.id))
+    .slice(0, limit);
+  if (chosen.length === 0) return [];
   const { results } = await env.DB.prepare(
-    `WITH canon AS (
-       SELECT v.release_group_id, t.recording_id, t.disc, t.position
-       FROM v_release_group_canonical v JOIN track t ON t.release_id = v.release_id
-     ),
-     tally AS (
-       SELECT c.release_group_id AS id, count(*) AS total, count(s.recording_id) AS rated,
-              (SELECT c2.recording_id FROM canon c2
-               LEFT JOIN v_recording_score s2 ON s2.recording_id = c2.recording_id AND s2.user_id = ?1
-               WHERE c2.release_group_id = c.release_group_id AND s2.recording_id IS NULL
-               ORDER BY c2.disc, c2.position LIMIT 1) AS next_id
-       FROM canon c LEFT JOIN v_recording_score s ON s.recording_id = c.recording_id AND s.user_id = ?1
-       GROUP BY c.release_group_id
-     )
-     SELECT id, total, rated, next_id FROM tally
-     WHERE rated > 0 AND rated < total AND total >= 4
-     ORDER BY 1.0 * rated / total DESC, total - rated LIMIT ?2`,
+    `SELECT c.release_group_id AS id,
+            (SELECT t.recording_id FROM track t
+             WHERE t.release_id = c.release_id
+               AND t.recording_id NOT IN (SELECT recording_id FROM v_recording_score WHERE user_id = ?1)
+               AND NOT EXISTS (SELECT 1 FROM recording_kind k WHERE k.recording_id = t.recording_id AND k.kind = 'skit')
+             ORDER BY t.disc, t.position LIMIT 1) AS next_id
+     FROM v_release_group_canonical c
+     WHERE c.release_group_id IN (SELECT value FROM json_each(?2))`,
   )
-    .bind(userId, limit)
-    .all<{ id: string; total: number; rated: number; next_id: string | null }>();
-  const albums = new Map((await byIds(results.map((r) => r.id), userId)).map((a) => [a.id, a]));
-  return results.flatMap((r) => (albums.get(r.id) ? [{ album: albums.get(r.id)!, rated: r.rated, total: r.total, nextId: r.next_id }] : []));
+    .bind(userId, JSON.stringify(chosen.map((c) => c.id)))
+    .all<{ id: string; next_id: string | null }>();
+  const next = new Map(results.map((r) => [r.id, r.next_id]));
+  const albums = new Map((await byIds(chosen.map((c) => c.id), userId)).map((a) => [a.id, a]));
+  return chosen.flatMap((c) => (albums.get(c.id) ? [{ album: albums.get(c.id)!, rated: c.rated, total: c.total, nextId: next.get(c.id) ?? null }] : []));
 }
 
 export interface TrackCard {
