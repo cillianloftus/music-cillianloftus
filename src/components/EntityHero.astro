@@ -1,0 +1,143 @@
+---
+/**
+ * The top of a track or album page: the cover; beside it the titles
+ * (eyebrow, title, by, facts) over the score panel; beneath, the lines,
+ * actions and genres. One layout for both, so the two stay alike: a change
+ * here changes both pages.
+ *
+ * Slots: art, titles, panel, more. On phones everything stacks, the cover
+ * full width; from 48rem the cover sits beside the text, the titles at its
+ * top and the panel along its bottom edge.
+ */
+interface Props {
+  /** The cover's width beside the text on wide screens. */
+  artWidth?: string;
+  /** Whether there is a cover to show; without one the text takes the width. */
+  hasArt?: boolean;
+}
+
+const { artWidth = '20rem', hasArt = true } = Astro.props;
+---
+
+<header class:list={['hero', { 'no-art': !hasArt }]} style={`--art-width: ${artWidth}`}>
+  {
+    hasArt && (
+      <div class="art">
+        <slot name="art" />
+      </div>
+    )
+  }
+  <div class="intro">
+    <div class="titles">
+      <slot name="titles" />
+    </div>
+    <slot name="panel" />
+  </div>
+  <div class="more">
+    <slot name="more" />
+  </div>
+</header>
+
+<style>
+  .hero {
+    display: grid;
+    gap: var(--space-5);
+    padding-top: var(--space-6);
+  }
+
+  .art {
+    align-self: start;
+    width: 100%;
+    max-width: 30rem;
+    border-radius: var(--radius-m);
+    box-shadow:
+      0 2px 4px rgb(0 0 0 / 0.3),
+      0 24px 60px -12px rgb(0 0 0 / 0.55);
+  }
+
+  .art :global(> a) {
+    display: block;
+  }
+
+  .intro {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: var(--space-5);
+    min-width: 0;
+  }
+
+  .titles {
+    display: grid;
+    align-content: start;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .more {
+    display: grid;
+    align-content: start;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+
+  /* Phones: the cover fills the column, with room under it and its shadow. */
+  @media (max-width: 47.99rem) {
+    .art {
+      margin-bottom: var(--space-3);
+    }
+  }
+
+  @media (min-width: 48rem) {
+    .hero:not(.no-art) {
+      grid-template-columns: var(--art-width) minmax(0, 1fr);
+      column-gap: var(--space-7);
+      row-gap: var(--space-5);
+    }
+
+    .art {
+      width: var(--art-width);
+    }
+
+    .hero:not(.no-art) .more {
+      grid-column: 2;
+    }
+  }
+
+  /* The titles, as the pages write them. */
+  .titles :global(h1) {
+    font-size: clamp(2.2rem, 1.4rem + 3.2vw, 4.25rem);
+    font-weight: 850;
+    letter-spacing: -0.035em;
+    line-height: 0.98;
+    text-wrap: pretty;
+  }
+
+  /* Long titles step down a size and wrap with a full first line. */
+  .titles :global(h1.long) {
+    font-size: clamp(2rem, 1.3rem + 2.4vw, 3.25rem);
+  }
+
+  .titles :global(h1.longer) {
+    font-size: clamp(1.75rem, 1.2rem + 1.8vw, 2.6rem);
+  }
+
+  .titles :global(.eyebrow a) {
+    color: inherit;
+  }
+
+  /* The tight display title needs air before the artist line. */
+  .titles :global(.by) {
+    margin-top: var(--space-3);
+    font-size: var(--step-1);
+    font-weight: 600;
+  }
+
+  .titles :global(.facts) {
+    color: var(--text-muted);
+  }
+
+  .titles :global(.facts:empty) {
+    display: none;
+  }
+</style>

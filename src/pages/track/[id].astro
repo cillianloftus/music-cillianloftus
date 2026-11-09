@@ -13,6 +13,7 @@ import { groupCredits } from '../../lib/credits';
 import PageActions from '../../components/PageActions.astro';
 import MediaRow from '../../components/MediaRow.astro';
 import CreditsPanel from '../../components/CreditsPanel.astro';
+import EntityHero from '../../components/EntityHero.astro';
 import Tile from '../../components/Tile.astro';
 import Tiles from '../../components/Tiles.astro';
 import RowList from '../../components/RowList.astro';
@@ -148,16 +149,18 @@ function ordinalOf(n: number): string {
   <article class="wrap page">
     <Backdrop artKey={firstOut?.album.art_key} height="34rem" />
 
-    <header class="hero">
+    <EntityHero artWidth="16rem" hasArt={Boolean(home)}>
+      <Fragment slot="art">
       {
         home && (
-          <a class="art" href={`/album/${firstOut!.album.id}`} tabindex="-1" aria-hidden="true">
-            <CoverArt artKey={firstOut!.album.art_key} title={firstOut!.album.title} sizes="(min-width: 48rem) 16rem, 60vw" priority />
+          <a href={`/album/${firstOut!.album.id}`} tabindex="-1" aria-hidden="true">
+            <CoverArt artKey={firstOut!.album.art_key} title={firstOut!.album.title} sizes="(min-width: 48rem) 16rem, 100vw" priority />
           </a>
         )
       }
-      <div class="intro">
-        <div class="titles">
+      </Fragment>
+
+        <Fragment slot="titles">
         <p class="eyebrow">
           Track
           {home && home.position && <> · {home.disc && home.disc > 1 ? `${home.disc}.` : ''}{home.position} on <a href={`/album/${home.album.id}`}>{home.album.title}</a></>}
@@ -185,12 +188,13 @@ function ordinalOf(n: number): string {
             </blockquote>
           )
         }
-        </div>
+        </Fragment>
 
+        <Fragment slot="panel">
         <ScorePanel quality={track.quality_score} personal={track.personal_score} rating={null} trackAxes={axes} rateHref={user ? rateHref : null} />
-      </div>
+        </Fragment>
 
-      <div class="more">
+      <Fragment slot="more">
         <StandingLines lines={standingLines} />
 
         {
@@ -217,8 +221,8 @@ function ordinalOf(n: number): string {
           label={genres.inherited ? 'Genres, from its album' : 'Genres'}
           title={genres.inherited ? 'From its album' : undefined}
         />
-      </div>
-    </header>
+      </Fragment>
+    </EntityHero>
 
     <div class="below">
       <div class="main-col">
@@ -423,74 +427,10 @@ function ordinalOf(n: number): string {
 
   /* As on the album page: titles at the top of the column, the score
      panel along the cover's bottom edge, the rest in a row beneath. */
-  .hero {
-    display: grid;
-    gap: var(--space-5);
-    padding-top: var(--space-6);
-  }
-
-  @media (min-width: 48rem) {
-    .hero {
-      grid-template-columns: 16rem minmax(0, 1fr);
-      column-gap: var(--space-7);
-      row-gap: var(--space-5);
-    }
-
-    .art {
-      align-self: start;
-    }
-
-    .more {
-      grid-column: 2;
-    }
-  }
 
   /* Phones: full width, as on album pages; wide screens: a little smaller than an album's. */
-  .art {
-    display: block;
-    width: 100%;
-    max-width: 24rem;
-    border-radius: var(--radius-m);
-    box-shadow:
-      0 2px 4px rgb(0 0 0 / 0.3),
-      0 24px 60px -12px rgb(0 0 0 / 0.55);
-  }
-
-  .intro {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    gap: var(--space-5);
-    min-width: 0;
-  }
-
-  .titles,
-  .more {
-    display: grid;
-    align-content: start;
-    gap: var(--space-3);
-    min-width: 0;
-  }
-
-  .eyebrow a {
-    color: inherit;
-  }
-
-  h1 {
-    font-size: clamp(2.2rem, 1.4rem + 3.2vw, 4rem);
-    line-height: 0.98;
-  }
 
   /* The tight display title needs air before the artist line. */
-  .by {
-    margin-top: var(--space-3);
-    font-size: var(--step-1);
-    font-weight: 600;
-  }
-
-  .facts:empty {
-    display: none;
-  }
 
   .axes {
     display: flex;
@@ -596,17 +536,6 @@ function ordinalOf(n: number): string {
 
   /* Long titles step down a size and wrap with a full first line, rather
      than being split evenly into two short ones. */
-  h1 {
-    text-wrap: pretty;
-  }
-
-  h1.long {
-    font-size: clamp(2rem, 1.3rem + 2.4vw, 3.25rem);
-  }
-
-  h1.longer {
-    font-size: clamp(1.75rem, 1.2rem + 1.8vw, 2.6rem);
-  }
 
   /* Your note, under the title like an epigraph: often a favourite line. */
   .epigraph {
@@ -768,20 +697,6 @@ function ordinalOf(n: number): string {
     text-decoration: underline;
   }
 
-  @media (min-width: 48rem) {
-    .art {
-      width: 16rem;
-    }
-  }
-
   /* Phones: the art fills the column, left edge with the text; capped on
      tablets so a square cover never outgrows the screen. */
-  @media (max-width: 47.99rem) {
-    .art {
-      width: 100%;
-      max-width: 30rem;
-      /* Room under the cover and its shadow before the title. */
-      margin-bottom: var(--space-3);
-    }
-  }
 </style>

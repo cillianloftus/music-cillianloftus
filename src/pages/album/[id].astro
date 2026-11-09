@@ -17,6 +17,7 @@ import AlbumCard from '../../components/AlbumCard.astro';
 import Shelf from '../../components/Shelf.astro';
 import PageActions from '../../components/PageActions.astro';
 import CreditsPanel from '../../components/CreditsPanel.astro';
+import EntityHero from '../../components/EntityHero.astro';
 import GenreChips from '../../components/GenreChips.astro';
 import StandingLines from '../../components/StandingLines.astro';
 import { groupCredits } from '../../lib/credits';
@@ -225,8 +226,8 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
 >
   <article class="wrap album">
     <Backdrop artKey={album.art_key} />
-    <header class="hero">
-      <div class="art">
+    <EntityHero artWidth="20rem">
+      <Fragment slot="art">
         <CoverArt
           artKey={album.art_key}
           title={album.title}
@@ -234,10 +235,9 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
           sizes="(min-width: 48rem) 20rem, calc(100vw - 32px)"
           priority
         />
-      </div>
+      </Fragment>
 
-      <div class="intro">
-        <div class="titles">
+        <Fragment slot="titles">
           <p class="eyebrow">
             {typeLabel(album.type)}
             {album.status !== 'released' && <> · {album.status === 'announced' ? 'Announced' : 'Cancelled'}</>}
@@ -255,8 +255,9 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
               )}
             </p>
           )}
-        </div>
+        </Fragment>
 
+        <Fragment slot="panel">
         <ScorePanel
           quality={album.quality_score}
           personal={album.personal_score}
@@ -266,9 +267,9 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
           rateHref={user ? rateHref('release_group', album.id) : null}
           nextHref={user && nextUnrated ? rateHref('recording', nextUnrated.recording_id) : null}
         />
-      </div>
+        </Fragment>
 
-      <div class="more">
+      <Fragment slot="more">
         <StandingLines lines={standingLines} />
 
         {
@@ -321,8 +322,8 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
             </figure>
           )
         }
-      </div>
-    </header>
+      </Fragment>
+    </EntityHero>
 
     <section class="tracks" aria-labelledby="tracklist-heading">
       <h2 id="tracklist-heading">Tracklist</h2>
@@ -634,46 +635,9 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   }
 
   /* The same breathing room above as the artist and track pages. */
-  .hero {
-    display: grid;
-    gap: var(--space-5);
-    padding-top: var(--space-6);
-  }
-
-  .art {
-    align-self: start;
-    max-width: 24rem;
-    border-radius: var(--radius-m);
-    box-shadow:
-      0 2px 4px rgb(0 0 0 / 0.3),
-      0 24px 60px -12px rgb(0 0 0 / 0.55);
-  }
 
   /* The title block at the top, the score panel at the bottom: beside the
      cover, the panel's bottom edge meets the cover's. */
-  .intro {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    gap: var(--space-4);
-    min-width: 0;
-  }
-
-  .titles {
-    display: grid;
-    gap: var(--space-2);
-  }
-
-  .facts {
-    color: var(--text-muted);
-  }
-
-  .more {
-    display: grid;
-    gap: var(--space-4);
-    min-width: 0;
-  }
-
 
   .actions .button svg {
     width: 1.2rem;
@@ -684,20 +648,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     stroke-linecap: round;
   }
 
-  h1 {
-    font-size: clamp(2.2rem, 1.4rem + 3.2vw, 4.25rem);
-    font-weight: 850;
-    letter-spacing: -0.035em;
-    line-height: 0.98;
-    text-wrap: balance;
-  }
-
   /* The tight display title needs air before the artist line. */
-  .by {
-    margin-top: var(--space-3);
-    font-size: var(--step-1);
-    font-weight: 600;
-  }
 
   .similar {
     grid-column: 1 / -1;
@@ -740,9 +691,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     color: var(--text-muted);
     font-size: var(--step--1);
   }
-
-
-
 
   .track-link {
     text-decoration: none;
@@ -888,9 +836,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   .total {
     margin-top: var(--space-3);
   }
-
-
-
 
   .editions ul {
     display: grid;
@@ -1060,16 +1005,8 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
       row-gap: var(--space-7);
     }
 
-    .hero {
+    .album > :global(.hero) {
       grid-column: 1 / -1;
-      grid-template-columns: 20rem minmax(0, 1fr);
-      column-gap: var(--space-7);
-      row-gap: var(--space-5);
-    }
-
-    /* Actions, genres and the note sit under the panel, beside nothing. */
-    .more {
-      grid-column: 2;
     }
 
     .tracks {
@@ -1093,17 +1030,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
 
   /* Long titles step down a size and wrap with a full first line, rather
      than being split evenly into two short ones. */
-  h1 {
-    text-wrap: pretty;
-  }
-
-  h1.long {
-    font-size: clamp(2rem, 1.3rem + 2.4vw, 3.25rem);
-  }
-
-  h1.longer {
-    font-size: clamp(1.75rem, 1.2rem + 1.8vw, 2.6rem);
-  }
 
   .more-credits,
   .all-link {
@@ -1112,7 +1038,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     font-weight: 600;
     white-space: nowrap;
   }
-
 
   /* Every credit, by kind, across the full width under everything else. */
   .all-credits {
@@ -1211,9 +1136,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     font-size: 0.9em;
   }
 
-
-
-
   /* Where it stands: a few quiet lines, each marked like a ranked score. */
   /* Lists and awards it is on: a few quiet lines under the genres. */
   .lists {
@@ -1250,19 +1172,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     font-size: var(--step--1);
   }
 
-
-
-
-
-
   /* Phones: the art fills the column, left edge with the text; capped on
      tablets so a square cover never outgrows the screen. */
-  @media (max-width: 47.99rem) {
-    .art {
-      width: 100%;
-      max-width: 30rem;
-      /* Room under the cover and its shadow before the title. */
-      margin-bottom: var(--space-3);
-    }
-  }
 </style>
