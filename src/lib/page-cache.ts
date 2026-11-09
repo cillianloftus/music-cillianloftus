@@ -25,12 +25,14 @@ export const PAGE_MAX_AGE = 15 * 60;
 
 /**
  * What changes in place without growing a table: covers, artist pictures,
- * the genre tree (migration 0049), and weights and track kinds, which move
- * scores (0051). Triggers bump a number in app_setting for each, so reading
- * them is a few lookups where counting them read about 4,000 rows.
+ * the genre tree (migration 0049), weights and track kinds, which move
+ * scores (0051), and catalogue rows deleted or filled in place, which no
+ * highest rowid shows (0052). Triggers bump a number in app_setting for
+ * each, so reading them is a few lookups where counting them read about
+ * 4,000 rows.
  */
 export const CHANGE_VERSIONS = `(SELECT group_concat(key || '=' || value) FROM app_setting
-   WHERE key IN ('covers_version', 'pictures_version', 'genres_version', 'scores_version'))`;
+   WHERE key IN ('covers_version', 'pictures_version', 'genres_version', 'scores_version', 'library_version'))`;
 
 /**
  * A short string that moves whenever anything a public page shows does.

@@ -20,26 +20,12 @@ import { perRequest } from './request-scope';
  * and pictures change in place; triggers count their changes
  * (CHANGE_VERSIONS), where counting them read about 4,000 rows a stamp.
  *
- * Remembered for a few seconds per user, as the page stamp is: a page that
- * reads several cached values works the stamp out once. A write in this
- * isolate forgets it (forgetLibraryStamp, from the middleware).
+ * Worked out once per request (about 60 rows), so every section of a page
+ * sees the same stamp. Not remembered between requests: another isolate's
+ * remembered stamp could show a page from before a rating just made.
  */
-const MEMO_MS = 15_000;
-// Settled stamps only, across requests; one being read is shared within its
-// request (perRequest), so a page's sections started together read it once.
-const memo = new Map<string, { value: string; at: number }>();
-
-export function forgetLibraryStamp(): void {
-  memo.clear();
-}
-
-export async function libraryStamp(userId: string | null, now = Date.now()): Promise<string> {
-  const key = userId ?? '';
-  const remembered = memo.get(key);
-  if (remembered && now - remembered.at < MEMO_MS) return remembered.value;
-  const value = await perRequest(`library-stamp:${key}`, () => readLibraryStamp(userId));
-  memo.set(key, { value, at: now });
-  return value;
+export function libraryStamp(userId: string | null): Promise<string> {
+  return perRequest(`library-stamp:${userId ?? ''}`, () => readLibraryStamp(userId));
 }
 
 async function readLibraryStamp(userId: string | null): Promise<string> {

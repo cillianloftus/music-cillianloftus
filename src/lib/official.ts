@@ -78,7 +78,10 @@ export async function markArtistGroups(artistId: string, officialMbids: string[]
       `UPDATE release_group
        SET official = CASE WHEN mbid IN (SELECT value FROM json_each(?1)) OR official = 1 THEN 1 ELSE 0 END
        WHERE mbid IS NOT NULL
-         AND id IN (SELECT entity_id FROM artist_credit WHERE entity_type = 'release_group' AND role = 'primary' AND artist_id = ?2)`,
+         AND id IN (SELECT entity_id FROM artist_credit WHERE entity_type = 'release_group' AND role = 'primary' AND artist_id = ?2)
+         -- Only what changes: an album rewritten unchanged would still move
+         -- library_version (0052) and throw away every kept value.
+         AND official IS NOT (CASE WHEN mbid IN (SELECT value FROM json_each(?1)) OR official = 1 THEN 1 ELSE 0 END)`,
     ).bind(JSON.stringify(officialMbids), artistId),
     env.DB.prepare(`UPDATE artist SET releases_checked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`).bind(artistId),
   ]);

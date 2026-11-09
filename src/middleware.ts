@@ -3,7 +3,7 @@ import { defineMiddleware } from 'astro:middleware';
 import { env } from 'cloudflare:workers';
 import { verifyAccessJwt, type AccessIdentity } from './lib/auth/access';
 import { userForEmail } from './lib/auth/user';
-import { devCold, forgetLibraryStamp } from './lib/library-cache';
+import { devCold } from './lib/library-cache';
 import { inRequest } from './lib/request-scope';
 import { currentStamp, forgetStamp, isCacheablePage, isKeepable, pageKey, PAGE_MAX_AGE } from './lib/page-cache';
 import { THEME_COOKIE } from './lib/theme';
@@ -95,8 +95,7 @@ async function handle(context: APIContext, next: MiddlewareNext): Promise<Respon
   // isolate's next page is worked out afresh.
   if (context.request.method !== 'GET' && context.request.method !== 'HEAD') {
     const response = await next();
-    forgetStamp();
-    forgetLibraryStamp();
+    forgetStamp();
     return response;
   }
 

@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { forgetLibraryStamp, libraryStamp } from './library-cache';
+import { libraryStamp } from './library-cache';
 
 let db: DatabaseSync;
 
@@ -11,7 +11,6 @@ beforeEach(() => {
   db = migratedDb();
   seedLibrary(db);
   (env as { DB: D1Database }).DB = d1(db);
-  forgetLibraryStamp();
 });
 
 describe('libraryStamp', () => {
@@ -30,7 +29,6 @@ describe('libraryStamp', () => {
     it(`moves with ${what}`, async () => {
       const before = await libraryStamp('u-owner');
       change();
-      forgetLibraryStamp();
       expect(await libraryStamp('u-owner')).not.toBe(before);
     });
   }
@@ -38,7 +36,6 @@ describe('libraryStamp', () => {
   it('moves with anyone’s rating: one seek, where counting one user’s read them all', async () => {
     const before = await libraryStamp('u-owner');
     insert(db, 'rating', [{ id: 'f2', user_id: 'u-friend', entity_type: 'recording', entity_id: 'a1', depth: 'gut', gut_score: 3, rated_at: '2026-03-01T00:00:00.000Z' }]);
-    forgetLibraryStamp();
     expect(await libraryStamp('u-owner')).not.toBe(before);
   });
 
@@ -46,21 +43,38 @@ describe('libraryStamp', () => {
     insert(db, 'artist_image', [{ id: 'i1', artist_id: 'art-x', key: 'art/artist/art-x/1.jpg', source: 'manual', position: 0 }]);
     const before = await libraryStamp('u-owner');
     db.exec(`UPDATE artist_image SET hidden = 1 WHERE id = 'i1'`);
-    forgetLibraryStamp();
     expect(await libraryStamp('u-owner')).not.toBe(before);
   });
 
   it('holds for values that are no one’s when someone rates', async () => {
     const before = await libraryStamp(null);
     insert(db, 'rating', [{ id: 'f3', user_id: 'u-owner', entity_type: 'recording', entity_id: 'a1', depth: 'gut', gut_score: 3, rated_at: '2026-03-01T00:00:00.000Z' }]);
-    forgetLibraryStamp();
     expect(await libraryStamp(null)).toBe(before);
   });
 
-  it('is remembered briefly, and forgotten after a write', async () => {
-    const first = await libraryStamp('u-owner', 1_000);
-    insert(db, 'rating', [{ id: 'n3', user_id: 'u-owner', entity_type: 'recording', entity_id: 'a1', depth: 'gut', gut_score: 3, rated_at: '2026-04-01T00:00:00.000Z' }]);
-    expect(await libraryStamp('u-owner', 5_000)).toBe(first);
-    expect(await libraryStamp('u-owner', 20_000)).not.toBe(first);
+  it('holds within one request, however often asked', async () => {
+    const { inRequest } = await import('./request-scope');
+    await inRequest(async () => {
+      const first = await libraryStamp('u-owner');
+      insert(db, 'rating', [{ id: 'n3', user_id: 'u-owner', entity_type: 'recording', entity_id: 'a1', depth: 'gut', gut_score: 3, rated_at: '2026-04-01T00:00:00.000Z' }]);
+      expect(await libraryStamp('u-owner')).toBe(first);
+    });
+    expect(await libraryStamp('u-owner')).not.toBe(await inRequest(() => libraryStamp('u-friend')));
+  });
+
+  it('moves when an album tag is taken away, which leaves every highest rowid as it was', async () => {
+    insert(db, 'genre_tag', [
+      { entity_type: 'release_group', entity_id: 'rg-a', genre_id: 'g-rock', source: 'derived', weight: 0.5 },
+      { entity_type: 'release_group', entity_id: 'rg-b', genre_id: 'g-rock', source: 'derived', weight: 0.5 },
+    ]);
+    const before = await libraryStamp(null);
+    db.exec(`DELETE FROM genre_tag WHERE entity_type = 'release_group' AND entity_id = 'rg-a' AND source = 'derived'`);
+    expect(await libraryStamp(null)).not.toBe(before);
+  });
+
+  it('moves when an artist is filled in place', async () => {
+    const before = await libraryStamp(null);
+    db.exec(`UPDATE artist SET begin_date = '1990-01-01', begin_precision = 'day' WHERE id = 'art-x'`);
+    expect(await libraryStamp(null)).not.toBe(before);
   });
 });
