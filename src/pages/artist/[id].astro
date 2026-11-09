@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import Shelf from '../../components/Shelf.astro';
 import AlbumCard from '../../components/AlbumCard.astro';
 import Backdrop from '../../components/Backdrop.astro';
 import CoverArt from '../../components/CoverArt.astro';
@@ -357,6 +358,78 @@ import { splitVersion } from '../../lib/versions';
       </div>
     </header>
 
+    {/* Their music first: it is what the page is for. Then favourites, credits and the breakdown. */}
+    {
+      albums.length === 0 ? (
+        <section aria-labelledby="albums-heading">
+          <h2 id="albums-heading">Releases</h2>
+          <p class="muted">No releases under this name in the catalogue.</p>
+        </section>
+      ) : (
+        shelves.map((shelf) => (
+          <section aria-labelledby={`releases-${shelf.key}`}>
+            <details class="shelf" open={!shelf.closed} data-kind={shelf.key} data-closed={shelf.closed ? '' : undefined}>
+              <summary>
+                <h2 id={`releases-${shelf.key}`}>
+                  {shelf.heading} <span class="count tabular">{shelf.items.length}</span>
+                </h2>
+                <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </summary>
+              {/* One sideways row per kind, so a long run of singles does not bury the rest of the page. */}
+              <Shelf label={shelf.heading.toLowerCase()}>
+                <ul role="list">
+                  {shelf.items.map((album) => (
+                    <li>
+                      <AlbumCard album={album} />
+                    </li>
+                  ))}
+                </ul>
+              </Shelf>
+            </details>
+          </section>
+        ))
+      )
+    }
+    {
+      hidden > 0 && (
+        <p class="hidden-note">
+          {hidden} not-official {hidden === 1 ? 'release' : 'releases'} kept off this page. <a href="/manage/unofficial">Clear them</a>
+        </p>
+      )
+    }
+    {/* Inline, straight after the shelves: folded kinds close before they paint. */}
+    <script is:inline>
+      (() => {
+        // Folded shelves, and opened ones that start folded (remixes).
+        const read = (key) => {
+          try {
+            return JSON.parse(localStorage.getItem(key) || '[]');
+          } catch {
+            return [];
+          }
+        };
+        let folded = read('folded-shelves');
+        let opened = read('opened-shelves');
+        for (const shelf of document.querySelectorAll('details[data-kind]')) {
+          const kind = shelf.dataset.kind;
+          const closedFirst = shelf.hasAttribute('data-closed');
+          shelf.open = closedFirst ? opened.includes(kind) : !folded.includes(kind);
+          shelf.addEventListener('toggle', () => {
+            folded = folded.filter((k) => k !== kind);
+            opened = opened.filter((k) => k !== kind);
+            if (closedFirst && shelf.open) opened.push(kind);
+            if (!closedFirst && !shelf.open) folded.push(kind);
+            try {
+              localStorage.setItem('folded-shelves', JSON.stringify(folded));
+              localStorage.setItem('opened-shelves', JSON.stringify(opened));
+            } catch {}
+          });
+        }
+      })();
+    </script>
+
     {
       (topTracks.length > 0 || roleFamilies.length > 0) && (
         <div class="pair">
@@ -502,74 +575,6 @@ import { splitVersion } from '../../lib/versions';
         </section>
       )
     }
-
-    {
-      albums.length === 0 ? (
-        <section aria-labelledby="albums-heading">
-          <h2 id="albums-heading">Releases</h2>
-          <p class="muted">No releases under this name in the catalogue.</p>
-        </section>
-      ) : (
-        shelves.map((shelf) => (
-          <section aria-labelledby={`releases-${shelf.key}`}>
-            <details class="shelf" open={!shelf.closed} data-shelf={shelf.key} data-closed={shelf.closed ? '' : undefined}>
-              <summary>
-                <h2 id={`releases-${shelf.key}`}>
-                  {shelf.heading} <span class="count tabular">{shelf.items.length}</span>
-                </h2>
-                <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
-              </summary>
-              <ul class="grid" role="list">
-                {shelf.items.map((album) => (
-                  <li>
-                    <AlbumCard album={album} />
-                  </li>
-                ))}
-              </ul>
-            </details>
-          </section>
-        ))
-      )
-    }
-    {
-      hidden > 0 && (
-        <p class="hidden-note">
-          {hidden} not-official {hidden === 1 ? 'release' : 'releases'} kept off this page. <a href="/manage/unofficial">Clear them</a>
-        </p>
-      )
-    }
-    {/* Inline, straight after the shelves: folded kinds close before they paint. */}
-    <script is:inline>
-      (() => {
-        // Folded shelves, and opened ones that start folded (remixes).
-        const read = (key) => {
-          try {
-            return JSON.parse(localStorage.getItem(key) || '[]');
-          } catch {
-            return [];
-          }
-        };
-        let folded = read('folded-shelves');
-        let opened = read('opened-shelves');
-        for (const shelf of document.querySelectorAll('details[data-shelf]')) {
-          const kind = shelf.dataset.shelf;
-          const closedFirst = shelf.hasAttribute('data-closed');
-          shelf.open = closedFirst ? opened.includes(kind) : !folded.includes(kind);
-          shelf.addEventListener('toggle', () => {
-            folded = folded.filter((k) => k !== kind);
-            opened = opened.filter((k) => k !== kind);
-            if (closedFirst && shelf.open) opened.push(kind);
-            if (!closedFirst && !shelf.open) folded.push(kind);
-            try {
-              localStorage.setItem('folded-shelves', JSON.stringify(folded));
-              localStorage.setItem('opened-shelves', JSON.stringify(opened));
-            } catch {}
-          });
-        }
-      })();
-    </script>
 
     {
       collaborators.length > 0 && (
