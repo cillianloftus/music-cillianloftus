@@ -1,4 +1,5 @@
 ---
+import { pictureAt, pictureSrcset } from '../lib/pictures';
 import Segmented from '../components/Segmented.astro';
 /**
  * Every artist at once: a wall of faces, filed A to Z (or by how much is
@@ -89,7 +90,7 @@ const meta = (a: RosterArtist) =>
                   <a class="card" href={`/artist/${a.id}`}>
                     <span class="face">
                       {a.image_key ? (
-                        <img src={`/${a.image_key}`} alt="" loading={i < 12 ? 'eager' : 'lazy'} decoding="async" width="240" height="240" />
+                        <img src={pictureAt(a.image_key, 320)} srcset={pictureSrcset(a.image_key)} sizes="(min-width: 40rem) 10rem, 45vw" alt="" loading={i < 12 ? 'eager' : 'lazy'} decoding="async" width="240" height="240" />
                       ) : a.art_key ? (
                         <CoverArt artKey={a.art_key} title={a.name} sizes="10rem" />
                       ) : (

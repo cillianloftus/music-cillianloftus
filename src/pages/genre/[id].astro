@@ -1,4 +1,5 @@
 ---
+import { pictureAt } from '../../lib/pictures';
 /**
  * A genre: where it sits (every parent, since a genre can belong to more
  * than one), what sits beneath it, and the best of it in the library.
@@ -189,7 +190,7 @@ const list = (items: string[]) =>
             {artists.map((a) => (
               <li>
                 <span class="avatar" style={`--h: ${hueOf(a.name)}`} aria-hidden="true">
-                  {a.image_key ? <img src={`/${a.image_key}`} alt="" width="80" height="80" loading="lazy" decoding="async" /> : a.name.slice(0, 1).toUpperCase()}
+                  {a.image_key ? <img src={pictureAt(a.image_key, 160)} alt="" width="80" height="80" loading="lazy" decoding="async" /> : a.name.slice(0, 1).toUpperCase()}
                 </span>
                 <span class="who">
                   <a href={`/artist/${a.id}`}>{a.name}</a>

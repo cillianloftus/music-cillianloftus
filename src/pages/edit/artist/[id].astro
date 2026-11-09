@@ -1,4 +1,5 @@
 ---
+import { pictureAt } from '../../../lib/pictures';
 /**
  * Correct an artist by hand: who they are, other names they go by, how
  * they relate to other artists, and which pictures show. Details edited
@@ -195,7 +196,7 @@ const links = [
           <ul role="list" class="pictures" data-pictures data-artist={id}>
             {allImages.results.map((img, i) => (
               <li class:list={[{ hidden: img.hidden }]} data-key={img.key} tabindex="0" aria-label={`Picture ${i + 1}. Alt and arrow keys move it.`}>
-                <img src={`/${img.key}`} alt="" width="160" height="160" loading="lazy" draggable="false" />
+                <img src={pictureAt(img.key, 320)} alt="" width="160" height="160" loading="lazy" draggable="false" />
                 <form method="post" action="/api/write/artist/edit">
                   <input type="hidden" name="id" value={id} />
                   <input type="hidden" name="key" value={img.key} />

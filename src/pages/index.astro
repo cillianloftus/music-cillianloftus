@@ -1,4 +1,5 @@
 ---
+import { pictureAt, pictureSrcset } from '../lib/pictures';
 import CardGrid from '../components/CardGrid.astro';
 /**
  * The front page, in order: one album up front (the latest one rated
@@ -214,7 +215,7 @@ const statItems = [
                     {p.kind === 'genre' ? (
                       <span class="genre-mark" aria-hidden="true">{p.title.slice(0, 1).toUpperCase()}</span>
                     ) : p.imageKey ? (
-                      <img src={`/${p.imageKey}`} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                      <img src={pictureAt(p.imageKey, 320)} alt="" width="160" height="160" loading="lazy" decoding="async" />
                     ) : (
                       <CoverArt artKey={p.artKey} title={p.title} sizes="4.5rem" />
                     )}
@@ -342,7 +343,7 @@ const statItems = [
                   <a href={`/artist/${a.id}`}>
                     <span class="face">
                       {a.image_key ? (
-                        <img src={`/${a.image_key}`} alt="" loading="lazy" decoding="async" width="200" height="200" />
+                        <img src={pictureAt(a.image_key, 320)} srcset={pictureSrcset(a.image_key)} sizes="12rem" alt="" loading="lazy" decoding="async" width="200" height="200" />
                       ) : (
                         <CoverArt artKey={a.art_key} title={a.name} sizes="9rem" />
                       )}

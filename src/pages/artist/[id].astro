@@ -1,4 +1,5 @@
 ---
+import { pictureAt, pictureSrcset } from '../../lib/pictures';
 import Base from '../../layouts/Base.astro';
 import Shelf from '../../components/Shelf.astro';
 import AlbumCard from '../../components/AlbumCard.astro';
@@ -231,7 +232,9 @@ import { splitVersion } from '../../lib/versions';
             <div class="frames" data-frames tabindex={images.length > 1 ? 0 : undefined} aria-label={images.length > 1 ? `Pictures of ${artist.name}` : undefined}>
               {images.map((img, i) => (
                 <img
-                  src={`/${img.key}`}
+                  src={pictureAt(img.key, 640)}
+                  srcset={`${pictureSrcset(img.key)}, /${img.key} 1600w`}
+                  sizes="(min-width: 48rem) 20rem, 100vw"
                   alt={i === 0 ? artist.name : `${artist.name}, picture ${i + 1}`}
                   width={img.width ?? 800}
                   height={img.height ?? 800}

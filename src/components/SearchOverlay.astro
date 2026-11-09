@@ -39,6 +39,8 @@
 </dialog>
 
 <script>
+  import { pictureAt } from '../lib/pictures';
+
   type Row = { href: string; title: string; detail: string; art: string | null; score?: number | null };
   type Found = { q: string; canImport?: boolean; artists: Row[]; albums: Row[]; tracks: Row[] };
 
@@ -134,7 +136,7 @@
         a.href = p.href;
         const pic = document.createElement('span');
         pic.className = round ? 'pic round' : 'pic';
-        const src = p.image ? `/${p.image}` : p.art ? `/${p.art}/128.webp` : null;
+        const src = p.image ? pictureAt(p.image, 160) : p.art ? `/${p.art}/128.webp` : null;
         if (src) {
           const img = document.createElement('img');
           img.src = src;

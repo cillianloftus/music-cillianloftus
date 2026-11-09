@@ -15,7 +15,7 @@ import { env } from 'cloudflare:workers';
 
 /** Public pages that show the library. Tools, forms and APIs are never cached. */
 export function isCacheablePage(pathname: string): boolean {
-  if (['/', '/artists', '/diary', '/genres', '/insights', '/playlists'].includes(pathname)) return true;
+  if (['/', '/albums', '/artists', '/diary', '/genres', '/insights', '/playlists'].includes(pathname)) return true;
   if (pathname.endsWith('/elsewhere')) return false; // fetched from other services, cached on its own
   return /^\/(artist|album|track|genre|year|playlist|label)\/[^/]+$/.test(pathname) || /^\/artist\/[^/]+\/tracks$/.test(pathname);
 }
