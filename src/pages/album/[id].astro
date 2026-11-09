@@ -16,6 +16,7 @@ import { similarAlbums } from '../../lib/pages';
 import AlbumCard from '../../components/AlbumCard.astro';
 import Shelf from '../../components/Shelf.astro';
 import PageActions from '../../components/PageActions.astro';
+import CreditsPanel from '../../components/CreditsPanel.astro';
 import GenreChips from '../../components/GenreChips.astro';
 import StandingLines from '../../components/StandingLines.astro';
 import { groupCredits } from '../../lib/credits';
@@ -429,49 +430,28 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     <div class="aside">
     {
       byRole.size > 0 && (
-        <section class="credits" aria-labelledby="credits-heading">
-          <h2 id="credits-heading">{allCreditsShown ? 'Key credits' : 'Credits'}</h2>
-          <dl>
-            {(allCreditsShown ? keyRoles : [...byRole]).map(([role, list]) => (
-              <div>
-                <dt>{roleLabel(role, list.length, list[0]!.role_label)}</dt>
-                <dd>
-                  {(allCreditsShown ? list.slice(0, KEY_PER_ROLE) : list).map((person, i, shown) => (
-                    <Fragment>
-                      <a href={`/artist/${person.artist_id}`}>{person.name}</a>
-                      {person.tracks < person.of && (
-                        <span class="on-tracks tabular" title={`On ${person.tracks} of ${person.of} tracks`}>
-                          {' '}
-                          ({person.tracks})
-                        </span>
-                      )}
-                      {i < shown.length - 1 && ', '}
-                    </Fragment>
-                  ))}
-                  {allCreditsShown && list.length > KEY_PER_ROLE && (
-                    <a class="more-credits" href="#all-credits">
-                      {' '}
-                      +{list.length - KEY_PER_ROLE} more
-                    </a>
-                  )}
-                </dd>
-              </div>
-            ))}
-            {allCreditsShown && playerRoles.length > 0 && (
-              <div>
-                <dt>Also credited</dt>
-                <dd class="players">
-                  {playerRoles.map(([, list], i) => (
-                    <Fragment>
-                      {list[0]!.role_label}
-                      <span class="tabular on-tracks"> {list.length}</span>
-                      {i < playerRoles.length - 1 && ' · '}
-                    </Fragment>
-                  ))}
-                </dd>
-              </div>
-            )}
-          </dl>
+        <CreditsPanel
+          heading={allCreditsShown ? 'Key credits' : 'Credits'}
+          groups={[
+            {
+              rows: [
+                ...(allCreditsShown ? keyRoles : [...byRole]).map(([role, list]) => ({
+                  role: roleLabel(role, list.length, list[0]!.role_label),
+                  people: (allCreditsShown ? list.slice(0, KEY_PER_ROLE) : list).map((person) => ({
+                    id: person.artist_id,
+                    name: person.name,
+                    note: person.tracks < person.of ? `(${person.tracks})` : undefined,
+                    noteTitle: person.tracks < person.of ? `On ${person.tracks} of ${person.of} tracks` : undefined,
+                  })),
+                  more: allCreditsShown && list.length > KEY_PER_ROLE ? { href: '#all-credits', text: `+${list.length - KEY_PER_ROLE} more` } : undefined,
+                })),
+                ...(allCreditsShown && playerRoles.length > 0
+                  ? [{ role: 'Also credited', plain: playerRoles.map(([, list]) => `${list[0]!.role_label} ${list.length}`).join(' · ') }]
+                  : []),
+              ],
+            },
+          ]}
+        >
           {allCreditsShown && (
             <p>
               <a class="all-link" href="#all-credits">
@@ -479,7 +459,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
               </a>
             </p>
           )}
-        </section>
+        </CreditsPanel>
       )
     }
 
@@ -909,20 +889,8 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     margin-top: var(--space-3);
   }
 
-  .credits dl {
-    display: grid;
-    gap: var(--space-3);
-    margin: 0;
-  }
 
-  .credits dt {
-    color: var(--text-muted);
-    font-size: var(--step--1);
-  }
 
-  .credits dd {
-    margin: 0;
-  }
 
   .editions ul {
     display: grid;
@@ -1122,10 +1090,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   }
 
   /* How many tracks someone is on, when not all of them. */
-  .on-tracks {
-    color: var(--text-muted);
-    font-size: var(--step--1);
-  }
 
   /* Long titles step down a size and wrap with a full first line, rather
      than being split evenly into two short ones. */
@@ -1149,10 +1113,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     white-space: nowrap;
   }
 
-  .players {
-    color: var(--text-muted);
-    font-size: var(--step--1);
-  }
 
   /* Every credit, by kind, across the full width under everything else. */
   .all-credits {

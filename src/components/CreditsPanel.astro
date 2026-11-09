@@ -1,0 +1,151 @@
+---
+/**
+ * Credits in a panel: groups (Writing, Production…) of roles, the role on
+ * the left and the people on the right, so long lists line up. One look
+ * on track and album pages: a change here changes both.
+ */
+
+export interface CreditPerson {
+  id: string;
+  name: string;
+  /** Shown small after the name ("(4)" for on four tracks), with a hover title. */
+  note?: string | undefined;
+  noteTitle?: string | undefined;
+}
+
+export interface CreditRow {
+  role: string;
+  people?: CreditPerson[];
+  /** A trailing link ("+3 more"). */
+  more?: { href: string; text: string } | undefined;
+  /** Plain text in place of people ("Guitar 4 · Bass 2"). */
+  plain?: string | undefined;
+}
+
+export interface CreditGroup {
+  /** A group heading; none for a single ungrouped list. */
+  name?: string | null;
+  rows: CreditRow[];
+}
+
+interface Props {
+  heading: string;
+  id?: string;
+  groups: CreditGroup[];
+}
+
+const { heading, id = 'credits-heading', groups } = Astro.props;
+---
+
+<aside class="credits-panel" aria-labelledby={id}>
+  <h2 id={id}>{heading}</h2>
+  <dl>
+    {
+      groups.map((g) => (
+        <div class="family">
+          {g.name && <dt>{g.name}</dt>}
+          {g.rows.map((row) => (
+            <dd>
+              <span class="role">{row.role}</span>
+              <span class="names">
+                {row.plain ??
+                  (row.people ?? []).map((p, i, all) => (
+                    <Fragment>
+                      <a href={`/artist/${p.id}`}>{p.name}</a>
+                      {p.note && (
+                        <span class="note tabular" title={p.noteTitle}>
+                          {' '}
+                          {p.note}
+                        </span>
+                      )}
+                      {i < all.length - 1 && ', '}
+                    </Fragment>
+                  ))}
+                {row.more && (
+                  <a class="more" href={row.more.href}>
+                    {' '}
+                    {row.more.text}
+                  </a>
+                )}
+              </span>
+            </dd>
+          ))}
+        </div>
+      ))
+    }
+  </dl>
+  <slot />
+</aside>
+
+<style>
+  .credits-panel {
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  h2 {
+    margin-bottom: var(--space-3);
+    font-size: var(--step-2);
+    letter-spacing: -0.02em;
+  }
+
+  dl {
+    display: grid;
+    gap: var(--space-4);
+    margin: 0;
+  }
+
+  dt {
+    margin-bottom: var(--space-1);
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  /* Role on the left, people on the right, so long lists line up. */
+  dd {
+    display: grid;
+    grid-template-columns: 8.5rem minmax(0, 1fr);
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0.3rem 0;
+    border-bottom: 1px dashed var(--border);
+    font-size: var(--step--1);
+  }
+
+  .family dd:last-child {
+    border-bottom: 0;
+  }
+
+  .role,
+  .note {
+    color: var(--text-muted);
+  }
+
+  .names a {
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .names a:hover,
+  .names a:focus-visible {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+
+  .names .more {
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  /* After the list: a link to everything. */
+  .credits-panel :global(> p) {
+    margin-top: var(--space-3);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+</style>
