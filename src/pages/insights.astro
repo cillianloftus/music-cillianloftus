@@ -25,7 +25,7 @@ const viewerId = Astro.locals.user?.id ?? (await ownerId());
 // Kept per library state: every chart here reads the whole library.
 const [data, deep, facts, minds] = viewerId
   ? await Promise.all([
-      byLibrary('insights:v2', viewerId, () => insights(viewerId)),
+      byLibrary('insights:v3', viewerId, () => insights(viewerId)),
       byLibrary('insights-deeper:v1', viewerId, () => deeperInsights(viewerId)),
       libraryFacts(viewerId),
       byLibrary('minds:v1', viewerId, () => changedMinds(viewerId)),

@@ -75,3 +75,33 @@ describe('favourite genres', () => {
     }
   });
 });
+
+describe('genre families', () => {
+  it('match what walking the tags in SQL gave', async () => {
+    db.prepare(`INSERT OR IGNORE INTO genre_tag (entity_type, entity_id, genre_id, source, weight) VALUES ('release_group', 'rg-a', 'g-bedroom', 'musicbrainz', 1)`).run();
+    db.prepare(`INSERT OR IGNORE INTO genre_tag (entity_type, entity_id, genre_id, source, weight) VALUES ('release_group', 'rg-b', 'g-rock', 'musicbrainz', 1)`).run();
+    const { genresOfRecordings, genreIndex } = await import('./genres');
+    const { genreFamilies } = await import('./insights');
+    const reference = db
+      .prepare(
+        `WITH RECURSIVE up(id, root_id) AS (
+           SELECT id, id FROM genre WHERE parent_id IS NULL
+           UNION ALL
+           SELECT g.id, up.root_id FROM genre g JOIN up ON g.parent_id = up.id
+         ),
+         scored AS (SELECT recording_id, quality_score FROM v_recording_score WHERE user_id = 'u-owner'),
+         pairs AS (${genresOfRecordings('scored')}),
+         tagged AS (SELECT DISTINCT p.recording_id, up.root_id FROM pairs p JOIN up ON up.id = p.genre_id)
+         SELECT r.name AS key, r.name AS label, avg(s.quality_score) AS average, count(*) AS count
+         FROM tagged t JOIN scored s ON s.recording_id = t.recording_id JOIN genre r ON r.id = t.root_id
+         GROUP BY t.root_id HAVING count(*) >= 2 ORDER BY average DESC, count DESC LIMIT 12`,
+      )
+      .all();
+    const genres = db.prepare(`SELECT id, name, parent_id FROM genre`).all() as { id: string; name: string; parent_id: string | null }[];
+    const scored = db.prepare(`SELECT recording_id AS id, quality_score AS score FROM v_recording_score WHERE user_id = 'u-owner'`).all() as { id: string; score: number }[];
+    const ours = genreFamilies((await genreIndex()).tracks, genres, scored);
+    expect(ours.map((f) => [f.key, f.count, Math.round(f.average * 100)])).toEqual(
+      (reference as { key: string; count: number; average: number }[]).map((f) => [f.key, f.count, Math.round(f.average * 100)]),
+    );
+  });
+});

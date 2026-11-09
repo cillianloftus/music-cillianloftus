@@ -7,7 +7,7 @@
 
 import { env } from 'cloudflare:workers';
 import { albumScores, type ScoredAlbum } from './album-scores';
-import { genresOfRecordings } from './genres';
+import { genreIndex } from './genres';
 
 export interface Headline {
   ratedTracks: number;
@@ -57,7 +57,7 @@ export interface Insights {
 
 export async function insights(userId: string): Promise<Insights> {
   // Albums come from the user's album scores (album-scores.ts), read alongside.
-  const [batch, scores] = await Promise.all([env.DB.batch([
+  const [batch, scores, index] = await Promise.all([env.DB.batch([
     env.DB.prepare(
       `SELECT (SELECT count(*) FROM v_recording_score WHERE user_id = ?1) AS ratedTracks,
               (SELECT avg(quality_score) FROM v_recording_score WHERE user_id = ?1) AS averageTrack,
@@ -70,30 +70,9 @@ export async function insights(userId: string): Promise<Insights> {
       `SELECT min(9, CAST(quality_score / 10 AS INTEGER)) AS band, count(*) AS count
        FROM v_recording_score WHERE user_id = ? GROUP BY band`,
     ).bind(userId),
-    // Genre families: a track's genres, walked up primary parents to the root.
-    env.DB.prepare(
-      `WITH RECURSIVE up(id, root_id) AS (
-         SELECT id, id FROM genre WHERE parent_id IS NULL
-         UNION ALL
-         SELECT g.id, up.root_id FROM genre g JOIN up ON g.parent_id = up.id
-       ),
-       -- Rated tracks to their genres (genresOfRecordings): through the
-       -- genre view, built whole, this read 135,000 rows.
-       scored AS (SELECT recording_id, quality_score FROM v_recording_score WHERE user_id = ?1),
-       pairs AS (${genresOfRecordings('scored')}),
-       tagged AS (
-         SELECT DISTINCT p.recording_id, up.root_id
-         FROM pairs p JOIN up ON up.id = p.genre_id
-       )
-       SELECT r.name AS key, r.name AS label, avg(s.quality_score) AS average, count(*) AS count
-       FROM tagged t
-       JOIN scored s ON s.recording_id = t.recording_id
-       JOIN genre r ON r.id = t.root_id
-       GROUP BY t.root_id
-       HAVING count(*) >= 2
-       ORDER BY average DESC, count DESC
-       LIMIT 12`,
-    ).bind(userId),
+    // Genre families: from the genre index and the tree, in code (genreFamilies).
+    env.DB.prepare(`SELECT id, name, parent_id FROM genre`),
+    env.DB.prepare(`SELECT recording_id AS id, quality_score AS score FROM v_recording_score WHERE user_id = ?`).bind(userId),
     env.DB.prepare(
       `SELECT substr(rated_at, 1, 7) AS month, count(*) AS count FROM rating WHERE user_id = ? GROUP BY month ORDER BY month`,
     ).bind(userId),
@@ -113,8 +92,8 @@ export async function insights(userId: string): Promise<Insights> {
        WHERE s.user_id = ? AND r.first_release_date IS NOT NULL
        GROUP BY key ORDER BY key DESC`,
     ).bind(userId),
-  ]), albumScores(userId)]);
-  const [headline, spread, families, months, artists, years] = batch;
+  ]), albumScores(userId), genreIndex()]);
+  const [headline, spread, genres, scored, months, artists, years] = batch;
 
   const h = (headline!.results[0] ?? {}) as Record<string, number | null>;
   const bands = new Map((spread!.results as { band: number; count: number }[]).map((r) => [r.band, r.count]));
@@ -130,10 +109,62 @@ export async function insights(userId: string): Promise<Insights> {
     spread: Array.from({ length: 10 }, (_, band) => ({ from: band * 10, to: band === 9 ? 100 : band * 10 + 9, count: bands.get(band) ?? 0 })),
     decades: byDecade(Object.values(scores)),
     years: (years!.results as Group[]).filter((y) => /^\d{4}$/.test(y.key)),
-    families: families!.results as Group[],
+    families: genreFamilies(
+      index.tracks,
+      genres!.results as { id: string; name: string; parent_id: string | null }[],
+      scored!.results as { id: string; score: number }[],
+    ),
     months: fillMonths(months!.results as Month[]),
     artists: artists!.results as ArtistRow[],
   };
+}
+
+/**
+ * Average track score by genre family: each rated track counted once under
+ * every root (top-level genre, through primary parents) its genres lead
+ * to; families with two or more tracks, best first, twelve at most. From
+ * the genre index, where walking the tag rows in SQL read 135,000 rows.
+ * Pure.
+ */
+export function genreFamilies(
+  members: Record<string, string[]>,
+  genres: { id: string; name: string; parent_id: string | null }[],
+  scored: { id: string; score: number }[],
+): Group[] {
+  const byId = new Map(genres.map((g) => [g.id, g]));
+  const rootOf = (id: string): string | null => {
+    const seen = new Set<string>();
+    let g = byId.get(id);
+    while (g?.parent_id && !seen.has(g.id)) {
+      seen.add(g.id);
+      g = byId.get(g.parent_id);
+    }
+    return g?.id ?? null;
+  };
+  const scoreOf = new Map(scored.map((s) => [s.id, s.score]));
+  const rootsOf = new Map<string, Set<string>>();
+  for (const [genre, ids] of Object.entries(members)) {
+    const root = rootOf(genre);
+    if (!root) continue;
+    for (const id of ids) {
+      if (!scoreOf.has(id)) continue;
+      (rootsOf.get(id) ?? rootsOf.set(id, new Set()).get(id)!).add(root);
+    }
+  }
+  const tally = new Map<string, { total: number; count: number }>();
+  for (const [id, roots] of rootsOf) {
+    for (const root of roots) {
+      const t = tally.get(root) ?? { total: 0, count: 0 };
+      t.total += scoreOf.get(id)!;
+      t.count += 1;
+      tally.set(root, t);
+    }
+  }
+  return [...tally]
+    .filter(([, t]) => t.count >= 2)
+    .map(([root, t]) => ({ key: byId.get(root)!.name, label: byId.get(root)!.name, average: t.total / t.count, count: t.count }))
+    .sort((a, b) => b.average - a.average || b.count - a.count)
+    .slice(0, 12);
 }
 
 /** Average album score by decade of release, oldest first; undated albums left out. */
