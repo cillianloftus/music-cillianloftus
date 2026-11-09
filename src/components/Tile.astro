@@ -1,0 +1,121 @@
+---
+/**
+ * A collapsible tile: closed, a small card with its heading, a count and a
+ * peek of what is inside; open, a plain heading over its contents, taking
+ * the whole row. Tiles sharing a `name` open one at a time. Laid out two to
+ * a row by Tiles. Release kinds on artist pages and samples on track
+ * pages are both these, so they look and behave the same.
+ */
+interface Props {
+  /** Tiles with the same name open one at a time. */
+  name: string;
+  /** Used for the heading's id and as data-kind. */
+  key: string;
+  heading: string;
+  count?: number | undefined;
+  /** h2 for a tile that is a section of the page, h3 within one. */
+  level?: 'h2' | 'h3';
+  open?: boolean;
+}
+
+const { name, key, heading, count, level = 'h2', open = false } = Astro.props;
+const Heading = level;
+---
+
+<details class:list={['tile', `tile--${level}`]} name={name} data-kind={key} open={open}>
+  <summary>
+    <Heading class="tile-heading" id={`tile-${key}`}>
+      {heading}
+      {count !== undefined && <span class="tile-count tabular">{count}</span>}
+    </Heading>
+    <span class="tile-peek" aria-hidden="true"><slot name="peek" /></span>
+    <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  </summary>
+  <slot />
+</details>
+
+<style>
+  .tile[open] {
+    grid-column: 1 / -1;
+  }
+
+  .tile > summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'name chevron' 'peek peek';
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border-radius: var(--radius-m);
+    background: color-mix(in srgb, var(--surface-1) 85%, transparent);
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .tile > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .tile-heading {
+    grid-area: name;
+    margin: 0;
+    font-size: var(--step-0);
+    line-height: 1.2;
+  }
+
+  .tile-count {
+    margin-left: var(--space-1);
+    color: var(--text-subtle);
+    font-size: 0.7em;
+    font-weight: 700;
+    vertical-align: middle;
+  }
+
+  .tile-peek {
+    grid-area: peek;
+    display: flex;
+    min-width: 0;
+  }
+
+  /* Open: a plain heading over its contents, no card. A section's heading
+     grows to a section heading's size. */
+  .tile[open] > summary {
+    grid-template-areas: 'name chevron';
+    margin-bottom: var(--space-3);
+    padding: 0;
+    background: none;
+  }
+
+  .tile--h2[open] .tile-heading {
+    font-size: var(--step-2);
+  }
+
+  .tile[open] .tile-peek {
+    display: none;
+  }
+
+  .chevron {
+    grid-area: chevron;
+    flex: none;
+    width: 1.5rem;
+    height: 1.5rem;
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: rotate 0.2s ease;
+  }
+
+  .tile:not([open]) .chevron {
+    rotate: -90deg;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chevron {
+      transition: none;
+    }
+  }
+</style>

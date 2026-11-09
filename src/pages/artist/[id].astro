@@ -7,6 +7,8 @@ import CoverArt from '../../components/CoverArt.astro';
 import Score from '../../components/Score.astro';
 import LinkIcon from '../../components/LinkIcon.astro';
 import GenreChips from '../../components/GenreChips.astro';
+import Tile from '../../components/Tile.astro';
+import Tiles from '../../components/Tiles.astro';
 import { ownerId } from '../../lib/auth/user';
 import {
   artist as getArtist,
@@ -379,26 +381,18 @@ import { splitVersion } from '../../lib/versions';
           <p class="muted">No releases under this name in the catalogue.</p>
         </section>
       ) : (
-        <div class="kinds">
+        <Tiles>
           {shelves.map((shelf) => (
             // One group: opening a kind closes the one open (name), and an open kind takes the whole row.
-            <details class="kind" name="release-kinds" data-kind={shelf.key}>
-              <summary>
-                <h2 id={`releases-${shelf.key}`}>
-                  {shelf.heading} <span class="count tabular">{shelf.items.length}</span>
-                </h2>
-                {/* A few covers, so a closed kind still shows its music. */}
-                <span class="peek" aria-hidden="true">
-                  {shelf.items.slice(0, 3).map((album) => (
-                    <span class="peek-art">
-                      <CoverArt artKey={album.art_key} title={album.title} sizes="3rem" />
-                    </span>
-                  ))}
-                </span>
-                <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
-              </summary>
+            <Tile name="release-kinds" key={shelf.key} heading={shelf.heading} count={shelf.items.length}>
+              {/* A few covers, so a closed kind still shows its music. */}
+              <Fragment slot="peek">
+                {shelf.items.slice(0, 3).map((album) => (
+                  <span class="peek-art">
+                    <CoverArt artKey={album.art_key} title={album.title} sizes="3rem" />
+                  </span>
+                ))}
+              </Fragment>
               <Shelf label={shelf.heading.toLowerCase()}>
                 <ul role="list">
                   {shelf.items.map((album) => (
@@ -408,9 +402,9 @@ import { splitVersion } from '../../lib/versions';
                   ))}
                 </ul>
               </Shelf>
-            </details>
+            </Tile>
           ))}
-        </div>
+        </Tiles>
       )
     }
     {
@@ -978,62 +972,15 @@ import { splitVersion } from '../../lib/versions';
      the rest), no rules between. Open, a kind takes the whole row for its
      covers; only one is open at a time (details name). Dense, so the tiles
      after an open one close up rather than leaving a gap. */
-  .kinds {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-auto-flow: row dense;
-    gap: var(--space-3);
-  }
 
-  .kind[open] {
-    grid-column: 1 / -1;
-  }
 
-  .kind > summary {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: 'name chevron' 'peek peek';
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-3);
-    border-radius: var(--radius-m);
-    background: color-mix(in srgb, var(--surface-1) 85%, transparent);
-    list-style: none;
-    cursor: pointer;
-  }
 
-  .kind > summary::-webkit-details-marker {
-    display: none;
-  }
 
-  .kind > summary h2 {
-    grid-area: name;
-    margin: 0;
-    font-size: var(--step-0);
-    line-height: 1.2;
-  }
 
   /* Open: a plain heading over its row of covers, no tile. */
-  .kind[open] > summary {
-    grid-template-areas: 'name chevron';
-    margin-bottom: var(--space-3);
-    padding: 0;
-    background: none;
-  }
 
-  .kind[open] > summary h2 {
-    font-size: var(--step-2);
-  }
 
-  .peek {
-    grid-area: peek;
-    display: flex;
-    min-width: 0;
-  }
 
-  .kind[open] .peek {
-    display: none;
-  }
 
   /* A little fan of covers, each over the last. */
   .peek-art {
@@ -1048,28 +995,8 @@ import { splitVersion } from '../../lib/versions';
     margin-left: -0.9rem;
   }
 
-  .chevron {
-    grid-area: chevron;
-    flex: none;
-    width: 1.5rem;
-    height: 1.5rem;
-    fill: none;
-    stroke: var(--text-muted);
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    transition: rotate 0.2s ease;
-  }
 
-  .kind:not([open]) .chevron {
-    rotate: -90deg;
-  }
 
-  @media (prefers-reduced-motion: reduce) {
-    .chevron {
-      transition: none;
-    }
-  }
 
   h2 .count {
     margin-left: var(--space-1);

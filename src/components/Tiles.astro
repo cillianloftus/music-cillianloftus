@@ -1,0 +1,23 @@
+---
+/**
+ * Tiles two to a row; an open one takes the whole row, and the ones after
+ * it close up (dense) rather than leave a gap.
+ */
+interface Props {
+  class?: string;
+}
+const { class: className } = Astro.props;
+---
+
+<div class:list={['tiles', className]}>
+  <slot />
+</div>
+
+<style>
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: row dense;
+    gap: var(--space-3);
+  }
+</style>

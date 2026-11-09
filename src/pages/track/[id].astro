@@ -13,6 +13,8 @@ import { groupCredits } from '../../lib/credits';
 import PageActions from '../../components/PageActions.astro';
 import MediaRow from '../../components/MediaRow.astro';
 import CreditsPanel from '../../components/CreditsPanel.astro';
+import Tile from '../../components/Tile.astro';
+import Tiles from '../../components/Tiles.astro';
 import RowList from '../../components/RowList.astro';
 import GenreChips from '../../components/GenreChips.astro';
 import StandingLines from '../../components/StandingLines.astro';
@@ -344,6 +346,7 @@ function ordinalOf(n: number): string {
           linkGroups.length > 0 && (
             <section aria-labelledby="song-links-heading" class="song-links">
               <h2 id="song-links-heading">{linksHeading}</h2>
+              <Tiles>
               {linkGroups.map((g, gi) => {
                 const row = (t: LinkedTrack) => (
                   <li class:list={{ here: t.recording_id !== null }}>
@@ -364,25 +367,18 @@ function ordinalOf(n: number): string {
                 // As release kinds on artist pages: a tile each, one open at
                 // a time (name), the open one across the whole row.
                 return (
-                  <details class="link-group" name="song-links" open={gi === 0}>
-                    <summary>
-                      <h3 id={`links-${g.key}`}>
-                        {g.label} <span class="count tabular">{g.tracks.length}</span>
-                      </h3>
-                      <span class="peek muted small" aria-hidden="true">
-                        {g.tracks[0]!.title} · {g.tracks[0]!.artist}
-                        {g.tracks.length > 1 && ` and ${g.tracks.length - 1} more`}
-                      </span>
-                      <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="m6 9 6 6 6-6" />
-                      </svg>
-                    </summary>
-                    <ul role="list" aria-labelledby={`links-${g.key}`}>
+                  <Tile name="song-links" key={`links-${g.key}`} heading={g.label} count={g.tracks.length} level="h3" open={gi === 0}>
+                    <span slot="peek" class="peek muted small">
+                      {g.tracks[0]!.title} · {g.tracks[0]!.artist}
+                      {g.tracks.length > 1 && ` and ${g.tracks.length - 1} more`}
+                    </span>
+                    <ul role="list" class="link-group" aria-labelledby={`tile-links-${g.key}`}>
                       {g.tracks.map(row)}
                     </ul>
-                  </details>
+                  </Tile>
                 );
               })}
+              </Tiles>
               <p class="muted small">From Genius</p>
             </section>
           )
@@ -716,96 +712,25 @@ function ordinalOf(n: number): string {
      takes the whole row for its list. Songs in the library stand out. */
   .song-links {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-auto-flow: row dense;
     gap: var(--space-3);
     max-width: 44rem;
   }
 
-  .song-links > h2,
-  .song-links > p {
-    grid-column: 1 / -1;
+  .song-links > h2 {
     margin-bottom: 0;
   }
 
-  .link-group[open] {
-    grid-column: 1 / -1;
-  }
-
-  .link-group > summary {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: 'name chevron' 'peek peek';
-    align-items: center;
-    gap: var(--space-1) var(--space-2);
-    padding: var(--space-3);
-    border-radius: var(--radius-m);
-    background: color-mix(in srgb, var(--surface-1) 85%, transparent);
-    list-style: none;
-    cursor: pointer;
-  }
-
-  .link-group > summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .link-group h3 {
-    grid-area: name;
-    margin: 0;
-    font-size: var(--step-0);
-    line-height: 1.2;
-  }
-
-  .link-group h3 .count {
-    margin-left: var(--space-1);
-    color: var(--text-subtle);
-    font-size: 0.8em;
-    font-weight: 700;
-  }
-
-  .link-group .peek {
-    grid-area: peek;
+  /* A closed tile's peek: the first song, on one line. */
+  .peek {
+    display: block;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  /* Open: a plain heading over its list, no tile. */
-  .link-group[open] > summary {
-    grid-template-areas: 'name chevron';
-    margin-bottom: var(--space-2);
-    padding: 0;
-    background: none;
-  }
-
-  .link-group[open] .peek {
-    display: none;
-  }
-
-  .link-group .chevron {
-    grid-area: chevron;
-    width: 1.5rem;
-    height: 1.5rem;
-    fill: none;
-    stroke: var(--text-muted);
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    transition: rotate 0.2s ease;
-  }
-
-  .link-group:not([open]) .chevron {
-    rotate: -90deg;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .link-group .chevron {
-      transition: none;
-    }
-  }
-
   /* A long list runs in two columns where there is room. */
-  .link-group ul {
+  .link-group {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr));
     column-gap: var(--space-5);
