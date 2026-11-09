@@ -82,18 +82,144 @@ export function genresOfRecordings(recordings: string): string {
 }
 
 /**
- * Distinct tracks tagged with each genre (v_recording_genre), by genre id.
- * One pass over the library (about 108,000 rows), kept until the library
- * changes: counted per genre, one genre cost 4,300 rows, and the genre map
- * and a big genre's page counted dozens. Ratings do not move it.
+ * Distinct tracks tagged with each genre, by genre id: what
+ * v_recording_genre says, counted here. Kept until the library changes;
+ * ratings do not move it.
+ *
+ * Counted through the view, the album genres were joined to every track
+ * (155,000 rows once tracks had genres of their own). Here three plain
+ * reads (the tracks' own tags, the albums' genres, which album each track
+ * is on) are put together the way the view does it: a track's own genres
+ * (only the hand-set ones when it has any), or, with none of its own,
+ * every album's it is on.
  */
 export async function trackCountsByGenre(): Promise<Record<string, number>> {
-  return byLibrary('genre-track-counts:v1', null, async () => {
-    const { results } = await env.DB.prepare(
-      `SELECT genre_id, count(DISTINCT recording_id) AS n FROM v_recording_genre GROUP BY genre_id`,
-    ).all<{ genre_id: string; n: number }>();
-    return Object.fromEntries(results.map((r) => [r.genre_id, r.n]));
+  const index = await genreIndex();
+  return Object.fromEntries(Object.entries(index.tracks).map(([g, ids]) => [g, ids.length]));
+}
+
+/**
+ * Which tracks and albums are in each genre, as v_recording_genre and
+ * v_release_group_genre have them, kept per library state: a genre's
+ * counts, or its whole subtree's, are worked out from this rather than
+ * read again (a big genre's subtree through the views read 42,000 rows).
+ */
+export interface GenreIndex {
+  tracks: Record<string, string[]>;
+  albums: Record<string, string[]>;
+}
+
+export async function genreIndex(): Promise<GenreIndex> {
+  return byLibrary('genre-index:v1', null, async () => {
+    // Plain table reads, put together here: through the views and joins
+    // they cost 155,000 rows; read raw, about the size of the tables.
+    const [own, albumTags, tracks, releases] = await env.DB.batch([
+      env.DB.prepare(`SELECT entity_id AS r, genre_id AS g, source = 'manual' AS manual FROM genre_tag WHERE entity_type = 'recording'`),
+      env.DB.prepare(`SELECT entity_id AS a, genre_id AS g, source = 'manual' AS manual FROM genre_tag WHERE entity_type = 'release_group'`),
+      env.DB.prepare(`SELECT recording_id AS r, release_id AS x FROM track`),
+      env.DB.prepare(`SELECT id AS x, release_group_id AS a FROM release`),
+    ]);
+    const albumOf = new Map((releases!.results as { x: string; a: string }[]).map((r) => [r.x, r.a]));
+    const placed = (tracks!.results as { r: string; x: string }[]).flatMap((t) => {
+      const a = albumOf.get(t.x);
+      return a ? [{ r: t.r, a }] : [];
+    });
+    const albums = albumGenres(albumTags!.results as { a: string; g: string; manual: number }[]);
+    const members = genreMembers(own!.results as { r: string; g: string; manual: number }[], albums, placed);
+    const albumsBy: Record<string, string[]> = {};
+    for (const { a, g } of albums) (albumsBy[g] ??= []).push(a);
+    return { tracks: Object.fromEntries([...members].map(([g, set]) => [g, [...set]])), albums: albumsBy };
   });
+}
+
+/** Every parent-to-child edge of the genre tree (v_genre_edge: primary and extra parents), kept per library state. */
+export async function genreEdges(): Promise<{ genre_id: string; parent_id: string }[]> {
+  return byLibrary('genre-edges:v1', null, async () => {
+    const { results } = await env.DB.prepare(`SELECT genre_id, parent_id FROM v_genre_edge`).all<{ genre_id: string; parent_id: string }>();
+    return results;
+  });
+}
+
+/** A genre and everything beneath it, through any parent. Pure. */
+export function subtreeOf(id: string, edges: { genre_id: string; parent_id: string }[]): string[] {
+  const children = new Map<string, string[]>();
+  for (const e of edges) children.set(e.parent_id, [...(children.get(e.parent_id) ?? []), e.genre_id]);
+  const seen = new Set([id]);
+  const queue = [id];
+  while (queue.length) {
+    for (const c of children.get(queue.shift()!) ?? []) {
+      if (!seen.has(c)) {
+        seen.add(c);
+        queue.push(c);
+      }
+    }
+  }
+  return [...seen];
+}
+
+/** Distinct members of any of these genres. Pure. */
+export function membersOf(index: Record<string, string[]>, genres: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  for (const g of genres) for (const id of index[g] ?? []) out.add(id);
+  return out;
+}
+
+/** v_release_group_genre's rule: an album's hand-set genres alone when it has any, else all its tags. Pure. */
+export function albumGenres(tags: { a: string; g: string; manual: number }[]): { a: string; g: string }[] {
+  const handSet = new Set(tags.filter((t) => t.manual).map((t) => t.a));
+  const seen = new Set<string>();
+  const out: { a: string; g: string }[] = [];
+  for (const t of tags) {
+    if (handSet.has(t.a) && !t.manual) continue;
+    const key = `${t.a}\u0000${t.g}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ a: t.a, g: t.g });
+  }
+  return out;
+}
+
+/** v_recording_genre's rule, counted: own genres (hand-set ones alone when any), else the albums'. Pure. */
+export function countTracksByGenre(
+  own: { r: string; g: string; manual: number }[],
+  albums: { a: string; g: string }[],
+  placed: { r: string; a: string }[],
+): Record<string, number> {
+  return Object.fromEntries([...genreMembers(own, albums, placed)].map(([g, set]) => [g, set.size]));
+}
+
+/** v_recording_genre's rule: each genre's tracks. Pure. */
+export function genreMembers(
+  own: { r: string; g: string; manual: number }[],
+  albums: { a: string; g: string }[],
+  placed: { r: string; a: string }[],
+): Map<string, Set<string>> {
+  const tagged = new Map<string, { manual: Set<string>; other: Set<string> }>();
+  for (const t of own) {
+    const entry = tagged.get(t.r) ?? { manual: new Set<string>(), other: new Set<string>() };
+    (t.manual ? entry.manual : entry.other).add(t.g);
+    tagged.set(t.r, entry);
+  }
+  const albumGenres = new Map<string, string[]>();
+  for (const x of albums) albumGenres.set(x.a, [...(albumGenres.get(x.a) ?? []), x.g]);
+
+  const genresOf = new Map<string, Set<string>>();
+  for (const [r, t] of tagged) genresOf.set(r, t.manual.size > 0 ? t.manual : new Set([...t.manual, ...t.other]));
+  for (const { r, a } of placed) {
+    if (tagged.has(r)) continue;
+    const set = genresOf.get(r) ?? new Set<string>();
+    for (const g of albumGenres.get(a) ?? []) set.add(g);
+    genresOf.set(r, set);
+  }
+  const members = new Map<string, Set<string>>();
+  for (const [r, set] of genresOf) {
+    for (const g of set) {
+      const m = members.get(g) ?? new Set<string>();
+      m.add(r);
+      members.set(g, m);
+    }
+  }
+  return members;
 }
 
 export async function genreRows(): Promise<GenreRow[]> {

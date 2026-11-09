@@ -7,7 +7,7 @@
 import { artistRank } from './artist-rank';
 import { env } from 'cloudflare:workers';
 import { artistLines, releaseGroupsByIds, type CreditPart, type ReleaseGroupSummary } from './catalogue';
-import { recordingsInGenres, trackCountsByGenre } from './genres';
+import { genreEdges, genreIndex, membersOf, recordingsInGenres, subtreeOf, trackCountsByGenre } from './genres';
 import { albumScores } from './album-scores';
 import { byLibrary } from './library-cache';
 import type { CreditRole } from './import/plan';
@@ -192,23 +192,18 @@ export async function genreDetail(id: string, deep = false): Promise<GenreDetail
        WHERE e.genre_id = ? ORDER BY e.is_primary DESC, g.name`,
     ).bind(id),
   ]);
-  // How much is in it: the library's, not anyone's ratings, so kept until it
-  // changes. Counted afresh, a big genre's subtree read about 180,000 rows.
-  const [count, trackCounts] = await Promise.all([
-    byLibrary(`genre-counts:v1:${id}:${deep ? 'deep' : 'own'}`, null, async () => {
-      const row = await env.DB.prepare(
-        `${treeOf(deep)}
-         SELECT (SELECT count(*) FROM (${recordingsInGenres('SELECT id FROM tree')})) AS tracks,
-                (SELECT count(DISTINCT release_group_id) FROM v_release_group_genre WHERE genre_id IN (SELECT id FROM tree)) AS albums,
-                (WITH RECURSIVE below(id) AS (SELECT ?1 UNION SELECT e.genre_id FROM v_genre_edge e JOIN below ON e.parent_id = below.id)
-                 SELECT count(*) FROM (${recordingsInGenres('SELECT id FROM below')})) AS tracksBeneath`,
-      )
-        .bind(id)
-        .first<{ tracks: number; albums: number; tracksBeneath: number }>();
-      return row ?? { tracks: 0, albums: 0, tracksBeneath: 0 };
-    }),
-    trackCountsByGenre(),
-  ]);
+  // How much is in it, from the genre index (the library's, kept until it
+  // changes): its own tracks and albums, or its whole subtree's. Counted in
+  // SQL, a big genre's subtree read 42,000 rows.
+  const [index, edges] = await Promise.all([genreIndex(), genreEdges()]);
+  const below = subtreeOf(id, edges);
+  const tree = deep ? below : [id];
+  const count = {
+    tracks: membersOf(index.tracks, tree).size,
+    albums: membersOf(index.albums, tree).size,
+    tracksBeneath: membersOf(index.tracks, below).size,
+  };
+  const trackCounts = Object.fromEntries(Object.entries(index.tracks).map(([g, ids]) => [g, ids.length]));
   const childRows = (children!.results as { id: string; name: string }[])
     .map((c) => ({ ...c, tracks: trackCounts[c.id] ?? 0 }))
     .sort((a, b) => b.tracks - a.tracks || a.name.localeCompare(b.name));
