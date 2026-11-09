@@ -1,0 +1,20 @@
+---
+/**
+ * The artist page's favourite tracks after the first ten, as an HTML
+ * fragment of pages of ten. Fetched when the list comes near view; kept
+ * in the edge page cache like the page itself.
+ */
+import TrackPage from '../../../components/TrackPage.astro';
+import { ownerId } from '../../../lib/auth/user';
+import { artistTracks, TRACKS_PER_PAGE } from '../../../lib/catalogue';
+
+export const partial = true;
+
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+const { tracks } = await artistTracks(Astro.params.id!, viewerId, TRACKS_PER_PAGE, Infinity);
+const pages = Array.from({ length: Math.ceil(tracks.length / TRACKS_PER_PAGE) }, (_, i) =>
+  tracks.slice(i * TRACKS_PER_PAGE, (i + 1) * TRACKS_PER_PAGE),
+);
+---
+
+{pages.map((page, i) => <TrackPage tracks={page} from={(i + 1) * TRACKS_PER_PAGE} />)}

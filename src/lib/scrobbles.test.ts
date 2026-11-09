@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, insertPlays, migratedDb, seedLibrary } from '../test/db';
-import { artistTopTracks } from './catalogue';
+import { artistTracks } from './catalogue';
 import { fillPlayMonths, trackListening } from './history';
 import { credentials, forget, saveCredentials, stateOf } from './connections';
 import { artistBreakdown, trackFacts } from './discover';
@@ -137,7 +137,8 @@ describe('scrobble sync', () => {
 
 describe('favourites', () => {
   it('are the best rated until there are plays, then plays count too', async () => {
-    expect((await artistTopTracks('art-x', 'u-owner', 3)).map((t) => t.id)).toEqual(['a4', 'a1', 'b1']);
+    const top3 = async () => (await artistTracks('art-x', 'u-owner', 0, 3)).tracks;
+    expect((await top3()).map((t) => t.id)).toEqual(['a4', 'a1', 'b1']);
     // b2 (rated 60) played far more than anything else.
     insertPlays(
       db,
@@ -150,8 +151,16 @@ describe('favourites', () => {
         source: 'lastfm',
       })),
     );
-    const top = await artistTopTracks('art-x', 'u-owner', 3);
-    expect(top[0]).toMatchObject({ id: 'b2', plays: 40 });
+    expect((await top3())[0]).toMatchObject({ id: 'b2', plays: 40 });
+  });
+
+  it('come a stretch at a time, each in its place, with how many there are in all', async () => {
+    const all = await artistTracks('art-x', 'u-owner', 0, Infinity);
+    const rest = await artistTracks('art-x', 'u-owner', 2, Infinity);
+    expect(rest.total).toBe(all.total);
+    expect(rest.tracks).toEqual(all.tracks.slice(2));
+    expect(all.tracks[0]).toMatchObject({ id: 'a4', album_id: expect.any(String), album_title: expect.any(String) });
+    expect((await artistTracks('art-x', 'u-owner', all.total, 10)).tracks).toEqual([]);
   });
 });
 

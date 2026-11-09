@@ -13,9 +13,11 @@ import {
   artistCollaborators,
   artistReleaseGroups,
   hiddenUnofficial,
-  artistTopTracks,
+  artistTracks,
   redirectFor,
+  TRACKS_PER_PAGE,
 } from '../../lib/catalogue';
+import TrackPage from '../../components/TrackPage.astro';
 import { artistImages } from '../../lib/artist-images';
 import { artistBreakdown } from '../../lib/discover';
 import { kinOf } from '../../lib/kin';
@@ -35,10 +37,10 @@ if (!artist) {
 }
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const [albums, appearances, topTracks, collaborators, about, images, genres, breakdown, kin] = await Promise.all([
+const [albums, appearances, { tracks: topTracks, total: trackTotal }, collaborators, about, images, genres, breakdown, kin] = await Promise.all([
   artistReleaseGroups(artist.id, viewerId),
   artistAppearances(artist.id),
-  artistTopTracks(artist.id, viewerId, 10),
+  artistTracks(artist.id, viewerId, 0, TRACKS_PER_PAGE),
   artistCollaborators(artist.id, 8),
   artistAbout(artist.id),
   artistImages(artist.id),
@@ -437,26 +439,25 @@ import { splitVersion } from '../../lib/versions';
         <div class="pair">
     {
           topTracks.length > 0 && (
-            <section aria-labelledby="tracks-heading">
-              <h2 id="tracks-heading">Favourite tracks</h2>
-              <ol class="tracks" role="list">
-                {topTracks.map((t, i) => (
-                  <li>
-                    <span class="rank tabular" aria-hidden="true">
-                      {i + 1}
-                    </span>
-                    <span class="thumb">
-                      <CoverArt artKey={t.art_key} title={t.album_title ?? t.title} sizes="3rem" />
-                    </span>
-                    <span class="track-text">
-                      <a href={`/track/${t.id}`}>{t.title}</a>
-                      {t.album_title && (t.album_id ? <a class="muted small album-link" href={`/album/${t.album_id}`}>{t.album_title}</a> : <span class="muted small">{t.album_title}</span>)}
-                      {t.plays > 0 && <span class="muted small tabular">{t.plays.toLocaleString('en-GB')} {t.plays === 1 ? 'play' : 'plays'}</span>}
-                    </span>
-                    <Score ranked quality={t.quality_score} personal={t.personal_score} size="m" />
-                  </li>
-                ))}
-              </ol>
+            <section aria-labelledby="tracks-heading" class="favourites" data-favourites={trackTotal > TRACKS_PER_PAGE ? `/artist/${artist.id}/tracks` : undefined} data-total={trackTotal} data-per-page={TRACKS_PER_PAGE}>
+              <div class="favourites-head">
+                <h2 id="tracks-heading">Favourite tracks</h2>
+                {/* Ten at a time, sideways; past the last comes the first again, and before the first the last. */}
+                {trackTotal > TRACKS_PER_PAGE && (
+                  <div class="pager" data-pager hidden>
+                    <button type="button" data-step="-1" aria-label="Previous ten">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
+                    </button>
+                    <span class="tabular" data-showing aria-live="polite">1–{TRACKS_PER_PAGE} of {trackTotal}</span>
+                    <button type="button" data-step="1" aria-label="Next ten">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div class="track-pages" data-track-pages>
+                <TrackPage tracks={topTracks} from={0} />
+              </div>
             </section>
           )
         }
@@ -698,6 +699,115 @@ import { splitVersion } from '../../lib/versions';
         { rootMargin: '600px' },
       );
       seen.observe(slot);
+    } else void load();
+  }
+</script>
+
+<script>
+  // Favourite tracks, ten at a time, swiped sideways or stepped with the
+  // arrows. The pages after the first arrive when the list nears view. A
+  // copy of the last page waits before the first and a copy of the first
+  // after the last: once a swipe settles on a copy, the strip jumps to the
+  // page it copies, so the list runs on round in either direction.
+  const section = document.querySelector<HTMLElement>('[data-favourites]');
+  const strip = section?.querySelector<HTMLElement>('[data-track-pages]');
+  const pager = section?.querySelector<HTMLElement>('[data-pager]');
+  const showing = section?.querySelector<HTMLElement>('[data-showing]');
+  if (section && strip && pager && showing) {
+    const total = Number(section.dataset.total);
+    const perPage = Number(section.dataset.perPage);
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let pages = 1;
+    let step = 1;
+    let index = 0;
+
+    const measure = () => {
+      const [a, b] = strip.children as HTMLCollectionOf<HTMLElement>;
+      step = b && a ? b.offsetLeft - a.offsetLeft : strip.clientWidth;
+    };
+    // Which real page is in view, from the strip's position (0 is the copy of the last).
+    const label = () => {
+      const real = (((index - 1) % pages) + pages) % pages;
+      showing.textContent = `${real * perPage + 1}–${Math.min(total, (real + 1) * perPage)} of ${total}`;
+    };
+    const jump = (i: number) => {
+      index = i;
+      strip.scrollTo({ left: i * step, behavior: 'instant' });
+    };
+    const settle = () => {
+      index = Math.round(strip.scrollLeft / step);
+      if (index === 0) jump(pages);
+      else if (index === pages + 1) jump(1);
+      label();
+    };
+
+    const load = async () => {
+      let html: string;
+      try {
+        const res = await fetch(section.dataset.favourites!);
+        if (!res.ok) return;
+        html = await res.text();
+      } catch {
+        return; // The first ten stay; nothing to page through.
+      }
+      strip.insertAdjacentHTML('beforeend', html);
+      const real = [...strip.children] as HTMLElement[];
+      if (real.length < 2) return;
+      pages = real.length;
+      const copy = (page: HTMLElement) => {
+        const c = page.cloneNode(true) as HTMLElement;
+        c.inert = true;
+        c.setAttribute('aria-hidden', 'true');
+        return c;
+      };
+      strip.insertAdjacentElement('afterbegin', copy(real.at(-1)!));
+      strip.insertAdjacentElement('beforeend', copy(real[0]!));
+      measure();
+      jump(1);
+      pager.hidden = false;
+
+      if ('onscrollend' in window) strip.addEventListener('scrollend', settle);
+      else {
+        let timer = 0;
+        strip.addEventListener('scroll', () => {
+          clearTimeout(timer);
+          timer = window.setTimeout(settle, 120);
+        }, { passive: true });
+      }
+      // The count follows the swipe, not only its end.
+      strip.addEventListener('scroll', () => {
+        const near = Math.round(strip.scrollLeft / step);
+        if (near !== index) {
+          index = near;
+          label();
+        }
+      }, { passive: true });
+      for (const button of pager.querySelectorAll<HTMLButtonElement>('[data-step]')) {
+        button.addEventListener('click', () => {
+          index = Math.round(strip.scrollLeft / step) + Number(button.dataset.step);
+          strip.scrollTo({ left: index * step, behavior: still ? 'instant' : 'smooth' });
+          label();
+        });
+      }
+      // A wider or narrower screen: the same page stays in view.
+      new ResizeObserver(() => {
+        const at = index;
+        measure();
+        jump(at);
+      }).observe(strip);
+    };
+
+    if ('IntersectionObserver' in window) {
+      const near = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((e) => e.isIntersecting)) {
+            near.disconnect();
+            void load();
+          }
+        },
+        { rootMargin: '600px' },
+      );
+      near.observe(section);
     } else void load();
   }
 </script>
@@ -1221,53 +1331,84 @@ import { splitVersion } from '../../lib/versions';
     font-weight: 750;
   }
 
-  .tracks {
-    display: grid;
-    margin: 0;
-    padding: 0;
-    list-style: none;
+  .favourites {
+    min-width: 0;
     max-width: 44rem;
   }
 
-  .tracks li {
-    display: grid;
-    grid-template-columns: 1.5rem 3rem minmax(0, 1fr) auto;
-    align-items: center;
+  /* The heading, with the pager on its line at the right. */
+  .favourites-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
     gap: var(--space-3);
-    padding: var(--space-2) 0;
-    border-bottom: 1px solid var(--border);
+    margin-bottom: var(--space-4);
   }
 
-  .rank {
-    color: var(--text-subtle);
-    font-weight: 700;
-    text-align: right;
+  .favourites-head h2 {
+    margin-bottom: 0;
   }
 
-  .thumb {
-    width: 3rem;
-    border-radius: var(--radius-s);
-    overflow: hidden;
-  }
-
-  .track-text {
-    display: grid;
-    min-width: 0;
-  }
-
-  .track-text > * {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .track-text a {
+  .pager {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--text-muted);
+    font-size: var(--step--1);
     font-weight: 650;
-    text-decoration: none;
   }
 
-  .track-text a:hover {
-    text-decoration: underline;
+  .pager[hidden] {
+    display: none;
+  }
+
+  .pager button {
+    display: grid;
+    place-items: center;
+    width: var(--target);
+    height: var(--target);
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .pager button:hover {
+    background: var(--surface-2);
+  }
+
+  .pager svg {
+    width: 1.25rem;
+    height: 1.25rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* Pages of ten side by side, one in view, snapping a page at a time. */
+  .track-pages {
+    position: relative;
+    display: flex;
+    gap: var(--space-5);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+  }
+
+  .track-pages::-webkit-scrollbar {
+    display: none;
+  }
+
+  .track-pages > :global(*) {
+    flex: 0 0 100%;
+    min-width: 0;
+    scroll-snap-align: start;
   }
 
   .grid {
@@ -1320,15 +1461,6 @@ import { splitVersion } from '../../lib/versions';
 
   .external {
     color: var(--text-muted);
-  }
-
-  .track-text .album-link {
-    font-weight: 400;
-    text-decoration: none;
-  }
-
-  .track-text .album-link:hover {
-    text-decoration: underline;
   }
 
   /* Role links read as a list, not a row of underlines: the line shows on hover. */

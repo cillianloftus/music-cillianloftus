@@ -1,0 +1,112 @@
+---
+/**
+ * One page of an artist's favourite tracks, numbered from `from` + 1. The
+ * artist page draws the first; the rest arrive from /artist/[id]/tracks,
+ * and the artist page carries the styles for both.
+ */
+import CoverArt from './CoverArt.astro';
+import Score from './Score.astro';
+import type { ArtistTrack } from '../lib/catalogue';
+
+interface Props {
+  tracks: ArtistTrack[];
+  from: number;
+}
+
+const { tracks, from } = Astro.props;
+---
+
+<ol class="tracks" role="list" start={from + 1}>
+  {
+    tracks.map((t, i) => (
+      <li>
+        <span class="rank tabular" aria-hidden="true">
+          {from + i + 1}
+        </span>
+        <span class="thumb">
+          <CoverArt artKey={t.art_key} title={t.album_title ?? t.title} sizes="3rem" />
+        </span>
+        <span class="track-text">
+          <a href={`/track/${t.id}`}>{t.title}</a>
+          {t.album_title &&
+            (t.album_id ? (
+              <a class="muted small album-link" href={`/album/${t.album_id}`}>
+                {t.album_title}
+              </a>
+            ) : (
+              <span class="muted small">{t.album_title}</span>
+            ))}
+          {t.plays > 0 && (
+            <span class="muted small tabular">
+              {t.plays.toLocaleString('en-GB')} {t.plays === 1 ? 'play' : 'plays'}
+            </span>
+          )}
+        </span>
+        <Score ranked quality={t.quality_score} personal={t.personal_score} size="m" />
+      </li>
+    ))
+  }
+</ol>
+
+<style>
+  .tracks {
+    display: grid;
+    align-content: start;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .tracks li {
+    display: grid;
+    grid-template-columns: 1.75rem 3rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .rank {
+    color: var(--text-subtle);
+    font-weight: 700;
+    text-align: right;
+  }
+
+  .thumb {
+    width: 3rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .track-text {
+    display: grid;
+    min-width: 0;
+  }
+
+  .track-text > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .track-text a {
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .track-text .album-link {
+    font-weight: 400;
+  }
+
+  .track-text a:hover {
+    text-decoration: underline;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+</style>
