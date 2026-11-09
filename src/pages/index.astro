@@ -1,4 +1,5 @@
 ---
+import CardGrid from '../components/CardGrid.astro';
 /**
  * The front page, in order: one album up front (the latest one rated
  * highly) with the shape of the library; what today brings; albums half
@@ -493,13 +494,13 @@ const statItems = [
             )}
           </div>
         ) : (
-          <ul class="grid" role="list">
+          <CardGrid>
             {recent.map((album) => (
               <li>
                 <AlbumCard album={album} />
               </li>
             ))}
-          </ul>
+          </CardGrid>
         )
       }
     </section>
@@ -918,21 +919,6 @@ const statItems = [
   }
 
   /* Recently added */
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));
-    gap: var(--space-6) var(--space-4);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  @media (min-width: 40rem) {
-    .grid {
-      grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
-      gap: var(--space-6) var(--space-5);
-    }
-  }
 
   .empty {
     display: grid;

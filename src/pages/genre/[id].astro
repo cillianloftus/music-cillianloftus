@@ -9,6 +9,7 @@ import Base from '../../layouts/Base.astro';
 import Findings from '../../components/Findings.astro';
 import { discover, trackFacts } from '../../lib/discover';
 import AlbumCard from '../../components/AlbumCard.astro';
+import CardGrid from '../../components/CardGrid.astro';
 import ResultList from '../../components/ResultList.astro';
 import { hueOf } from '../../lib/art/playlist';
 import { ownerId } from '../../lib/auth/user';
@@ -215,13 +216,13 @@ const list = (items: string[]) =>
       albums.length > 0 && (
         <section aria-labelledby="albums-heading">
           <h2 id="albums-heading">Albums</h2>
-          <ul role="list" class="grid">
+          <CardGrid>
             {albums.map((album) => (
               <li>
                 <AlbumCard album={album} />
               </li>
             ))}
-          </ul>
+          </CardGrid>
         </section>
       )
     }
@@ -421,21 +422,6 @@ const list = (items: string[]) =>
 
   .artists li:hover .who a {
     text-decoration: underline;
-  }
-
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));
-    gap: var(--space-6) var(--space-4);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  @media (min-width: 40rem) {
-    .grid {
-      grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
-    }
   }
 
   /* Two choices in one pill, as the sort on Artists. */

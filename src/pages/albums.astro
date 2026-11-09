@@ -8,6 +8,7 @@
 import Base from '../layouts/Base.astro';
 import PageHeader from '../components/PageHeader.astro';
 import AlbumCard from '../components/AlbumCard.astro';
+import CardGrid from '../components/CardGrid.astro';
 import { ownerId } from '../lib/auth/user';
 import { byLibrary } from '../lib/library-cache';
 import { shelfOfKind, type ShelfKind, type ShelfSort } from '../lib/catalogue';
@@ -75,13 +76,13 @@ const heading = KINDS.find(([k]) => k === kind)![1];
         <p class="muted">Nothing of this kind yet.</p>
       ) : (
         <>
-          <ul role="list" class="grid" data-shelf-grid>
+          <CardGrid data-shelf-grid>
             {shown.map((album) => (
               <li>
                 <AlbumCard album={album} />
               </li>
             ))}
-          </ul>
+          </CardGrid>
           {more && (
             <p class="more">
               <a class="button" href={href({ page: page + 1 })} data-more>
@@ -176,14 +177,6 @@ const heading = KINDS.find(([k]) => k === kind)![1];
   .kinds a[aria-current='page'] {
     background: var(--text);
     color: var(--bg);
-  }
-
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));
-    gap: var(--space-6) var(--space-4);
-    margin: 0;
-    padding: 0;
   }
 
   .more {
