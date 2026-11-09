@@ -366,18 +366,26 @@ import { splitVersion } from '../../lib/versions';
           <p class="muted">No releases under this name in the catalogue.</p>
         </section>
       ) : (
-        shelves.map((shelf) => (
-          <section aria-labelledby={`releases-${shelf.key}`}>
-            <details class="shelf" open={!shelf.closed} data-kind={shelf.key} data-closed={shelf.closed ? '' : undefined}>
+        <div class="kinds">
+          {shelves.map((shelf) => (
+            // One group: opening a kind closes the one open (name), and an open kind takes the whole row.
+            <details class="kind" name="release-kinds" data-kind={shelf.key}>
               <summary>
                 <h2 id={`releases-${shelf.key}`}>
                   {shelf.heading} <span class="count tabular">{shelf.items.length}</span>
                 </h2>
+                {/* A few covers, so a closed kind still shows its music. */}
+                <span class="peek" aria-hidden="true">
+                  {shelf.items.slice(0, 3).map((album) => (
+                    <span class="peek-art">
+                      <CoverArt artKey={album.art_key} title={album.title} sizes="3rem" />
+                    </span>
+                  ))}
+                </span>
                 <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="m6 9 6 6 6-6" />
                 </svg>
               </summary>
-              {/* One sideways row per kind, so a long run of singles does not bury the rest of the page. */}
               <Shelf label={shelf.heading.toLowerCase()}>
                 <ul role="list">
                   {shelf.items.map((album) => (
@@ -388,8 +396,8 @@ import { splitVersion } from '../../lib/versions';
                 </ul>
               </Shelf>
             </details>
-          </section>
-        ))
+          ))}
+        </div>
       )
     }
     {
@@ -399,31 +407,25 @@ import { splitVersion } from '../../lib/versions';
         </p>
       )
     }
-    {/* Inline, straight after the shelves: folded kinds close before they paint. */}
+    {/* Inline, straight after the kinds: the one to show is open before they paint. */}
     <script is:inline>
       (() => {
-        // Folded shelves, and opened ones that start folded (remixes).
-        const read = (key) => {
-          try {
-            return JSON.parse(localStorage.getItem(key) || '[]');
-          } catch {
-            return [];
-          }
-        };
-        let folded = read('folded-shelves');
-        let opened = read('opened-shelves');
-        for (const shelf of document.querySelectorAll('details[data-kind]')) {
-          const kind = shelf.dataset.kind;
-          const closedFirst = shelf.hasAttribute('data-closed');
-          shelf.open = closedFirst ? opened.includes(kind) : !folded.includes(kind);
-          shelf.addEventListener('toggle', () => {
-            folded = folded.filter((k) => k !== kind);
-            opened = opened.filter((k) => k !== kind);
-            if (closedFirst && shelf.open) opened.push(kind);
-            if (!closedFirst && !shelf.open) folded.push(kind);
+        // The kind last opened on this device stays open from page to page
+        // ("" when every one was closed); otherwise the first, so the music shows.
+        const kinds = [...document.querySelectorAll('details[data-kind]')];
+        let last = null;
+        try {
+          last = localStorage.getItem('open-kind');
+        } catch {}
+        const remembered = kinds.find((k) => k.dataset.kind === last);
+        const open = last === '' ? null : remembered ?? kinds[0];
+        if (open) open.open = true;
+        for (const kind of kinds) {
+          kind.addEventListener('toggle', () => {
+            // Closing one because another opened is not a choice to close them all.
+            if (!kind.open && kinds.some((k) => k.open)) return;
             try {
-              localStorage.setItem('folded-shelves', JSON.stringify(folded));
-              localStorage.setItem('opened-shelves', JSON.stringify(opened));
+              localStorage.setItem('open-kind', kind.open ? kind.dataset.kind : '');
             } catch {}
           });
         }
@@ -794,32 +796,82 @@ import { splitVersion } from '../../lib/versions';
     font-size: var(--step--1);
   }
 
-  /* Release shelves fold away; which kinds are folded is remembered. */
-  .shelf > summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+  /* Release kinds: tiles two to a row (Albums, Mixtapes beside it, then
+     the rest), no rules between. Open, a kind takes the whole row for its
+     covers; only one is open at a time (details name). Dense, so the tiles
+     after an open one close up rather than leaving a gap. */
+  .kinds {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: row dense;
     gap: var(--space-3);
-    min-height: var(--target);
-    margin-bottom: var(--space-4);
-    list-style: none;
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
   }
 
-  .shelf > summary::-webkit-details-marker {
+  .kind[open] {
+    grid-column: 1 / -1;
+  }
+
+  .kind > summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'name chevron' 'peek peek';
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border-radius: var(--radius-m);
+    background: color-mix(in srgb, var(--surface-1) 85%, transparent);
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .kind > summary::-webkit-details-marker {
     display: none;
   }
 
-  .shelf > summary h2 {
-    margin-bottom: 0;
+  .kind > summary h2 {
+    grid-area: name;
+    margin: 0;
+    font-size: var(--step-0);
+    line-height: 1.2;
   }
 
-  .shelf:not([open]) > summary {
-    margin-bottom: 0;
+  /* Open: a plain heading over its row of covers, no tile. */
+  .kind[open] > summary {
+    grid-template-areas: 'name chevron';
+    margin-bottom: var(--space-3);
+    padding: 0;
+    background: none;
+  }
+
+  .kind[open] > summary h2 {
+    font-size: var(--step-2);
+  }
+
+  .peek {
+    grid-area: peek;
+    display: flex;
+    min-width: 0;
+  }
+
+  .kind[open] .peek {
+    display: none;
+  }
+
+  /* A little fan of covers, each over the last. */
+  .peek-art {
+    flex: none;
+    width: 3rem;
+    overflow: hidden;
+    border-radius: var(--radius-s);
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.3);
+  }
+
+  .peek-art + .peek-art {
+    margin-left: -0.9rem;
   }
 
   .chevron {
+    grid-area: chevron;
     flex: none;
     width: 1.5rem;
     height: 1.5rem;
@@ -831,7 +883,7 @@ import { splitVersion } from '../../lib/versions';
     transition: rotate 0.2s ease;
   }
 
-  .shelf:not([open]) .chevron {
+  .kind:not([open]) .chevron {
     rotate: -90deg;
   }
 

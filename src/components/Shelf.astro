@@ -108,6 +108,11 @@ const { label, item = 'min(11rem, 42vw)' } = Astro.props;
     grid-auto-flow: column;
     grid-auto-columns: var(--item);
     gap: var(--space-5);
+    /* As wide as its cards, so its end padding comes after the last one
+       (at the screen's width it sat under the second, and the last card
+       ran to the edge when scrolled fully). */
+    width: max-content;
+    min-width: 100%;
     margin: 0;
     padding: var(--space-3) var(--gutter) var(--space-2);
     list-style: none;
