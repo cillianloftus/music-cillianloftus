@@ -43,9 +43,18 @@ const initials = title
       decoding="async"
     />
   ) : (
-    <div class="cover cover--empty" role={alt ? 'img' : undefined} aria-label={alt || undefined} aria-hidden={alt ? undefined : 'true'}>
-      <span>{initials}</span>
-    </div>
+    // Sized like a cover (500 by 500, square), so it lays out as one wherever a cover would.
+    <svg
+      class="cover cover--empty"
+      viewBox="0 0 100 100"
+      width="500"
+      height="500"
+      role={alt ? 'img' : undefined}
+      aria-label={alt || undefined}
+      aria-hidden={alt ? undefined : 'true'}
+    >
+      <text x="50" y="50" text-anchor="middle" dominant-baseline="central">{initials}</text>
+    </svg>
   )
 }
 
@@ -59,19 +68,18 @@ const initials = title
   }
 
   .cover--empty {
-    display: grid;
-    place-items: center;
+    display: block;
+    height: auto;
     background:
       radial-gradient(circle at 30% 25%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
       var(--surface-2);
-    color: var(--text-subtle);
-    font-weight: 800;
-    letter-spacing: -0.04em;
-    container-type: inline-size;
   }
 
-  /* Sized against the tile itself, so it reads at any card width. */
-  .cover--empty span {
-    font-size: 28cqi;
+  /* In the tile's own units, so the letters keep their share at any card width. */
+  .cover--empty text {
+    fill: var(--text-subtle);
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.04em;
   }
 </style>
