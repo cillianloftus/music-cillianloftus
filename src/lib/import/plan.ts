@@ -103,6 +103,15 @@ export interface PlanCredit {
   position: number;
   credited_as: string | null;
   join_phrase: string;
+  /** The coarser role to use if `role` cannot be added (its name taken by another). */
+  fallback_role?: CreditRole;
+}
+
+/** A credit role the plan's credits name, added to the library if new. */
+export interface PlanRole {
+  id: CreditRole;
+  label: string;
+  family: 'writing' | 'production' | 'engineering' | 'performance';
 }
 
 export interface PlanGenre {
@@ -120,5 +129,7 @@ export interface ImportPlan {
   release: PlanRelease;
   tracks: PlanTrack[];
   credits: PlanCredit[];
+  /** Roles the credits name that the library may not have yet. */
+  roles?: PlanRole[];
   releaseGroupGenres: PlanGenre[];
 }

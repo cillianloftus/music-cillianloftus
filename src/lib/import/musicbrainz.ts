@@ -21,6 +21,7 @@ import type {
   ImportPlan,
   PlanArtist,
   PlanCredit,
+  PlanRole,
   PlanGenre,
   PlanRecording,
   PlanReleaseGroup,
@@ -138,12 +139,95 @@ const ATTRIBUTE_ROLES: [RegExp, CreditRole][] = [
 
 /** The role for one relation, from its type and, for vocals and instruments, its attributes. */
 export function roleForRelation(type: string, attributes: string[] = []): CreditRole | null {
-  const base = RELATION_ROLES[type];
+  const base = RELATION_ROLES[type] ?? MORE_RELATION_ROLES[type]?.id;
   if (!base) return null;
   if (type === 'vocal' || type === 'instrument') {
     for (const [pattern, role] of ATTRIBUTE_ROLES) if (attributes.some((a) => pattern.test(a))) return role;
   }
   return base;
+}
+
+/** A credit role as precise as MusicBrainz says it: its id, a label for it if new, and its family. */
+export interface PreciseRole {
+  id: CreditRole;
+  label: string;
+  family: 'writing' | 'production' | 'engineering' | 'performance';
+}
+
+/** Relation types the coarse mapping left out. */
+const MORE_RELATION_ROLES: Record<string, PreciseRole> = {
+  orchestrator: { id: 'orchestration', label: 'Orchestration', family: 'performance' },
+  'instrument arranger': { id: 'arranger', label: 'Arranger', family: 'writing' },
+  'vocal arranger': { id: 'vocal_arranger', label: 'Vocal arranger', family: 'writing' },
+  editor: { id: 'audio_editor', label: 'Audio editor', family: 'engineering' },
+  balance: { id: 'engineer', label: 'Engineer', family: 'engineering' },
+  'chorus master': { id: 'chorus_master', label: 'Chorus master', family: 'performance' },
+  concertmaster: { id: 'concertmaster', label: 'Concertmaster', family: 'performance' },
+  'audio director': { id: 'music_director', label: 'Music director', family: 'production' },
+  translator: { id: 'translator', label: 'Translator', family: 'writing' },
+};
+
+/** Words MusicBrainz puts on a relation to qualify it, which become part of the role's name. */
+const QUALIFIERS = ['executive', 'additional', 'assistant', 'associate', 'co'];
+/** Words on a relation that say nothing about the part played. */
+const NOT_A_PART = new Set(['guest', 'solo', 'minor', 'task', 'number', 'time']);
+
+const FAMILY_OF: Record<string, PreciseRole['family']> = {
+  producer: 'production',
+  co_producer: 'production',
+  vocal_producer: 'production',
+  programming: 'production',
+  remixer: 'production',
+  engineer: 'engineering',
+  recording_engineer: 'engineering',
+  mastering_engineer: 'engineering',
+  mixer: 'engineering',
+  arranger: 'writing',
+  composer: 'writing',
+  lyricist: 'writing',
+  writer: 'writing',
+};
+
+const slug = (text: string) =>
+  text
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/**
+ * The role for a relation as precisely as MusicBrainz gives it: the
+ * instrument itself ("Alto saxophone", "Turntables") rather than its
+ * family, the kind of vocals, and qualifiers kept ("Executive producer",
+ * "Assistant engineer"). Pure; the roles it names may be new to the
+ * library, and the import adds them.
+ */
+export function preciseRole(type: string, attributes: string[] = []): PreciseRole | null {
+  const more = MORE_RELATION_ROLES[type];
+  if (more) return more;
+  const coarse = RELATION_ROLES[type];
+  if (!coarse) return null;
+  const qualifier = QUALIFIERS.find((q) => attributes.includes(q));
+  const parts = attributes.filter((a) => !QUALIFIERS.includes(a) && !NOT_A_PART.has(a));
+
+  if (type === 'instrument' || type === 'vocal') {
+    // The first instrument or kind of vocals named; none named, the coarse role.
+    const part = parts[0];
+    const name = part ?? (type === 'vocal' ? 'lead vocals' : null);
+    if (!name) return { id: 'performer', label: 'Performer', family: 'performance' };
+    const label = qualifier && qualifier !== 'co' ? `${qualifier} ${name}` : name;
+    return { id: slug(label), label: sentence(label), family: 'performance' };
+  }
+
+  // "executive producer" is its own relation type; qualifiers on others make a role of their own.
+  const base = type === 'executive producer' ? { id: 'executive_producer', label: 'Executive producer' } : { id: coarse, label: sentence(type) };
+  const family = FAMILY_OF[coarse] ?? 'production';
+  if (!qualifier || base.id === 'executive_producer') return { ...base, family };
+  if (qualifier === 'co') return coarse === 'producer' ? { id: 'co_producer', label: 'Co-producer', family } : { ...base, family };
+  const label = `${qualifier} ${base.id.replace(/_/g, ' ')}`;
+  return { id: slug(label), label: sentence(label), family };
 }
 
 const FEATURING = /\b(feat\.?|ft\.?|featuring)\s*$/i;
@@ -177,7 +261,7 @@ class PlanBuilder {
     entityMbid: string,
     artist: MbArtist,
     role: CreditRole,
-    extra: { credited_as?: string | null; join_phrase?: string } = {},
+    extra: { credited_as?: string | null; join_phrase?: string; fallback_role?: CreditRole } = {},
   ): void {
     const key = `${entity}:${entityMbid}:${artist.id}:${role}`;
     if (this.credits.has(key)) return;
@@ -194,6 +278,7 @@ class PlanBuilder {
       position,
       credited_as: extra.credited_as && extra.credited_as !== artist.name ? extra.credited_as : null,
       join_phrase: extra.join_phrase ?? '',
+      ...(extra.fallback_role ? { fallback_role: extra.fallback_role } : {}),
     });
   }
 
@@ -212,16 +297,22 @@ class PlanBuilder {
   relations(entity: CreditEntity, entityMbid: string, relations: MbRelation[] = []): void {
     for (const relation of relations) {
       if (relation['target-type'] !== 'artist' || !relation.artist) continue;
-      const role = roleForRelation(relation.type, relation.attributes);
-      if (role) this.credit(entity, entityMbid, relation.artist, role);
+      const role = preciseRole(relation.type, relation.attributes);
+      if (!role) continue;
+      this.roles.set(role.id, role);
+      const fallback = roleForRelation(relation.type, relation.attributes);
+      this.credit(entity, entityMbid, relation.artist, role.id, { fallback_role: fallback && fallback !== role.id ? fallback : undefined });
     }
   }
+
+  private roles = new Map<string, PlanRole>();
 
   result() {
     return {
       artists: [...this.artists.values()],
       works: [...this.works.values()],
       credits: [...this.credits.values()],
+      roles: [...this.roles.values()],
     };
   }
 }

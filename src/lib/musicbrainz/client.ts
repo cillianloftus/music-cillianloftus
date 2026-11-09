@@ -102,7 +102,7 @@ export function getRelease(mbid: string): Promise<MbRelease> {
  * labels with catalogue numbers, the album's rating.
  */
 export function getReleaseMore<T>(mbid: string): Promise<T> {
-  return get<T>(`release/${mbid}`, ['recordings', 'labels', 'genres', 'ratings', 'release-groups', 'recording-level-rels', 'work-rels']);
+  return get<T>(`release/${mbid}`, ['recordings', 'labels', 'genres', 'ratings', 'release-groups', 'recording-level-rels', 'work-rels', 'artist-rels']);
 }
 
 /** The lists and series an album is part of. */

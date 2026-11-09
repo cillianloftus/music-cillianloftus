@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { factClaims } from './sources/wikipedia';
 
-const item = (id: string, qualifiers?: Record<string, unknown>, rank = 'normal') => ({
+const at = (year: number) => [{ datavalue: { value: { time: `+${year}-00-00T00:00:00Z` } } }];
+
+const item = (id: string, qualifiers?: Record<string, ReturnType<typeof at>>, rank: 'normal' | 'deprecated' = 'normal') => ({
   mainsnak: { datavalue: { value: { id } } },
   rank,
   ...(qualifiers ? { qualifiers } : {}),
 });
-const at = (year: number) => [{ datavalue: { value: { time: `+${year}-00-00T00:00:00Z` } } }];
 
 describe('facts from Wikidata', () => {
   it('reads awards with their year, influences and places, skipping deprecated statements and repeats', () => {

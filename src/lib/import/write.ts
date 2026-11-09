@@ -337,11 +337,28 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
        ON CONFLICT DO NOTHING`,
     ).bind(json(tracks)),
 
-    // Credits
+    // Roles the credits name that the library does not have yet ("Alto
+    // saxophone", "Assistant engineer"), each placed last in its family.
+    db.prepare(
+      `INSERT INTO credit_role (id, label, family, position)
+       SELECT j.value ->> '$.id', j.value ->> '$.label', j.value ->> '$.family',
+              coalesce((SELECT max(position) FROM credit_role WHERE family = j.value ->> '$.family'), 90) + 1
+       FROM json_each(?1) j
+       WHERE NOT EXISTS (SELECT 1 FROM credit_role r WHERE r.id = j.value ->> '$.id' OR r.label = j.value ->> '$.label' COLLATE NOCASE)
+       ON CONFLICT DO NOTHING`,
+    ).bind(json(plan.roles ?? [])),
+
+    // Credits. A role that could not be added (another role already has its
+    // name) is the one with that name; failing that, the coarser role.
     db.prepare(
       `INSERT INTO artist_credit (id, entity_type, entity_id, artist_id, role, position, credited_as, join_phrase)
        SELECT j.value ->> '$.id', j.value ->> '$.entity', j.value ->> '$.entity_id',
-              j.value ->> '$.artist_id', j.value ->> '$.role', j.value ->> '$.position',
+              j.value ->> '$.artist_id',
+              coalesce((SELECT r.id FROM credit_role r WHERE r.id = j.value ->> '$.role'),
+                       (SELECT r.id FROM credit_role r
+                        WHERE r.label = (SELECT p.value ->> '$.label' FROM json_each(?2) p WHERE p.value ->> '$.id' = j.value ->> '$.role') COLLATE NOCASE),
+                       j.value ->> '$.fallback_role', 'performer'),
+              j.value ->> '$.position',
               j.value ->> '$.credited_as', j.value ->> '$.join_phrase'
        FROM json_each(?1) j
        -- A track or album whose credits were edited by hand keeps exactly those.
@@ -349,7 +366,7 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
          SELECT 1 FROM field_override o
          WHERE o.entity_type = j.value ->> '$.entity' AND o.entity_id = j.value ->> '$.entity_id' AND o.field = 'credits')
        ON CONFLICT DO NOTHING`,
-    ).bind(json(credits)),
+    ).bind(json(credits), json(plan.roles ?? [])),
   ];
 
   // genre_tag.source only admits sources that publish genres, plus manual.

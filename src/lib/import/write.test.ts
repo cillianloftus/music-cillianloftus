@@ -145,3 +145,35 @@ describe('writePlan', () => {
     expect(count('recording')).toBe(0);
   });
 });
+
+describe('precise credit roles', () => {
+  const credit = (role: string, extra: Record<string, string> = {}) => ({
+    entity: 'recording' as const,
+    entity_key: 'm-rec1',
+    artist_key: 'm-artist',
+    role,
+    position: 1,
+    credited_as: null,
+    join_phrase: '',
+    ...extra,
+  });
+  const roleOf = (db: DatabaseSync) =>
+    (db.prepare(`SELECT role FROM artist_credit WHERE entity_type = 'recording' AND role <> 'primary' ORDER BY role`).all() as { role: string }[]).map((r) => r.role);
+
+  it('adds a role the library lacks and credits it', async () => {
+    await writePlan(plan({ credits: [...plan().credits, credit('theremin')], roles: [{ id: 'theremin', label: 'Theremin', family: 'performance' }] }));
+    expect(db.prepare(`SELECT label, family FROM credit_role WHERE id = 'theremin'`).get()).toEqual({ label: 'Theremin', family: 'performance' });
+    expect(roleOf(db)).toEqual(['theremin']);
+  });
+
+  it('uses the role already called that, or the coarser one, rather than failing', async () => {
+    await writePlan(
+      plan({
+        credits: [...plan().credits, credit('lead_vox', { fallback_role: 'lead_vocals' }), credit('nowhere', { fallback_role: 'guitar' })],
+        // Its name is taken by a built-in role with another id.
+        roles: [{ id: 'lead_vox', label: 'Lead vocals', family: 'performance' }],
+      }),
+    );
+    expect(roleOf(db)).toEqual(['guitar', 'lead_vocals']);
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MbRelease, MbReleaseGroup, MbReleaseSummary } from '../musicbrainz/types';
-import { buildPlan, chooseRelease, mapReleaseGroupType } from './musicbrainz';
+import { buildPlan, chooseRelease, mapReleaseGroupType, preciseRole } from './musicbrainz';
 
 const release = (id: string, date: string | undefined, tracks: number[], extra: Partial<MbReleaseSummary> = {}): MbReleaseSummary => ({
   id,
@@ -156,5 +156,33 @@ describe('buildPlan', () => {
       { name: 'rock', weight: 1 },
       { name: 'pop', weight: 0.5 },
     ]);
+  });
+});
+
+describe('precise credit roles', () => {
+  const id = (type: string, attributes?: string[]) => preciseRole(type, attributes)?.id ?? null;
+
+  it('names the instrument itself, not its family', () => {
+    expect(id('instrument', ['alto saxophone'])).toBe('alto_saxophone');
+    expect(id('instrument', ['turntables'])).toBe('turntables');
+    expect(preciseRole('instrument', ['electric guitar'])).toEqual({ id: 'electric_guitar', label: 'Electric guitar', family: 'performance' });
+    expect(id('instrument', [])).toBe('performer');
+  });
+
+  it('keeps the kind of vocals, and the qualifiers that make a role of their own', () => {
+    expect(id('vocal', ['background vocals'])).toBe('background_vocals');
+    expect(id('vocal', [])).toBe('lead_vocals');
+    expect(id('instrument', ['additional', 'guitar'])).toBe('additional_guitar');
+    expect(id('instrument', ['guest', 'piano'])).toBe('piano');
+    expect(id('executive producer')).toBe('executive_producer');
+    expect(id('producer', ['co'])).toBe('co_producer');
+    expect(id('engineer', ['assistant'])).toBe('assistant_engineer');
+    expect(id('mix', ['additional'])).toBe('additional_mixer');
+  });
+
+  it('takes relation types the coarse mapping left out, and none it does not know', () => {
+    expect(id('orchestrator')).toBe('orchestration');
+    expect(id('vocal arranger')).toBe('vocal_arranger');
+    expect(id('misc')).toBeNull();
   });
 });

@@ -14,6 +14,7 @@
 
 import { env } from 'cloudflare:workers';
 import { getReleaseGroupSeries, getReleaseMore } from '../musicbrainz/client';
+import { preciseRole, roleForRelation, type PreciseRole } from '../import/musicbrainz';
 
 interface Named {
   name: string;
@@ -25,15 +26,24 @@ interface Rating {
   'votes-count': number;
 }
 
+interface MoreRelation {
+  type: string;
+  'target-type': string;
+  attributes?: string[];
+  artist?: { id: string };
+}
+
 interface MoreRecording {
   id: string;
   genres?: Named[];
   rating?: Rating;
-  relations?: { type: string; 'target-type': string; attributes?: string[] }[];
+  relations?: MoreRelation[];
 }
 
 interface MoreRelease {
   packaging?: string | null;
+  /** Credits on the release itself (a mastering engineer), which are every track's. */
+  relations?: MoreRelation[];
   'label-info'?: {
     'catalog-number'?: string | null;
     label?: { id: string; name: string; 'sort-name'?: string; disambiguation?: string; type?: string | null; 'label-code'?: number | null } | null;
@@ -57,6 +67,25 @@ export interface MoreFill {
   kinds: number;
   labels: number;
   series: number;
+  /** Credits made precise ("Alto saxophone" where it said "Performer"). */
+  credits: number;
+}
+
+/**
+ * A track's credits as precisely as MusicBrainz gives them, each with the
+ * coarse role the import used to give it in its place: by artist MBID.
+ * Only those that differ from the coarse role, the ones to put right. Pure.
+ */
+export function preciseCredits(relations: MoreRelation[]): { artist: string; role: PreciseRole; coarse: string }[] {
+  const out = new Map<string, { artist: string; role: PreciseRole; coarse: string }>();
+  for (const r of relations) {
+    if (r['target-type'] !== 'artist' || !r.artist) continue;
+    const role = preciseRole(r.type, r.attributes);
+    const coarse = roleForRelation(r.type, r.attributes);
+    if (!role || !coarse || role.id === coarse) continue;
+    out.set(`${r.artist.id}:${role.id}`, { artist: r.artist.id, role, coarse });
+  }
+  return [...out.values()];
 }
 
 /** A track's genres worth keeping: voted for, weighted against its most voted. */
@@ -79,6 +108,28 @@ export function recordingKinds(recording: MoreRecording): { cover: 0 | 1; live: 
   return { cover: has('cover'), live: has('live'), instrumental: has('instrumental') };
 }
 
+/**
+ * Credits whose precise role is the coarse role itself (someone credited
+ * just as "performer", or on guitar): those coarse credits are right and stay.
+ */
+function coarseKept(
+  recordings: MoreRecording[],
+  releaseRelations: MoreRelation[],
+  idFor: Map<string, string>,
+): { recording: string; artist: string; precise: string }[] {
+  const kept: { recording: string; artist: string; precise: string }[] = [];
+  for (const recording of recordings) {
+    const id = idFor.get(recording.id);
+    if (!id) continue;
+    for (const r of [...(recording.relations ?? []), ...releaseRelations]) {
+      if (r['target-type'] !== 'artist' || !r.artist) continue;
+      const role = preciseRole(r.type, r.attributes);
+      if (role && role.id === roleForRelation(r.type, r.attributes)) kept.push({ recording: id, artist: r.artist.id, precise: role.id });
+    }
+  }
+  return kept;
+}
+
 export async function fillMoreFromMusicBrainz(
   albumId: string,
   lookups: { release: (mbid: string) => Promise<MoreRelease>; series: (mbid: string) => Promise<SeriesLinks> } = {
@@ -86,7 +137,7 @@ export async function fillMoreFromMusicBrainz(
     series: getReleaseGroupSeries<SeriesLinks>,
   },
 ): Promise<MoreFill> {
-  const report: MoreFill = { genres: 0, kinds: 0, labels: 0, series: 0 };
+  const report: MoreFill = { genres: 0, kinds: 0, labels: 0, series: 0, credits: 0 };
   const row = await env.DB.prepare(
     `SELECT g.mbid AS group_mbid, r.id AS release_id, r.mbid AS release_mbid
      FROM release_group g
@@ -109,10 +160,17 @@ export async function fillMoreFromMusicBrainz(
     const idFor = new Map(ours.map((o) => [o.mbid, o.id]));
 
     const tags: { recording: string; name: string; weight: number }[] = [];
+    const precise: { recording: string; artist: string; role: string; label: string; coarse: string }[] = [];
+    const roles = new Map<string, PreciseRole>();
     for (const recording of recordings) {
       const id = idFor.get(recording.id);
       if (!id) continue;
       for (const g of trackGenres(recording.genres)) tags.push({ recording: id, ...g });
+      // The release's own credits are every track's, as the import has them.
+      for (const c of preciseCredits([...(recording.relations ?? []), ...(release.relations ?? [])])) {
+        roles.set(c.role.id, c.role);
+        precise.push({ recording: id, artist: c.artist, role: c.role.id, label: c.role.label, coarse: c.coarse });
+      }
       const kinds = recordingKinds(recording);
       const rating = recording.rating?.value != null && recording.rating['votes-count'] > 0 ? recording.rating : null;
       if (kinds) report.kinds += 1;
@@ -128,6 +186,57 @@ export async function fillMoreFromMusicBrainz(
             .bind(id, kinds?.cover ?? null, kinds?.live ?? null, kinds?.instrumental ?? null, rating?.value ?? null, rating?.['votes-count'] ?? null),
         );
       }
+    }
+    if (precise.length > 0) {
+      report.credits = precise.length;
+      const notEdited = `NOT EXISTS (SELECT 1 FROM field_override o WHERE o.entity_type = 'recording' AND o.entity_id = j.value ->> '$.recording' AND o.field = 'credits')`;
+      statements.push(
+        // New roles, as the import adds them.
+        db
+          .prepare(
+            `INSERT INTO credit_role (id, label, family, position)
+             SELECT j.value ->> '$.id', j.value ->> '$.label', j.value ->> '$.family',
+                    coalesce((SELECT max(position) FROM credit_role WHERE family = j.value ->> '$.family'), 90) + 1
+             FROM json_each(?1) j
+             WHERE NOT EXISTS (SELECT 1 FROM credit_role r WHERE r.id = j.value ->> '$.id' OR r.label = j.value ->> '$.label' COLLATE NOCASE)
+             ON CONFLICT DO NOTHING`,
+          )
+          .bind(JSON.stringify([...roles.values()])),
+        // The precise credit, for an artist the library has: under its id, or the role already called that.
+        db
+          .prepare(
+            `INSERT INTO artist_credit (id, entity_type, entity_id, artist_id, role, position)
+             SELECT lower(hex(randomblob(16))), 'recording', j.value ->> '$.recording', a.id,
+                    coalesce((SELECT r.id FROM credit_role r WHERE r.id = j.value ->> '$.role'),
+                             (SELECT r.id FROM credit_role r WHERE r.label = j.value ->> '$.label' COLLATE NOCASE)),
+                    1
+             FROM json_each(?1) j JOIN artist a ON a.mbid = j.value ->> '$.artist'
+             WHERE ${notEdited}
+               AND coalesce((SELECT r.id FROM credit_role r WHERE r.id = j.value ->> '$.role'),
+                            (SELECT r.id FROM credit_role r WHERE r.label = j.value ->> '$.label' COLLATE NOCASE)) IS NOT NULL
+             ON CONFLICT DO NOTHING`,
+          )
+          .bind(JSON.stringify(precise)),
+        // And the coarse one it replaces, once the precise one is there, unless
+        // another of their parts on the track is that coarse role itself.
+        db
+          .prepare(
+            `DELETE FROM artist_credit
+             WHERE id IN (
+               SELECT c.id FROM json_each(?1) j
+               JOIN artist a ON a.mbid = j.value ->> '$.artist'
+               JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = j.value ->> '$.recording'
+                                   AND c.artist_id = a.id AND c.role = j.value ->> '$.coarse'
+               WHERE ${notEdited}
+                 AND EXISTS (SELECT 1 FROM artist_credit p WHERE p.entity_type = 'recording' AND p.entity_id = c.entity_id
+                             AND p.artist_id = a.id AND p.role <> c.role
+                             AND p.role IN (SELECT r.id FROM credit_role r WHERE r.id = j.value ->> '$.role' OR r.label = j.value ->> '$.label' COLLATE NOCASE))
+                 AND NOT EXISTS (SELECT 1 FROM json_each(?2) k
+                                 WHERE k.value ->> '$.recording' = c.entity_id AND k.value ->> '$.artist' = j.value ->> '$.artist'
+                                   AND k.value ->> '$.precise' = c.role))`,
+          )
+          .bind(JSON.stringify(precise), JSON.stringify(coarseKept(recordings, release.relations ?? [], idFor))),
+      );
     }
     if (tags.length > 0) {
       report.genres = tags.length;
@@ -230,13 +339,13 @@ export async function fillAlbumsMoreFromMusicBrainz({
 }: {
   budgetMs: number;
   limit?: number;
-}): Promise<{ albums: number; genres: number; kinds: number; labels: number; series: number; left: number }> {
+}): Promise<{ albums: number; genres: number; kinds: number; labels: number; series: number; credits: number; left: number }> {
   const deadline = Date.now() + budgetMs;
   const waiting = `FROM release_group g
      WHERE g.mbid IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM lookup_log l WHERE l.source = 'musicbrainz-more' AND l.entity_id = g.id AND l.looked_at > datetime('now', '-180 days'))`;
   const { results } = await env.DB.prepare(`SELECT g.id ${waiting} ORDER BY g.created_at DESC LIMIT ?`).bind(limit).all<{ id: string }>();
-  const report = { albums: 0, genres: 0, kinds: 0, labels: 0, series: 0, left: 0 };
+  const report = { albums: 0, genres: 0, kinds: 0, labels: 0, series: 0, credits: 0, left: 0 };
   for (const { id } of results) {
     if (Date.now() > deadline) break;
     try {
@@ -245,6 +354,7 @@ export async function fillAlbumsMoreFromMusicBrainz({
       report.kinds += done.kinds;
       report.labels += done.labels;
       report.series += done.series;
+      report.credits += done.credits;
     } catch (error) {
       console.warn('MusicBrainz more failed', id, error);
     }

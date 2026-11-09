@@ -68,7 +68,7 @@ describe('more from MusicBrainz', () => {
   });
 
   it('fills track genres and kinds, labels with catalogue numbers, ratings, packaging and lists', async () => {
-    expect(await fillMoreFromMusicBrainz('rg-a', lookups)).toEqual({ genres: 2, kinds: 2, labels: 1, series: 2 });
+    expect(await fillMoreFromMusicBrainz('rg-a', lookups)).toEqual({ genres: 2, kinds: 2, labels: 1, series: 2, credits: 0 });
     expect(db.prepare(`SELECT g.name, t.weight FROM genre_tag t JOIN genre g ON g.id = t.genre_id WHERE t.entity_id = 'a1' AND t.source = 'musicbrainz' ORDER BY t.weight DESC`).all()).toEqual([
       { name: 'rock', weight: 1 },
       { name: 'jazz rap', weight: 0.5 },
@@ -94,6 +94,32 @@ describe('more from MusicBrainz', () => {
     await fillMoreFromMusicBrainz('rg-a', lookups);
     expect(db.prepare(`SELECT count(*) AS n FROM release_label`).get()).toEqual({ n: 1 });
     expect(db.prepare(`SELECT count(*) AS n FROM genre_tag WHERE source = 'musicbrainz' AND entity_type = 'recording'`).get()).toEqual({ n: 2 });
+  });
+
+  it('makes a track’s credits precise: the instrument in place of “performer”, a plain performer left as one', async () => {
+    db.exec(`UPDATE artist SET mbid = 'mb-' || id WHERE id IN ('art-p', 'art-y')`);
+    insert(db, 'artist_credit', [
+      { id: 'c-sax', entity_type: 'recording', entity_id: 'a2', artist_id: 'art-p', role: 'performer' },
+      { id: 'c-plain', entity_type: 'recording', entity_id: 'a2', artist_id: 'art-y', role: 'performer' },
+    ]);
+    const withCredits = {
+      ...lookups,
+      release: async () => {
+        const release = await lookups.release();
+        release.media[0]!.tracks![1]!.recording.relations = [
+          performs('live', 'instrumental'),
+          { type: 'instrument', 'target-type': 'artist', attributes: ['alto saxophone'], artist: { id: 'mb-art-p' } },
+          { type: 'instrument', 'target-type': 'artist', attributes: [], artist: { id: 'mb-art-y' } },
+        ] as never;
+        return release;
+      },
+    };
+    expect((await fillMoreFromMusicBrainz('rg-a', withCredits)).credits).toBe(1);
+    expect(db.prepare(`SELECT label, family FROM credit_role WHERE id = 'alto_saxophone'`).get()).toEqual({ label: 'Alto saxophone', family: 'performance' });
+    expect(db.prepare(`SELECT artist_id, role FROM artist_credit WHERE entity_id = 'a2' AND role <> 'primary' ORDER BY artist_id`).all()).toEqual([
+      { artist_id: 'art-p', role: 'alto_saxophone' },
+      { artist_id: 'art-y', role: 'performer' },
+    ]);
   });
 
   it('leaves a track’s genres set by hand as its only ones', async () => {
