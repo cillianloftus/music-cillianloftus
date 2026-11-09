@@ -54,3 +54,24 @@ describe('album genres, read raw', () => {
     ]);
   });
 });
+
+describe('favourite genres', () => {
+  it('averages the rated tracks in each genre, as the genre view has them', async () => {
+    db.prepare(`INSERT OR IGNORE INTO genre_tag (entity_type, entity_id, genre_id, source, weight) VALUES ('release_group', 'rg-a', 'g-pop', 'musicbrainz', 1)`).run();
+    const { lovedGenres } = await import('./home');
+    const expected = db
+      .prepare(
+        `SELECT g.genre_id AS id, avg(s.quality_score) AS average, count(*) AS tracks
+         FROM v_recording_genre g JOIN v_recording_score s ON s.recording_id = g.recording_id AND s.user_id = 'u-owner'
+         GROUP BY g.genre_id HAVING count(*) >= 3`,
+      )
+      .all() as { id: string; average: number; tracks: number }[];
+    const found = await lovedGenres('u-owner');
+    expect(found.map((g) => g.id).sort()).toEqual(expected.map((e) => e.id).sort());
+    for (const g of found) {
+      const e = expected.find((x) => x.id === g.id)!;
+      expect(g.tracks).toBe(e.tracks);
+      expect(g.average).toBeCloseTo(e.average);
+    }
+  });
+});

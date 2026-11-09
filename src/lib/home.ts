@@ -7,7 +7,7 @@
 import { artistRank } from './artist-rank';
 import { env } from 'cloudflare:workers';
 import { albumScores, byRank } from './album-scores';
-import { genresOfRecordings } from './genres';
+import { genreIndex } from './genres';
 import { artistLines, releaseGroupsByIds, type CreditPart, type ReleaseGroupSummary } from './catalogue';
 
 /** Albums by type, best first. */
@@ -189,19 +189,41 @@ export interface LovedGenre {
   tracks: number;
 }
 
-/** Genres rated highest, with at least three rated tracks. */
+/**
+ * Genres rated highest, with at least three rated tracks: ranked as artists
+ * are, each average as sure as the ratings behind it (artist-rank.ts).
+ * Which tracks are in each genre comes from the genre index (kept per
+ * library state), so only the user's scores are read here, where joining
+ * the rated tracks to their genres read about 33,000 rows.
+ */
 export async function lovedGenres(userId: string | null, limit = 12): Promise<LovedGenre[]> {
-  // From the rated tracks to their genres (genresOfRecordings), not the
-  // genre view joined whole: 92,000 rows read, now about 19,000.
-  const { results } = await env.DB.prepare(
-    `WITH scored AS (SELECT recording_id, quality_score FROM v_recording_score WHERE user_id = ?1),
-     pairs AS (${genresOfRecordings('scored')})
-     SELECT g.id, g.name, avg(s.quality_score) AS average, count(*) AS tracks
-     FROM pairs p JOIN scored s ON s.recording_id = p.recording_id JOIN genre g ON g.id = p.genre_id
-     GROUP BY g.id HAVING tracks >= 3
-     ORDER BY average DESC, tracks DESC LIMIT ?2`,
-  )
-    .bind(userId, limit)
-    .all<LovedGenre>();
-  return results;
+  if (!userId) return [];
+  const [index, { results: scored }] = await Promise.all([
+    genreIndex(),
+    env.DB.prepare(`SELECT recording_id AS id, quality_score AS score FROM v_recording_score WHERE user_id = ?`)
+      .bind(userId)
+      .all<{ id: string; score: number }>(),
+  ]);
+  const scoreOf = new Map(scored.map((s) => [s.id, s.score]));
+  const mean = scored.length ? scored.reduce((sum, s) => sum + s.score, 0) / scored.length : null;
+  const ranked: { id: string; average: number; tracks: number; rank: number }[] = [];
+  for (const [genre, ids] of Object.entries(index.tracks)) {
+    let total = 0;
+    let tracks = 0;
+    for (const id of ids) {
+      const s = scoreOf.get(id);
+      if (s !== undefined) {
+        total += s;
+        tracks += 1;
+      }
+    }
+    if (tracks >= 3) ranked.push({ id: genre, average: total / tracks, tracks, rank: artistRank(total / tracks, tracks, mean ?? total / tracks) });
+  }
+  const top = ranked.sort((a, b) => b.rank - a.rank || b.tracks - a.tracks).slice(0, limit);
+  if (top.length === 0) return [];
+  const { results: names } = await env.DB.prepare(`SELECT id, name FROM genre WHERE id IN (SELECT value FROM json_each(?))`)
+    .bind(JSON.stringify(top.map((t) => t.id)))
+    .all<{ id: string; name: string }>();
+  const nameOf = new Map(names.map((n) => [n.id, n.name]));
+  return top.flatMap((t) => (nameOf.has(t.id) ? [{ id: t.id, name: nameOf.get(t.id)!, average: t.average, tracks: t.tracks }] : []));
 }
