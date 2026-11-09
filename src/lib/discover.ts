@@ -17,6 +17,7 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { albumScores } from './album-scores';
 import { byLibrary, byLibraryMap } from './library-cache';
 import { encodeDefinition } from './query/builder';
 import type { Where } from './query/schema';
@@ -880,7 +881,10 @@ async function libraryRanks(userId: string): Promise<{ libraryAverage: number; r
 export async function artistBreakdown(userId: string, artistId: string): Promise<ArtistBreakdown | null> {
   const facts = await trackFacts(userId, { artistId });
   if (facts.length < 3) return null;
-  const { libraryAverage, ranking, typicalSpread } = await byLibrary('artist-ranks:v1', userId, () => libraryRanks(userId));
+  const [{ libraryAverage, ranking, typicalSpread }, albumScoreMap] = await Promise.all([
+    byLibrary('artist-ranks:v1', userId, () => libraryRanks(userId)),
+    albumScores(userId),
+  ]);
 
   const scores = facts.map((f) => f.score);
   const sorted = [...facts].sort((a, b) => b.score - a.score);
@@ -907,9 +911,14 @@ export async function artistBreakdown(userId: string, artistId: string): Promise
     steadiness: !typicalSpread ? 'typical' : spread < typicalSpread * 0.7 ? 'steady' : spread > typicalSpread * 1.3 ? 'uneven' : 'typical',
     versusLibrary: mean(scores) - libraryAverage,
     rank: position >= 0 ? { position: position + 1, of: ranking.length } : null,
+    // Each album's own score, as its page shows it (weighted by length and
+    // kind, with the weights chosen), not a plain average of these tracks.
     albums: [...albums.values()]
       .filter((a) => a.scores.length >= 2)
-      .map((a) => ({ id: a.id, title: a.title, average: mean(a.scores), tracks: a.scores.length }))
+      .map((a) => {
+        const scored = albumScoreMap[a.id];
+        return { id: a.id, title: a.title, average: scored?.quality ?? mean(a.scores), tracks: scored?.rated ?? a.scores.length };
+      })
       .sort((a, b) => b.average - a.average),
     findings: discover(facts, { artistId, limit: 6, minGroup: 3 }),
   };
