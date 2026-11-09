@@ -93,6 +93,20 @@ export function getRelease(mbid: string): Promise<MbRelease> {
   ]);
 }
 
+/**
+ * A release with what the import does not take (src/lib/sources/musicbrainz-more.ts):
+ * each track's genres and rating, cover and live marks on its song, the
+ * labels with catalogue numbers, the album's rating.
+ */
+export function getReleaseMore<T>(mbid: string): Promise<T> {
+  return get<T>(`release/${mbid}`, ['recordings', 'labels', 'genres', 'ratings', 'release-groups', 'recording-level-rels', 'work-rels']);
+}
+
+/** The lists and series an album is part of. */
+export function getReleaseGroupSeries<T>(mbid: string): Promise<T> {
+  return get<T>(`release-group/${mbid}`, ['series-rels']);
+}
+
 export function getReleaseGroup(mbid: string): Promise<MbReleaseGroup> {
   return get<MbReleaseGroup>(`release-group/${mbid}`, ['artist-credits', 'genres']);
 }

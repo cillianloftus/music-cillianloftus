@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { fillSongLinks } from '../../../../lib/genius';
 import { fillPopularity } from '../../../../lib/popularity';
 import { fillAlbumSoundFromDeezer } from '../../../../lib/sources/deezer';
+import { fillAlbumsMoreFromMusicBrainz } from '../../../../lib/sources/musicbrainz-more';
 
 /**
  * One round of a fill the nightly run does a little at a time, for
@@ -15,6 +16,8 @@ const FILLS: Record<string, () => Promise<{ left: number }>> = {
   sound: () => fillAlbumSoundFromDeezer({ budgetMs: 25_000, limit: 60 }),
   // Everyone's listens on ListenBrainz.
   popularity: () => fillPopularity({ budgetMs: 25_000, batches: 40 }),
+  // Track genres and kinds, labels, lists and awards: two MusicBrainz requests an album.
+  musicbrainz: () => fillAlbumsMoreFromMusicBrainz({ budgetMs: 25_000, limit: 30 }),
 };
 
 export const POST: APIRoute = async ({ params }) => {

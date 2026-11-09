@@ -8,6 +8,7 @@ import { fillCreditsFromGenius, fillSongLinks } from './lib/genius';
 import { fillAlbumsFromSpotify } from './lib/spotify/fill';
 import { fillAlbumSoundFromDeezer, fillAlbumsFromDeezer } from './lib/sources/deezer';
 import { fillPopularity } from './lib/popularity';
+import { fillAlbumsMoreFromMusicBrainz } from './lib/sources/musicbrainz-more';
 import { ownerId } from './lib/auth/user';
 import { deriveAlbumGenres } from './lib/genres';
 import { connection, spotifyFor } from './lib/spotify/client';
@@ -80,6 +81,7 @@ export default {
             ['Labels and barcodes from Deezer', () => fillAlbumsFromDeezer({ budgetMs: 15_000 })],
             ['Tempo and loudness from Deezer', () => fillAlbumSoundFromDeezer({ budgetMs: 20_000 })],
             ['Popularity from ListenBrainz', () => fillPopularity({ budgetMs: 15_000 })],
+            ['Track genres, labels and lists from MusicBrainz', () => fillAlbumsMoreFromMusicBrainz({ budgetMs: 25_000 })],
             // Each does nothing until its key is pasted on /manage/connections.
             ['Scrobbles from Last.fm and ListenBrainz', () => syncAllScrobbles({ budgetMs: 25_000 })],
             ['Release details from Discogs', () => fillAlbumsFromDiscogs({ budgetMs: 25_000 })],
