@@ -24,6 +24,24 @@ beforeEach(() => {
   outcomes.length = 0;
 });
 
+describe('settling after imports', () => {
+  const flag = () => (db.prepare(`SELECT value FROM app_setting WHERE key = 'library_settle_due'`).get() as { value: string } | undefined)?.value;
+
+  it('waits while jobs are queued, then runs once and clears the flag', async () => {
+    const { settleIfIdle } = await import('./runner');
+    db.exec(`INSERT INTO app_setting (key, value) VALUES ('library_settle_due', '1')`);
+    await enqueue('backup', {});
+    expect(await settleIfIdle()).toBe(false);
+    expect(flag()).toBe('1');
+
+    outcomes.push('ok');
+    await runJobs({ budgetMs: 10_000 });
+    // The run that emptied the queue settled.
+    expect(flag()).toBe('0');
+    expect(await settleIfIdle()).toBe(false);
+  });
+});
+
 describe('running out of requests', () => {
   it('puts a job that ran out after others back first, and stops the run', async () => {
     for (let i = 0; i < 3; i++) await enqueue('backup', {});

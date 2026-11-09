@@ -46,15 +46,41 @@ async function enrichImportedArtists(releaseGroupId: string): Promise<void> {
       console.warn('Artist enrichment after import failed', id, error);
     }
   }
-  // Writers MusicBrainz lacks, then a fresh look for lookalikes: the same
-  // song on another release ("dustcutter" here, "DUSTCUTTER" there) is
-  // raised for review straight away rather than at night.
+  // Writers MusicBrainz lacks.
   await fillCreditsFromGenius({ albumId: releaseGroupId, budgetMs: 15_000 }).catch((error) => console.warn('Genius after import failed', error));
   await fillFromDeezer(releaseGroupId).catch((error) => console.warn('Deezer after import failed', error));
   // Without a Discogs token this returns at once.
   await fillFromDiscogs(releaseGroupId).catch((error) => console.warn('Discogs after import failed', error));
-  await detectAnomalies().catch((error) => console.warn('Review check after import failed', error));
-  await deriveAlbumGenres().catch((error) => console.warn('Genre derivation after import failed', error));
+  await markSettleDue();
+}
+
+const SETTLE_KEY = 'library_settle_due';
+
+/** The library has changed: the whole-library passes are due once the queue empties. */
+async function markSettleDue(): Promise<void> {
+  await env.DB.prepare(`INSERT INTO app_setting (key, value) VALUES (?1, '1') ON CONFLICT (key) DO UPDATE SET value = '1'`)
+    .bind(SETTLE_KEY)
+    .run();
+}
+
+/**
+ * The passes that look at the whole library, a fresh look for lookalikes
+ * (the same song on another release, "dustcutter" here and "DUSTCUTTER"
+ * there, raised for review straight away rather than at night) and album
+ * genres from track genres, run once after a batch of imports rather than
+ * after each album: each reads the whole library, so a discography of
+ * forty albums ran them forty times. Nothing runs while imports are still
+ * waiting; the run that empties the queue does it. Taking the flag is one
+ * UPDATE, so two overlapping runs never both settle.
+ */
+export async function settleIfIdle(): Promise<boolean> {
+  const waiting = await env.DB.prepare(`SELECT 1 AS yes FROM job WHERE status = 'queued' LIMIT 1`).first();
+  if (waiting) return false;
+  const taken = await env.DB.prepare(`UPDATE app_setting SET value = '0' WHERE key = ?1 AND value = '1'`).bind(SETTLE_KEY).run();
+  if ((taken.meta.changes ?? 0) === 0) return false;
+  await detectAnomalies().catch((error) => console.warn('Review check after imports failed', error));
+  await deriveAlbumGenres().catch((error) => console.warn('Genre derivation after imports failed', error));
+  return true;
 }
 
 async function importRelease(job: JobRow): Promise<void> {
@@ -150,5 +176,6 @@ export async function runJobs({ budgetMs }: { budgetMs: number }): Promise<numbe
     processed++;
   }
 
+  await settleIfIdle().catch((error) => console.warn('Settling after imports failed', error));
   return processed;
 }

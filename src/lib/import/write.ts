@@ -188,7 +188,10 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
        SET spotify_id = j.value ->> '$.spotify_id'
        FROM json_each(?1) j
        WHERE ${table}.id = j.value ->> '$.id'
-         AND ${table}.spotify_id IS NULL
+         -- The + keeps SQLite off the spotify_id index: through it, every
+         -- row still without an id was walked (most of the library) and the
+         -- list scanned for each, about 200,000 rows a write. By id, a dozen.
+         AND +${table}.spotify_id IS NULL
          AND NOT EXISTS (SELECT 1 FROM field_override fo WHERE fo.entity_type = '${table}' AND fo.entity_id = ${table}.id AND fo.field = 'spotify_id')
          AND j.value ->> '$.spotify_id' IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM ${table} other WHERE other.spotify_id = j.value ->> '$.spotify_id')`,
@@ -205,7 +208,7 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
        SET mbid = j.value ->> '$.mbid'
        FROM json_each(?1) j
        WHERE ${table}.id = j.value ->> '$.id'
-         AND ${table}.mbid IS NULL
+         AND +${table}.mbid IS NULL -- by id, not through the mbid index (see above)
          AND j.value ->> '$.mbid' IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM ${table} other WHERE other.mbid = j.value ->> '$.mbid')`,
     ).bind(json(rows.map((r) => ({ id: r.id, mbid: r.mbid }))));
