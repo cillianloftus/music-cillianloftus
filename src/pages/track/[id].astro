@@ -11,6 +11,8 @@ import Score from '../../components/Score.astro';
 import ScorePanel from '../../components/ScorePanel.astro';
 import { groupCredits } from '../../lib/credits';
 import PageActions from '../../components/PageActions.astro';
+import MediaRow from '../../components/MediaRow.astro';
+import RowList from '../../components/RowList.astro';
 import GenreChips from '../../components/GenreChips.astro';
 import StandingLines from '../../components/StandingLines.astro';
 import { ownerId } from '../../lib/auth/user';
@@ -238,24 +240,22 @@ function ordinalOf(n: number): string {
       appearances.length > 0 && (
         <section aria-labelledby="on-heading">
           <h2 id="on-heading">{appearances.length === 1 ? 'Appears on' : `Appears on ${appearances.length} albums`}</h2>
-          <ul role="list" class="rows">
+          <RowList>
             {appearances.map((a) => (
-              <li>
-                <span class="thumb">
-                  <CoverArt artKey={a.album.art_key} title={a.album.title} sizes="3rem" />
+              <MediaRow
+                href={`/album/${a.album.id}`}
+                title={a.album.title}
+                artKey={a.album.art_key}
+                score={{ quality: a.album.quality_score, personal: a.album.personal_score, completeness: a.album.completeness }}
+              >
+                <span>
+                  <CreditLine credits={a.album.credits} />
+                  {yearOf(a.album.first_release_date) && ` · ${yearOf(a.album.first_release_date)}`}
+                  {a.position && ` · track ${a.position}`}
                 </span>
-                <span class="row-text">
-                  <a href={`/album/${a.album.id}`}>{a.album.title}</a>
-                  <span class="muted small">
-                    <CreditLine credits={a.album.credits} />
-                    {yearOf(a.album.first_release_date) && ` · ${yearOf(a.album.first_release_date)}`}
-                    {a.position && ` · track ${a.position}`}
-                  </span>
-                </span>
-                <Score quality={a.album.quality_score} personal={a.album.personal_score} completeness={a.album.completeness} size="m" quietWhenEmpty />
-              </li>
+              </MediaRow>
             ))}
-          </ul>
+          </RowList>
         </section>
       )
     }
@@ -276,51 +276,45 @@ function ordinalOf(n: number): string {
           <h2 id="versions-heading">
             Other versions <span class="count tabular">{versions.length}</span>
           </h2>
-          <ul role="list" class="rows">
+          <RowList>
             {sortedVersions.slice(0, VERSIONS_SHOWN).map((v) => (
-              <li>
-                <span class="thumb">
-                  <CoverArt artKey={v.art_key} title={v.album_title ?? v.title} sizes="3rem" />
+              <MediaRow
+                href={`/track/${v.id}`}
+                title={v.kind ?? v.album_title ?? 'Original'}
+                hiddenTitle={`: ${v.title}`}
+                artKey={v.art_key}
+                artTitle={v.album_title ?? v.title}
+                score={{ quality: v.quality_score, personal: v.personal_score }}
+              >
+                <span>
+                  <CreditLine credits={v.credits} />
+                  {v.kind && v.album_title && ` · ${v.album_title}`}
+                  {v.year && ` · ${v.year}`}
                 </span>
-                <span class="row-text">
-                  <a href={`/track/${v.id}`}>
-                    {v.kind ?? v.album_title ?? 'Original'}
-                    <span class="visually-hidden">: {v.title}</span>
-                  </a>
-                  <span class="muted small">
-                    <CreditLine credits={v.credits} />
-                    {v.kind && v.album_title && ` · ${v.album_title}`}
-                    {v.year && ` · ${v.year}`}
-                  </span>
-                </span>
-                <Score quality={v.quality_score} personal={v.personal_score} size="m" quietWhenEmpty />
-              </li>
+              </MediaRow>
             ))}
-          </ul>
+          </RowList>
           {sortedVersions.length > VERSIONS_SHOWN && (
             <details class="more-versions">
               <summary>All {sortedVersions.length} versions</summary>
-              <ul role="list" class="rows">
+              <RowList>
                 {sortedVersions.slice(VERSIONS_SHOWN).map((v) => (
-                  <li>
-                <span class="thumb">
-                  <CoverArt artKey={v.art_key} title={v.album_title ?? v.title} sizes="3rem" />
+              <MediaRow
+                href={`/track/${v.id}`}
+                title={v.kind ?? v.album_title ?? 'Original'}
+                hiddenTitle={`: ${v.title}`}
+                artKey={v.art_key}
+                artTitle={v.album_title ?? v.title}
+                score={{ quality: v.quality_score, personal: v.personal_score }}
+              >
+                <span>
+                  <CreditLine credits={v.credits} />
+                  {v.kind && v.album_title && ` · ${v.album_title}`}
+                  {v.year && ` · ${v.year}`}
                 </span>
-                <span class="row-text">
-                  <a href={`/track/${v.id}`}>
-                    {v.kind ?? v.album_title ?? 'Original'}
-                    <span class="visually-hidden">: {v.title}</span>
-                  </a>
-                  <span class="muted small">
-                    <CreditLine credits={v.credits} />
-                    {v.kind && v.album_title && ` · ${v.album_title}`}
-                    {v.year && ` · ${v.year}`}
-                  </span>
-                </span>
-                <Score quality={v.quality_score} personal={v.personal_score} size="m" quietWhenEmpty />
-              </li>
+              </MediaRow>
                 ))}
-              </ul>
+              </RowList>
             </details>
           )}
         </section>
@@ -594,49 +588,12 @@ function ordinalOf(n: number): string {
     cursor: pointer;
   }
 
-  .rows {
-    display: grid;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    --content-max: 44rem;
-    max-width: 44rem;
-  }
 
-  .rows li {
-    display: grid;
-    grid-template-columns: 3rem minmax(0, 1fr) auto;
-    align-items: center;
-    gap: var(--space-3);
-    padding: var(--space-2) 0;
-    border-bottom: 1px solid var(--border);
-  }
 
-  .thumb {
-    width: 3rem;
-    border-radius: var(--radius-s);
-    overflow: hidden;
-  }
 
-  .row-text {
-    display: grid;
-    min-width: 0;
-  }
 
-  .row-text > * {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
 
-  .row-text a {
-    font-weight: 650;
-    text-decoration: none;
-  }
 
-  .row-text a:hover {
-    text-decoration: underline;
-  }
 
   .credits {
     display: grid;

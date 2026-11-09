@@ -1,0 +1,31 @@
+---
+/**
+ * A list of MediaRows: plain or numbered. The list's own semantics (an
+ * ordered list for a ranking) and its width, the same everywhere.
+ */
+interface Props {
+  ordered?: boolean;
+  /** For a ranking that continues from an earlier page ("11" for the second ten). */
+  start?: number | undefined;
+  label?: string | undefined;
+  labelledby?: string | undefined;
+}
+
+const { ordered = false, start, label, labelledby } = Astro.props;
+const Tag = ordered ? 'ol' : 'ul';
+---
+
+<Tag class="row-list" role="list" start={ordered ? start : undefined} aria-label={label} aria-labelledby={labelledby}>
+  <slot />
+</Tag>
+
+<style>
+  .row-list {
+    display: grid;
+    align-content: start;
+    max-width: 44rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+</style>

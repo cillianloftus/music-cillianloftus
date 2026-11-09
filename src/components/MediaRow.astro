@@ -1,0 +1,109 @@
+---
+/**
+ * One row of a list of things (tracks, albums, versions): an optional
+ * rank, a small cover, a title linking to it with lines beneath, and a
+ * score at the end. Used inside RowList. One look wherever such a list
+ * appears, so a change here changes every list.
+ */
+import CoverArt from './CoverArt.astro';
+import Score from './Score.astro';
+
+interface Props {
+  href: string;
+  /** Hidden words read after the visible title ("Live version: Song"). */
+  title: string;
+  hiddenTitle?: string | undefined;
+  /** The cover: a stored art key, or null for the lettered tile. */
+  artKey?: string | null | undefined;
+  /** What the lettered tile spells, and the cover's name. */
+  artTitle?: string | undefined;
+  /** A position in a ranked list. */
+  rank?: number | undefined;
+  /** The score at the end of the row. */
+  score?: { quality: number | null | undefined; personal: number | null | undefined; completeness?: { rated: number; of: number } | null | undefined } | null;
+  /** Ranked lists show the impact number beside the mark. */
+  ranked?: boolean;
+  scoreSize?: 's' | 'm';
+}
+
+const { href, title, hiddenTitle, artKey = null, artTitle, rank, score = null, ranked = false, scoreSize = 'm' } = Astro.props;
+---
+
+<li class:list={['media-row', { 'has-rank': rank !== undefined }]}>
+  {
+    rank !== undefined && (
+      <span class="rank tabular" aria-hidden="true">
+        {rank}
+      </span>
+    )
+  }
+  <span class="thumb">
+    <CoverArt artKey={artKey} title={artTitle ?? title} sizes="3rem" />
+  </span>
+  <span class="row-text">
+    <a class="row-title" href={href}>
+      {title}
+      {hiddenTitle && <span class="visually-hidden">{hiddenTitle}</span>}
+    </a>
+    <slot />
+  </span>
+  {
+    score && (
+      <Score quality={score.quality} personal={score.personal} completeness={score.completeness} size={scoreSize} ranked={ranked} quietWhenEmpty />
+    )
+  }
+</li>
+
+<style>
+  .media-row {
+    display: grid;
+    grid-template-columns: 3rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .media-row.has-rank {
+    grid-template-columns: 1.75rem 3rem minmax(0, 1fr) auto;
+  }
+
+  .rank {
+    color: var(--text-subtle);
+    font-weight: 700;
+    text-align: right;
+  }
+
+  .thumb {
+    width: 3rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .row-text {
+    display: grid;
+    min-width: 0;
+  }
+
+  /* Each line of the text stays one line. */
+  .row-text > :global(*) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .row-title {
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .row-title:hover {
+    text-decoration: underline;
+  }
+
+  /* Lines under the title: quieter and smaller. */
+  .row-text > :global(:not(.row-title)) {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+</style>
