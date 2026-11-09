@@ -804,9 +804,12 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     /* Number, length and score sit on the title's first line, so a row
        with a featured artist beneath reads the same as one without. */
     align-items: baseline;
+    /* The text, not the star's tap area, sets the height: the same space
+       above and below it, one line or two (a featured artist beneath). */
+    align-content: center;
     column-gap: var(--space-3);
     min-height: 3.5rem;
-    padding-block: var(--space-2);
+    padding-block: var(--space-3);
     border-bottom: 1px solid var(--border);
   }
 
@@ -846,8 +849,10 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   .rate {
     display: inline-grid;
     place-items: center;
-    /* Centred on the score's text, not stood on its baseline. */
-    vertical-align: middle;
+    /* Centred on the title's first line, its tap area overhanging the
+       line rather than making the row taller. */
+    align-self: start;
+    margin-block: calc((1lh - var(--target)) / 2);
     width: var(--target);
     height: var(--target);
     border-radius: 999px;
