@@ -110,7 +110,7 @@ export interface AlbumScore {
 
 /** Every scored release for a user, cached by library state. */
 export async function albumScores(userId: string): Promise<AlbumScore[]> {
-  return byLibrary('album-scores:v1', userId, async () => {
+  return byLibrary('album-standing:v1', userId, async () => {
     const { results } = await env.DB.prepare(
       `SELECT s.release_group_id AS id, s.quality_score AS score, g.type, substr(g.first_release_date, 1, 4) AS year,
               (SELECT json_group_array(c.artist_id) FROM artist_credit c WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary') AS artists,

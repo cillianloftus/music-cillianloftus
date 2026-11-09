@@ -61,6 +61,27 @@ export function recordingsInGenres(genres: string | (() => string)): string {
 }
 
 /**
+ * SQL for the (recording_id, genre_id) pairs of some recordings, as
+ * v_recording_genre has them. `recordings` is a table or CTE name with a
+ * recording_id column. Joined to the view, SQLite builds the whole view
+ * first (88,000 rows); this way the cost follows the recordings asked about.
+ */
+export function genresOfRecordings(recordings: string): string {
+  return `SELECT t.entity_id AS recording_id, t.genre_id
+          FROM ${recordings} x JOIN genre_tag t ON t.entity_type = 'recording' AND t.entity_id = x.recording_id
+          WHERE t.source = 'manual'
+             OR NOT EXISTS (SELECT 1 FROM genre_tag m
+                            WHERE m.entity_type = 'recording' AND m.entity_id = t.entity_id AND m.source = 'manual')
+          UNION
+          SELECT tr.recording_id, rg.genre_id
+          FROM ${recordings} x
+          JOIN track tr ON tr.recording_id = x.recording_id
+          JOIN release r ON r.id = tr.release_id
+          JOIN v_release_group_genre rg ON rg.release_group_id = r.release_group_id
+          WHERE NOT EXISTS (SELECT 1 FROM genre_tag own WHERE own.entity_type = 'recording' AND own.entity_id = tr.recording_id)`;
+}
+
+/**
  * Distinct tracks tagged with each genre (v_recording_genre), by genre id.
  * One pass over the library (about 108,000 rows), kept until the library
  * changes: counted per genre, one genre cost 4,300 rows, and the genre map

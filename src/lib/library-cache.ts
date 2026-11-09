@@ -8,6 +8,7 @@
 
 import { env } from 'cloudflare:workers';
 import { CHANGE_VERSIONS } from './page-cache';
+import { perRequest } from './request-scope';
 
 /**
  * A short string that changes whenever the library or a user's ratings or
@@ -24,6 +25,8 @@ import { CHANGE_VERSIONS } from './page-cache';
  * isolate forgets it (forgetLibraryStamp, from the middleware).
  */
 const MEMO_MS = 15_000;
+// Settled stamps only, across requests; one being read is shared within its
+// request (perRequest), so a page's sections started together read it once.
 const memo = new Map<string, { value: string; at: number }>();
 
 export function forgetLibraryStamp(): void {
@@ -31,10 +34,11 @@ export function forgetLibraryStamp(): void {
 }
 
 export async function libraryStamp(userId: string | null, now = Date.now()): Promise<string> {
-  const remembered = memo.get(userId ?? '');
+  const key = userId ?? '';
+  const remembered = memo.get(key);
   if (remembered && now - remembered.at < MEMO_MS) return remembered.value;
-  const value = await readLibraryStamp(userId);
-  memo.set(userId ?? '', { value, at: now });
+  const value = await perRequest(`library-stamp:${key}`, () => readLibraryStamp(userId));
+  memo.set(key, { value, at: now });
   return value;
 }
 
@@ -49,6 +53,11 @@ async function readLibraryStamp(userId: string | null): Promise<string> {
             (SELECT max(rowid) FROM genre_tag) AS genres,
             (SELECT max(rowid) FROM artist) AS artists,
             (SELECT max(rowid) FROM release_group) AS releases,
+            -- Editions and tracks added to an album already here; merges,
+            -- which move tracks and ratings in place but always leave a redirect.
+            (SELECT max(rowid) FROM release) AS editions,
+            (SELECT max(rowid) FROM track) AS tracks,
+            (SELECT max(rowid) FROM entity_redirect) AS merges,
             -- Hand edits: a rename or a picture order changes no count.
             (SELECT max(edited_at) FROM field_override) AS edits,
             -- Pictures found later (a cover, an artist photo), and the genre tree.
@@ -66,20 +75,33 @@ declare const __BUILD_ID__: string | undefined;
  */
 const BUILD = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'test';
 
-/** The value under name for this library state, worked out and kept when missing. */
+/**
+ * Development only: work everything out as if the cache were empty, to
+ * measure a page as it is after a rating (the dev meter sets it for a
+ * request with ?__cold).
+ */
+export const devCold = { on: false };
+
+/**
+ * The value under name for this library state, worked out and kept when
+ * missing. Within one request it is looked up once, however many sections
+ * ask for it at the same time (a user's album scores, say).
+ */
 export async function byLibrary<T>(name: string, userId: string | null, work: () => Promise<T>): Promise<T> {
   const key = `lib:${BUILD}:${name}:${userId ?? '-'}:${await libraryStamp(userId)}`;
-  try {
-    const hit = await env.CACHE.get<{ value: T }>(key, 'json');
-    if (hit) return hit.value;
-  } catch {
-    /* No cache: work it out. */
-  }
-  const value = await work();
-  try {
-    await env.CACHE.put(key, JSON.stringify({ value }), { expirationTtl: 7 * 24 * 60 * 60 });
-  } catch {
-    /* Uncached is only slower. */
-  }
-  return value;
+  return perRequest(key, async () => {
+    try {
+      const hit = devCold.on ? null : await env.CACHE.get<{ value: T }>(key, 'json');
+      if (hit) return hit.value;
+    } catch {
+      /* No cache: work it out. */
+    }
+    const value = await work();
+    try {
+      await env.CACHE.put(key, JSON.stringify({ value }), { expirationTtl: 7 * 24 * 60 * 60 });
+    } catch {
+      /* Uncached is only slower. */
+    }
+    return value;
+  });
 }

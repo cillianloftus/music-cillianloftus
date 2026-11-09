@@ -7,6 +7,7 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { albumScores } from './album-scores';
 import { discover, trackFacts, type Finding } from './discover';
 
 export interface YearReview {
@@ -46,6 +47,7 @@ export interface YearReview {
 export async function yearInReview(userId: string, year: number): Promise<YearReview> {
   const from = `${year}-01-01`;
   const to = `${year + 1}-01-01`;
+  const scores = await albumScores(userId);
   const [totals, releases, discoveries, found, months, years, outTotals, outBest, outArtists] = await env.DB.batch([
     env.DB.prepare(
       `WITH firsts AS (
@@ -62,9 +64,10 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
                ) WHERE met >= ?2 AND met < ?3) AS new_artists`,
     ).bind(userId, from, to),
     env.DB.prepare(
-      `SELECT s.release_group_id AS id FROM v_release_score s JOIN release_group g ON g.id = s.release_group_id
-       WHERE s.user_id = ?1 AND g.first_release_date >= ?2 AND g.first_release_date < ?3 AND g.type IN ('album', 'mixtape', 'ep')
-       ORDER BY s.quality_score DESC LIMIT 12`,
+      // The year's albums; their scores come from albumScores, below.
+      `SELECT g.id FROM release_group g
+       WHERE g.first_release_date >= ?2 AND g.first_release_date < ?3 AND g.type IN ('album', 'mixtape', 'ep')
+         AND ?1 IS NOT NULL`,
     ).bind(userId, from, to),
     env.DB.prepare(
       `WITH firsts AS (
@@ -146,7 +149,11 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
     average: t.average,
     newArtists: t.new_artists,
     plays: t.plays,
-    releases: (releases!.results as { id: string }[]).map((r) => r.id),
+    releases: (releases!.results as { id: string }[])
+      .map((r) => r.id)
+      .filter((id) => scores[id])
+      .sort((a, b) => scores[b]!.quality - scores[a]!.quality || a.localeCompare(b))
+      .slice(0, 12),
     discoveries: (discoveries!.results as { id: string }[]).map((r) => r.id),
     found: found!.results as YearReview['found'],
     months: allMonths,

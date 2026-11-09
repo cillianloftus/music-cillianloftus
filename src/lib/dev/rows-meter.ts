@@ -70,7 +70,7 @@ export function startCount(): (label: string) => void {
   return (label) => {
     const mine = log.slice(from);
     const total = mine.reduce((n, e) => n + e.rows, 0);
-    const top = [...mine].sort((a, b) => b.rows - a.rows).slice(0, 3);
+    const top = [...mine].sort((a, b) => b.rows - a.rows).slice(0, label.includes('(cold)') ? 14 : 3);
     const lines = top
       .filter((e) => e.rows > 0)
       .map((e) => `           ${String(e.rows).padStart(8)}  ${e.sql.replace(/\s+/g, ' ').trim().slice(0, 110)}`);

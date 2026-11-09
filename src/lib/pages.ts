@@ -8,6 +8,7 @@ import { EVIDENCE } from './roster';
 import { env } from 'cloudflare:workers';
 import { artistLines, releaseGroupsByIds, type CreditPart, type ReleaseGroupSummary } from './catalogue';
 import { recordingsInGenres, trackCountsByGenre } from './genres';
+import { albumScores } from './album-scores';
 import { byLibrary } from './library-cache';
 import type { CreditRole } from './import/plan';
 
@@ -210,19 +211,25 @@ export async function genreDetail(id: string, deep = false): Promise<GenreDetail
 
 /** Albums in the genre (or beneath it, when deep): rated ones by score first, then the rest by date. */
 export async function genreAlbums(id: string, viewerId: string | null, limit = 24, deep = false): Promise<ReleaseGroupSummary[]> {
-  const { results } = await env.DB.prepare(
-    `${treeOf(deep)}
-     SELECT DISTINCT vg.release_group_id AS id, s.personal_score, g.first_release_date
-     FROM v_release_group_genre vg
-     JOIN release_group g ON g.id = vg.release_group_id
-     LEFT JOIN v_release_score s ON s.release_group_id = g.id AND s.user_id = ?2
-     WHERE vg.genre_id IN (SELECT id FROM tree)
-     ORDER BY s.personal_score IS NULL, s.personal_score DESC, g.first_release_date DESC
-     LIMIT ?3`,
-  )
-    .bind(id, viewerId, limit)
-    .all<{ id: string }>();
-  const ids = results.map((r) => r.id);
+  const [{ results }, scores] = await Promise.all([
+    env.DB.prepare(
+      `${treeOf(deep)}
+       SELECT DISTINCT vg.release_group_id AS id, g.first_release_date
+       FROM v_release_group_genre vg
+       JOIN release_group g ON g.id = vg.release_group_id
+       WHERE vg.genre_id IN (SELECT id FROM tree)
+       ORDER BY g.first_release_date DESC`,
+    )
+      .bind(id)
+      .all<{ id: string }>(),
+    albumScores(viewerId),
+  ]);
+  // Rated ones by score first; the rest stay newest first (a stable sort).
+  const score = (i: string) => scores[i]?.personal ?? null;
+  const ids = results
+    .map((r) => r.id)
+    .sort((a, b) => (score(a) === null ? 1 : 0) - (score(b) === null ? 1 : 0) || (score(b) ?? 0) - (score(a) ?? 0))
+    .slice(0, limit);
   const byId = new Map((await releaseGroupsByIds(ids, viewerId)).map((a) => [a.id, a]));
   return ids.map((i) => byId.get(i)).filter((a): a is ReleaseGroupSummary => a !== undefined);
 }

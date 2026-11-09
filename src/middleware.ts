@@ -2,7 +2,8 @@ import { defineMiddleware } from 'astro:middleware';
 import { env } from 'cloudflare:workers';
 import { verifyAccessJwt, type AccessIdentity } from './lib/auth/access';
 import { userForEmail } from './lib/auth/user';
-import { forgetLibraryStamp } from './lib/library-cache';
+import { devCold, forgetLibraryStamp } from './lib/library-cache';
+import { inRequest } from './lib/request-scope';
 import { currentStamp, forgetStamp, isCacheablePage, isKeepable, pageKey, PAGE_MAX_AGE } from './lib/page-cache';
 import { THEME_COOKIE } from './lib/theme';
 
@@ -55,17 +56,26 @@ function movedTo(pathname: string): string | null {
   return m[1] ? `/manage/${m[1]}${m[2] ?? ''}` : '/manage';
 }
 
-export const onRequest = defineMiddleware(async (context, next) => {
+// Each request in its own scope (src/lib/request-scope.ts).
+export const onRequest = defineMiddleware((context, next) => inRequest(() => scoped(context, next)));
+
+const scoped: Parameters<typeof defineMiddleware>[0] = async (context, next) => {
   // Development: log each page's D1 rows read (src/lib/dev/rows-meter.ts).
   if (import.meta.env.DEV) {
     const meter = await import('./lib/dev/rows-meter');
     meter.meterRows(env.DB);
     const report = meter.startCount();
+    // ?__cold: as after a rating, with the library cache empty.
+    const cold = context.url.searchParams.has('__cold');
+    devCold.on = cold;
     const response = await handle(context, next);
-    return meter.reportWhenDone(response, () => report(`${context.request.method} ${context.url.pathname}`));
+    return meter.reportWhenDone(response, () => {
+      devCold.on = false;
+      report(`${context.request.method} ${context.url.pathname}${cold ? ' (cold)' : ''}`);
+    });
   }
   return handle(context, next);
-});
+};
 
 async function handle(context: Parameters<Parameters<typeof defineMiddleware>[0]>[0], next: () => Promise<Response>): Promise<Response> {
   const moved = movedTo(context.url.pathname);

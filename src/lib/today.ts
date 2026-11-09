@@ -7,6 +7,8 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { albumScores } from './album-scores';
+import { trackCountsByGenre } from './genres';
 
 /** Two weeks ahead: a big anniversary is worth knowing of before the day. */
 export const WINDOW_DAYS = 14;
@@ -184,13 +186,10 @@ export async function todayPicks(
     ).bind(monthDays),
     // Albums with no rating of any kind from this viewer: ids only, the
     // day's one is filled in below.
-    env.DB.prepare(
-      `SELECT g.id FROM release_group g
-       WHERE g.status = 'released'
-         AND g.id NOT IN (SELECT s.release_group_id FROM v_release_score s WHERE s.user_id = ?1)
-       ORDER BY g.id`,
-    ).bind(viewerId),
+    // (Rated ones are taken out below, with the viewer's album scores.)
+    env.DB.prepare(`SELECT g.id FROM release_group g WHERE g.status = 'released' ORDER BY g.id`),
   ]);
+  const albumScoreMap = await albumScores(viewerId);
 
   type Row = Record<string, string | null>;
   const picks: Pick[] = [];
@@ -248,19 +247,8 @@ export async function todayPicks(
     });
   }
 
-  // How each release in the window was rated: only those, not every album.
-  const releaseIds = picks.filter((p) => p.kind === 'anniversary').map((p) => p.id);
-  const scored = releaseIds.length
-    ? (
-        await env.DB.prepare(
-          `SELECT release_group_id AS id, quality_score AS score FROM v_release_score
-           WHERE user_id = ?1 AND release_group_id IN (SELECT value FROM json_each(?2))`,
-        )
-          .bind(viewerId, JSON.stringify(releaseIds))
-          .all<{ id: string; score: number | null }>()
-      ).results
-    : [];
-  const scores = new Map(scored.map((r) => [r.id, r.score]));
+  // How each release in the window was rated.
+  const scores = new Map(Object.entries(albumScoreMap).map(([id, s]) => [id, s.quality]));
 
   // Most likely to matter first (care, above): all that clear the bar, within
   // the bounds (CALENDAR_PICKS).
@@ -281,7 +269,7 @@ export async function todayPicks(
   };
 
   // One album not rated yet, never one already in the row.
-  const pool = ((unrated?.results ?? []) as Row[]).filter((u) => !seen.has(u.id!));
+  const pool = ((unrated?.results ?? []) as Row[]).filter((u) => !seen.has(u.id!) && !albumScoreMap[u.id!]);
   const chosen = options.includeUnrated && pool.length > 0 ? pool[hash(today) % pool.length]!.id! : null;
   const u = chosen
     ? await env.DB.prepare(
@@ -327,7 +315,7 @@ export async function todayPicks(
  */
 async function fillers(viewerId: string | null, today: string): Promise<Pick[]> {
   const month = today.slice(5, 7);
-  const [later, revisit, favourites, artists, genres] = await env.DB.batch([
+  const [later, revisit, favourites, artists, genreRows] = await env.DB.batch([
     // Out this month in another year, further off than the week's window.
     env.DB.prepare(
       `SELECT g.id, g.title, g.type, g.first_release_date AS date, g.spotify_id, r.art_key,
@@ -372,14 +360,17 @@ async function fillers(viewerId: string | null, today: string): Promise<Pick[]> 
        GROUP BY a.id HAVING count(*) >= 2
        ORDER BY releases DESC LIMIT 20`,
     ),
-    // Genres with enough in them to dig into.
-    env.DB.prepare(
-      `SELECT g.id, g.name AS title, count(DISTINCT vg.recording_id) AS tracks
-       FROM genre g JOIN v_recording_genre vg ON vg.genre_id = g.id
-       GROUP BY g.id HAVING tracks >= 5
-       ORDER BY tracks DESC LIMIT 30`,
-    ),
+    // Genres with enough in them to dig into (counted below, from the cached counts).
+    env.DB.prepare(`SELECT g.id, g.name AS title FROM genre g`),
   ]);
+  const trackCounts = await trackCountsByGenre();
+  const genres = {
+    results: ((genreRows?.results ?? []) as { id: string; title: string }[])
+      .map((g) => ({ ...g, tracks: trackCounts[g.id] ?? 0 }))
+      .filter((g) => g.tracks >= 5)
+      .sort((a, b) => b.tracks - a.tracks)
+      .slice(0, 30),
+  } as D1Result;
 
   type Row = Record<string, string | number | null>;
   const rows = (r: D1Result | undefined) => (r?.results ?? []) as Row[];

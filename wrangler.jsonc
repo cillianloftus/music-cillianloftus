@@ -2,7 +2,9 @@
 	"$schema": "./node_modules/wrangler/config-schema.json",
 	"compatibility_date": "2026-11-01",
 	"compatibility_flags": [
-		"global_fetch_strictly_public"
+		"global_fetch_strictly_public",
+		// AsyncLocalStorage, for values shared within one request (src/lib/request-scope.ts).
+		"nodejs_als"
 	],
 	"name": "music-cillianloftus",
 	// Wraps Astro's fetch handler and adds the scheduled handler for jobs.

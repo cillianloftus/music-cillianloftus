@@ -4,6 +4,7 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { albumScores, withScores } from './album-scores';
 import { splitVersion } from './versions';
 import type { DatePrecision } from './dates';
 import type { CreditEntity, CreditRole, ReleaseGroupType } from './import/plan';
@@ -77,20 +78,22 @@ export async function redirectFor(entityType: string, id: string): Promise<strin
   return row?.new_id ?? null;
 }
 
+// Scores come from the viewer's album scores (album-scores.ts), not a join
+// on v_release_score, which is built whole for every query that names it.
 const SUMMARY_COLUMNS = `
-  g.id, g.title, g.type, g.status, g.first_release_date, g.date_precision,
-  r.art_key, s.quality_score, s.personal_score`;
+  g.id, g.title, g.type, g.status, g.first_release_date, g.date_precision, r.art_key`;
 
 const SUMMARY_JOINS = `
   LEFT JOIN v_release_group_canonical c ON c.release_group_id = g.id
-  LEFT JOIN release r ON r.id = c.release_id
-  LEFT JOIN v_release_score s ON s.release_group_id = g.id AND s.user_id = ?1`;
+  LEFT JOIN release r ON r.id = c.release_id`;
 
-async function withArtistLines(
-  rows: Omit<ReleaseGroupSummary, 'credits'>[],
-): Promise<ReleaseGroupSummary[]> {
-  const lines = await artistLines('release_group', rows.map((row) => row.id));
-  return rows.map((row) => ({ ...row, credits: lines.get(row.id) ?? [] }));
+type SummaryRow = Omit<ReleaseGroupSummary, 'credits' | 'quality_score' | 'personal_score'>;
+
+/** Rows with the viewer's scores and their artist lines. */
+async function withArtistLines(rows: SummaryRow[], viewerId: string | null): Promise<ReleaseGroupSummary[]> {
+  const [lines, scores] = await Promise.all([artistLines('release_group', rows.map((row) => row.id)), albumScores(viewerId)]);
+  // Unscored is null, as the join gave it (the type says optional).
+  return withScores(rows, scores).map((row) => ({ ...row, credits: lines.get(row.id) ?? [] })) as ReleaseGroupSummary[];
 }
 
 export async function recentReleaseGroups(viewerId: string | null, limit = 24): Promise<ReleaseGroupSummary[]> {
@@ -102,8 +105,8 @@ export async function recentReleaseGroups(viewerId: string | null, limit = 24): 
      LIMIT ?2`,
   )
     .bind(viewerId, limit)
-    .all<Omit<ReleaseGroupSummary, 'credits'>>();
-  return withArtistLines(results);
+    .all<SummaryRow>();
+  return withArtistLines(results, viewerId);
 }
 
 export async function releaseGroupsByIds(ids: string[], viewerId: string | null): Promise<ReleaseGroupSummary[]> {
@@ -114,8 +117,8 @@ export async function releaseGroupsByIds(ids: string[], viewerId: string | null)
      WHERE g.id IN (SELECT value FROM json_each(?2))`,
   )
     .bind(viewerId, JSON.stringify(ids))
-    .all<Omit<ReleaseGroupSummary, 'credits'>>();
-  return withArtistLines(results);
+    .all<SummaryRow>();
+  return withArtistLines(results, viewerId);
 }
 
 export interface ReleaseGroupDetail extends ReleaseGroupSummary {
@@ -130,7 +133,6 @@ export interface ReleaseGroupDetail extends ReleaseGroupSummary {
 export async function releaseGroup(id: string, viewerId: string | null): Promise<ReleaseGroupDetail | null> {
   const row = await env.DB.prepare(
     `SELECT ${SUMMARY_COLUMNS}, g.mbid, g.availability, c.release_id AS canonical_release_id,
-            s.rated_track_count, s.track_count,
             (SELECT lr.impact_note FROM rating lr
              WHERE lr.user_id = ?1 AND lr.entity_type = 'release_group' AND lr.entity_id = g.id
              ORDER BY lr.rated_at DESC LIMIT 1) AS impact_note
@@ -138,10 +140,10 @@ export async function releaseGroup(id: string, viewerId: string | null): Promise
      WHERE g.id = ?2`,
   )
     .bind(viewerId, id)
-    .first<Omit<ReleaseGroupDetail, 'credits'>>();
+    .first<Omit<ReleaseGroupDetail, 'credits' | 'quality_score' | 'personal_score' | 'rated_track_count' | 'track_count'>>();
   if (!row) return null;
-  const [withLine] = await withArtistLines([row]);
-  return withLine as ReleaseGroupDetail;
+  const [[withLine], scores] = await Promise.all([withArtistLines([row], viewerId), albumScores(viewerId)]);
+  return { ...row, ...withLine!, rated_track_count: scores[id]?.rated ?? null, track_count: scores[id]?.tracks ?? null };
 }
 
 export interface TrackRow extends Partial<Score> {
@@ -314,8 +316,8 @@ export async function artistReleaseGroups(artistId: string, viewerId: string | n
      ORDER BY g.first_release_date IS NULL, g.first_release_date DESC`,
   )
     .bind(viewerId, artistId)
-    .all<Omit<ReleaseGroupSummary, 'credits'>>();
-  return withArtistLines(results);
+    .all<SummaryRow>();
+  return withArtistLines(results, viewerId);
 }
 
 /** How many of an artist's releases are hidden as not official, waiting to be cleared. */
@@ -463,7 +465,8 @@ const SHELF_TYPES: Record<ShelfKind, string[]> = {
 };
 
 const SHELF_ORDER: Record<ShelfSort, string> = {
-  score: 's.quality_score IS NULL, s.quality_score DESC, g.first_release_date DESC',
+  // Then by score, below (scores are not in the query).
+  score: 'g.first_release_date DESC',
   newest: 'g.first_release_date IS NULL, g.first_release_date DESC, g.title COLLATE NOCASE',
   added: 'g.created_at DESC',
   name: 'g.title COLLATE NOCASE',
@@ -483,8 +486,11 @@ export async function shelfOfKind(viewerId: string | null, kind: ShelfKind, sort
      ORDER BY ${SHELF_ORDER[sort]}`,
   )
     .bind(viewerId, json(SHELF_TYPES[kind]))
-    .all<Omit<ReleaseGroupSummary, 'credits'>>();
+    .all<SummaryRow>();
   // The same test as the artist page's "Remixes and versions" shelf.
   const versions = kind === 'singles' || kind === 'eps';
-  return withArtistLines(versions ? results.filter((g) => splitVersion(g.title).version === null) : results);
+  const shelf = await withArtistLines(versions ? results.filter((g) => splitVersion(g.title).version === null) : results, viewerId);
+  // Scored first, best first; the query's order (newest) breaks ties. Stable.
+  if (sort === 'score') shelf.sort((a, b) => (a.quality_score === null ? 1 : 0) - (b.quality_score === null ? 1 : 0) || (b.quality_score ?? 0) - (a.quality_score ?? 0));
+  return shelf;
 }

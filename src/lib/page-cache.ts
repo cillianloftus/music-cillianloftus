@@ -24,13 +24,13 @@ export function isCacheablePage(pathname: string): boolean {
 export const PAGE_MAX_AGE = 15 * 60;
 
 /**
- * What changes in place without growing a table: covers, artist pictures
- * and the genre tree. Triggers bump a number in app_setting for each
- * (migration 0049), so reading them is three lookups where counting them
- * read about 4,000 rows.
+ * What changes in place without growing a table: covers, artist pictures,
+ * the genre tree (migration 0049), and weights and track kinds, which move
+ * scores (0051). Triggers bump a number in app_setting for each, so reading
+ * them is a few lookups where counting them read about 4,000 rows.
  */
 export const CHANGE_VERSIONS = `(SELECT group_concat(key || '=' || value) FROM app_setting
-   WHERE key IN ('covers_version', 'pictures_version', 'genres_version'))`;
+   WHERE key IN ('covers_version', 'pictures_version', 'genres_version', 'scores_version'))`;
 
 /**
  * A short string that moves whenever anything a public page shows does.
@@ -48,6 +48,9 @@ export async function siteStamp(): Promise<string> {
             (SELECT max(rowid) FROM release) AS releases,
             (SELECT max(rowid) FROM recording) AS recordings,
             (SELECT max(rowid) FROM artist_credit) AS credits,
+            (SELECT max(rowid) FROM track) AS tracks,
+            -- Merges move rows in place but always leave a redirect.
+            (SELECT max(rowid) FROM entity_redirect) AS merges,
             (SELECT max(rowid) FROM genre_tag) AS tags,
             ${CHANGE_VERSIONS} AS changed,
             (SELECT max(edited_at) FROM field_override) AS edits,

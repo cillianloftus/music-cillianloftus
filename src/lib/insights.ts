@@ -6,6 +6,7 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { genresOfRecordings } from './genres';
 
 export interface Headline {
   ratedTracks: number;
@@ -81,13 +82,17 @@ export async function insights(userId: string): Promise<Insights> {
          UNION ALL
          SELECT g.id, up.root_id FROM genre g JOIN up ON g.parent_id = up.id
        ),
+       -- Rated tracks to their genres (genresOfRecordings): through the
+       -- genre view, built whole, this read 135,000 rows.
+       scored AS (SELECT recording_id, quality_score FROM v_recording_score WHERE user_id = ?1),
+       pairs AS (${genresOfRecordings('scored')}),
        tagged AS (
-         SELECT DISTINCT vg.recording_id, up.root_id
-         FROM v_recording_genre vg JOIN up ON up.id = vg.genre_id
+         SELECT DISTINCT p.recording_id, up.root_id
+         FROM pairs p JOIN up ON up.id = p.genre_id
        )
        SELECT r.name AS key, r.name AS label, avg(s.quality_score) AS average, count(*) AS count
        FROM tagged t
-       JOIN v_recording_score s ON s.recording_id = t.recording_id AND s.user_id = ?1
+       JOIN scored s ON s.recording_id = t.recording_id
        JOIN genre r ON r.id = t.root_id
        GROUP BY t.root_id
        HAVING count(*) >= 2

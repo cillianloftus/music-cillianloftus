@@ -5,18 +5,20 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { albumScores } from './album-scores';
+import { genresOfRecordings } from './genres';
 import { artistLines, releaseGroupsByIds, type CreditPart, type ReleaseGroupSummary } from './catalogue';
 
 /** Albums by type, best first. */
 export async function topByType(userId: string | null, types: string[], limit = 10): Promise<ReleaseGroupSummary[]> {
-  const { results } = await env.DB.prepare(
-    `SELECT s.release_group_id AS id FROM v_release_score s JOIN release_group g ON g.id = s.release_group_id
-     WHERE s.user_id = ?1 AND g.type IN (SELECT value FROM json_each(?2))
-     ORDER BY s.quality_score DESC, s.personal_score DESC LIMIT ?3`,
-  )
-    .bind(userId, JSON.stringify(types), limit)
-    .all<{ id: string }>();
-  return byIds(results.map((r) => r.id), userId);
+  // From the user's album scores (album-scores.ts): no query of its own.
+  const scores = await albumScores(userId);
+  const ids = Object.entries(scores)
+    .filter(([, s]) => types.includes(s.type))
+    .sort(([a, x], [b, y]) => y.quality - x.quality || y.personal - x.personal || a.localeCompare(b))
+    .slice(0, limit)
+    .map(([id]) => id);
+  return byIds(ids, userId);
 }
 
 async function byIds(ids: string[], userId: string | null): Promise<ReleaseGroupSummary[]> {
@@ -164,10 +166,13 @@ export interface LovedGenre {
 
 /** Genres rated highest, with at least three rated tracks. */
 export async function lovedGenres(userId: string | null, limit = 12): Promise<LovedGenre[]> {
+  // From the rated tracks to their genres (genresOfRecordings), not the
+  // genre view joined whole: 92,000 rows read, now about 19,000.
   const { results } = await env.DB.prepare(
-    `SELECT g.id, g.name, avg(s.quality_score) AS average, count(DISTINCT s.recording_id) AS tracks
-     FROM v_recording_genre vg JOIN genre g ON g.id = vg.genre_id
-     JOIN v_recording_score s ON s.recording_id = vg.recording_id AND s.user_id = ?1
+    `WITH scored AS (SELECT recording_id, quality_score FROM v_recording_score WHERE user_id = ?1),
+     pairs AS (${genresOfRecordings('scored')})
+     SELECT g.id, g.name, avg(s.quality_score) AS average, count(*) AS tracks
+     FROM pairs p JOIN scored s ON s.recording_id = p.recording_id JOIN genre g ON g.id = p.genre_id
      GROUP BY g.id HAVING tracks >= 3
      ORDER BY average DESC, tracks DESC LIMIT ?2`,
   )
