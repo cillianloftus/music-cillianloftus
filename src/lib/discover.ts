@@ -887,7 +887,7 @@ export async function artistBreakdown(userId: string, artistId: string): Promise
   const facts = await trackFacts(userId, { artistId });
   if (facts.length < 3) return null;
   const [{ libraryAverage, ranking, typicalSpread }, albumScoreMap] = await Promise.all([
-    byLibrary('artist-ranks:v2', userId, () => libraryRanks(userId)),
+    byLibrary('artist-ranks:v3', userId, () => libraryRanks(userId)),
     albumScores(userId),
   ]);
 

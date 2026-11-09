@@ -21,3 +21,21 @@ describe('album ranking', () => {
     expect(['x', 'y', 'z'].sort(byRank(scores))).toEqual(['y', 'z', 'x']);
   });
 });
+
+describe('the rating scale', () => {
+  it('names each band as scores are meant', async () => {
+    const { scoreWord, scoreHue } = await import('./format');
+    expect([45, 50, 65, 70, 85, 90].map(scoreWord)).toEqual(['don’t like', 'okay', 'like', 'enjoy', 'great', 'amazing']);
+    // Red to orange below 50, a neutral yellow at 50 to 60, green from 70.
+    expect(scoreHue(30)).toBeLessThan(45);
+    expect(scoreHue(55)).toBeGreaterThan(80);
+    expect(scoreHue(55)).toBeLessThan(100);
+    expect(scoreHue(70)).toBeGreaterThan(115);
+  });
+
+  it('pulls uncertain ranks toward halfway between 70 and the average', async () => {
+    const { rankAnchor } = await import('./rank-anchor');
+    expect(rankAnchor(86)).toBe(78);
+    expect(rankAnchor(null)).toBe(70);
+  });
+});

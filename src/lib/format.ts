@@ -76,13 +76,51 @@ export function formatRelative(iso: string, now: Date = new Date()): string {
 }
 
 /**
- * The hue a score is drawn in: 25 (red) at 0 to 145 (green) at 100. Bent
- * so the top of the scale, where most ratings live, spreads out: 70 is
- * yellow, 90 yellow-green, 100 green.
+ * The hue a score is drawn in (oklch: about 25 red, 95 yellow, 145 green),
+ * following what the numbers mean: under 50 is disliked, so red to orange;
+ * 50 to 60 is neither way, a neutral yellow; from 70, genuinely enjoyed,
+ * green, deepening through great (80) and amazing (90). Points between are
+ * drawn proportionally.
  */
+const HUE_STOPS: [number, number][] = [
+  [0, 20],
+  [45, 42],
+  [50, 82],
+  [60, 98],
+  [70, 122],
+  [80, 136],
+  [90, 146],
+  [100, 152],
+];
+
+/**
+ * What a score means, in a word or two, on the scale it is given by
+ * (0 to 100; an axis's 7.5 is 75): under 50 not liked, 50 okay, above it
+ * liked, 70 genuinely enjoyed, 80 great, 90 amazing.
+ */
+export const SCORE_BANDS: [number, string][] = [
+  [90, 'amazing'],
+  [80, 'great'],
+  [70, 'enjoy'],
+  [60, 'like'],
+  [50, 'okay'],
+  [0, 'don’t like'],
+];
+
+export function scoreWord(score: number): string {
+  return SCORE_BANDS.find(([from]) => score >= from)![1];
+}
+
 export function scoreHue(score: number): number {
-  const t = Math.max(0, Math.min(1, score / 100));
-  return Math.round(25 + 120 * t ** 1.5);
+  const s = Math.max(0, Math.min(100, score));
+  for (let i = 1; i < HUE_STOPS.length; i++) {
+    const [x1, h1] = HUE_STOPS[i]!;
+    if (s <= x1) {
+      const [x0, h0] = HUE_STOPS[i - 1]!;
+      return Math.round(h0 + ((h1 - h0) * (s - x0)) / (x1 - x0));
+    }
+  }
+  return HUE_STOPS.at(-1)![1];
 }
 
 /** The colour classes and hue for a displayed score. */

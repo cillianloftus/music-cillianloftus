@@ -22,8 +22,12 @@ interface Props {
   notApplicable?: boolean;
 }
 
+import { scoreWord } from '../lib/format';
+
 const { name, label, hint, value, tone = 'score', canNotApply = false, notApplicable = false } = Astro.props;
 const hintId = hint ? `${name}-hint` : undefined;
+// What the value means on the rating scale ("enjoy", "great"), shown small before it.
+const word = tone === 'score' && value != null && !notApplicable ? scoreWord(value * 10) : undefined;
 ---
 
 <div class:list={['axis', { 'is-na': notApplicable }]} data-axis data-tone={tone}>
@@ -32,7 +36,7 @@ const hintId = hint ? `${name}-hint` : undefined;
       <label for={name}>{label}</label>
       {hint && <span class="hint" id={hintId}>{hint}</span>}
     </div>
-    <output class="axis-value tabular" for={name} data-value aria-hidden="true">{notApplicable ? 'n/a' : (value ?? '–')}</output>
+    <output class="axis-value tabular" for={name} data-value data-word={word} aria-hidden="true">{notApplicable ? 'n/a' : (value ?? '–')}</output>
   </div>
   <input
     class="input axis-number"
@@ -89,6 +93,17 @@ const hintId = hint ? `${name}-hint` : undefined;
 
   .axis-name label {
     font-weight: 650;
+  }
+
+  /* The value's meaning, small and quiet before it: "enjoy 7.5". */
+  .axis-value[data-word]::before {
+    content: attr(data-word);
+    margin-right: 0.45em;
+    color: var(--text-subtle);
+    font-size: 0.55em;
+    font-weight: 600;
+    letter-spacing: 0;
+    vertical-align: 0.15em;
   }
 
   .axis-value {

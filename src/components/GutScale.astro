@@ -5,6 +5,8 @@
  * Two rows (0–5, 6–10) on a phone, one row when there is room.
  */
 
+import { scoreHue, scoreWord } from '../lib/format';
+
 interface Props {
   entityType: 'recording' | 'release_group';
   entityId: string;
@@ -24,6 +26,8 @@ const {
   hint,
 } = Astro.props;
 const scores = Array.from({ length: 11 }, (_, n) => n);
+// The scale's anchors, in one small line under the buttons.
+const anchors = [5, 7, 8, 9].map((n) => `${n} ${scoreWord(n * 10)}`).join(' · ');
 ---
 
 <form method="post" action="/api/write/rating" data-gut-scale>
@@ -38,13 +42,14 @@ const scores = Array.from({ length: 11 }, (_, n) => n);
     <div class="scale">
       {
         scores.map((n) => (
-          <button type="submit" name="gut_score" value={n} class:list={['step', { current: current === n }]} aria-keyshortcuts={String(n)} title={`Type ${n}`}>
+          <button type="submit" name="gut_score" value={n} class:list={['step', { current: current === n }]} style={`--h: ${scoreHue(n * 10)}`} aria-keyshortcuts={String(n)} title={`${n}: ${scoreWord(n * 10)}. Type ${n}`}>
             {n}
             {current === n && <span class="visually-hidden"> (current)</span>}
           </button>
         ))
       }
     </div>
+    <p class="anchors">{anchors}</p>
   </fieldset>
 </form>
 
@@ -137,6 +142,17 @@ const scores = Array.from({ length: 11 }, (_, n) => n);
     font-variant-numeric: tabular-nums;
     cursor: pointer;
     touch-action: manipulation;
+  }
+
+  /* Each score's colour on the scale, as a thin edge underneath. */
+  .step {
+    border-bottom: 3px solid oklch(var(--score-l) var(--score-c) var(--h));
+  }
+
+  .anchors {
+    margin-top: var(--space-2);
+    color: var(--text-subtle);
+    font-size: var(--step--1);
   }
 
   .step:hover {

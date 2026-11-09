@@ -4,7 +4,7 @@
  * again over content swapped in later (Now playing changes track): a row
  * is enhanced once.
  */
-import { scoreHue } from '../format';
+import { scoreHue, scoreWord } from '../format';
 
 /** When the page last scrolled: a tap just after is stopping a scroll, not rating. */
 let lastScroll = 0;
@@ -53,7 +53,11 @@ export function enhanceAxes(root: Document | HTMLElement = document): void {
       number.value = value === null ? '' : String(value);
       row.classList.toggle('is-unset', value === null);
       output.textContent = value === null ? '–' : String(value);
-      range.setAttribute('aria-valuetext', value === null ? 'Not rated' : `${value} out of 10`);
+      const scored = value !== null && row.dataset.tone === 'score';
+      // What it means on the rating scale, shown small before the number.
+      if (scored) output.dataset.word = scoreWord(value * 10);
+      else delete output.dataset.word;
+      range.setAttribute('aria-valuetext', value === null ? 'Not rated' : `${value} out of 10${scored ? `, ${scoreWord(value * 10)}` : ''}`);
       if (value === null) {
         range.value = '5';
         range.style.setProperty('--fill', '0%');
