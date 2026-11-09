@@ -332,22 +332,60 @@ export interface ArtistGenre {
  * label them.
  */
 export async function artistGenres(artistId: string, limit = 6): Promise<ArtistGenre[]> {
-  const { results } = await env.DB.prepare(
-    `WITH theirs AS (
-       SELECT DISTINCT entity_id AS recording_id FROM artist_credit
-       WHERE artist_id = ?1 AND entity_type = 'recording' AND role = 'primary'
-     )
-     SELECT g.id, g.name, count(DISTINCT vg.recording_id) AS tracks
-     FROM v_recording_genre vg JOIN genre g ON g.id = vg.genre_id
-     -- A WHERE … IN, not a join: SQLite pushes it into the grouped view, so
-     -- only this artist's tracks are grouped (35ms, not a second).
-     WHERE vg.recording_id IN (SELECT recording_id FROM theirs)
-     GROUP BY g.id
-     HAVING count(DISTINCT vg.recording_id) * 7 >= (SELECT count(*) FROM theirs)
-     ORDER BY tracks DESC, g.name
-     LIMIT ?2`,
-  )
-    .bind(artistId, limit)
-    .all<ArtistGenre>();
-  return results;
+  // v_recording_genre's rule, driven from this artist's credits and counted
+  // here: a track's own tags (manual ones winning) if it has any, otherwise
+  // its albums'. Through the view it was 158,000 rows read for an artist
+  // with 2,000 tracks; as two plain reads, about 27,000.
+  const [count, own, inherited] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT count(DISTINCT entity_id) AS n FROM artist_credit
+       WHERE artist_id = ?1 AND entity_type = 'recording' AND role = 'primary'`,
+    ).bind(artistId),
+    env.DB.prepare(
+      `SELECT DISTINCT t.entity_id AS recording_id, t.genre_id, t.source = 'manual' AS manual
+       FROM artist_credit c
+       JOIN genre_tag t ON t.entity_type = 'recording' AND t.entity_id = c.entity_id
+       WHERE c.artist_id = ?1 AND c.entity_type = 'recording' AND c.role = 'primary'`,
+    ).bind(artistId),
+    env.DB.prepare(
+      `SELECT DISTINCT tr.recording_id, rg.genre_id
+       FROM artist_credit c
+       JOIN track tr ON tr.recording_id = c.entity_id
+       JOIN release r ON r.id = tr.release_id
+       JOIN v_release_group_genre rg ON rg.release_group_id = r.release_group_id
+       WHERE c.artist_id = ?1 AND c.entity_type = 'recording' AND c.role = 'primary'`,
+    ).bind(artistId),
+  ]);
+  const total = (count?.results[0] as { n: number } | undefined)?.n ?? 0;
+  const ownRows = (own?.results ?? []) as { recording_id: string; genre_id: string; manual: number }[];
+  const withManual = new Set(ownRows.filter((r) => r.manual).map((r) => r.recording_id));
+  const tagged = new Set(ownRows.map((r) => r.recording_id));
+
+  const tracksOf = new Map<string, Set<string>>();
+  const add = (genre: string, recording: string) => {
+    const set = tracksOf.get(genre) ?? new Set<string>();
+    set.add(recording);
+    tracksOf.set(genre, set);
+  };
+  for (const r of ownRows) if (r.manual || !withManual.has(r.recording_id)) add(r.genre_id, r.recording_id);
+  for (const r of (inherited?.results ?? []) as { recording_id: string; genre_id: string }[]) {
+    if (!tagged.has(r.recording_id)) add(r.genre_id, r.recording_id);
+  }
+
+  const kept = [...tracksOf]
+    .map(([id, set]) => ({ id, tracks: set.size }))
+    // A genre on fewer than one in seven of their tracks says little about them.
+    .filter((g) => g.tracks * 7 >= total);
+  if (kept.length === 0) return [];
+  const names = new Map(
+    (
+      await env.DB.prepare(`SELECT id, name FROM genre WHERE id IN (SELECT value FROM json_each(?1))`)
+        .bind(JSON.stringify(kept.map((g) => g.id)))
+        .all<{ id: string; name: string }>()
+    ).results.map((g) => [g.id, g.name]),
+  );
+  return kept
+    .map((g) => ({ id: g.id, name: names.get(g.id) ?? '', tracks: g.tracks }))
+    .sort((a, b) => b.tracks - a.tracks || a.name.localeCompare(b.name))
+    .slice(0, limit);
 }

@@ -7,19 +7,43 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { CHANGE_VERSIONS } from './page-cache';
 
 /**
  * A short string that changes whenever the library or a user's ratings or
- * plays do. It runs before every cached page, so it must cost next to
+ * plays do. It runs before every cached read, so it must cost next to
  * nothing in rows read (D1 bills and caps them): the big tables are only
  * ever added to, so their highest rowid moves with them and costs one seek,
- * where counting them read every row (58,000 credits) each time. Covers and
- * pictures change in place, so those two are counted; both are small.
+ * where counting them read every row (58,000 credits) each time. Ratings
+ * are append-only too, so the highest rowid stands for every user's. Covers
+ * and pictures change in place; triggers count their changes
+ * (CHANGE_VERSIONS), where counting them read about 4,000 rows a stamp.
+ *
+ * Remembered for a few seconds per user, as the page stamp is: a page that
+ * reads several cached values works the stamp out once. A write in this
+ * isolate forgets it (forgetLibraryStamp, from the middleware).
  */
-export async function libraryStamp(userId: string | null): Promise<string> {
+const MEMO_MS = 15_000;
+const memo = new Map<string, { value: string; at: number }>();
+
+export function forgetLibraryStamp(): void {
+  memo.clear();
+}
+
+export async function libraryStamp(userId: string | null, now = Date.now()): Promise<string> {
+  const remembered = memo.get(userId ?? '');
+  if (remembered && now - remembered.at < MEMO_MS) return remembered.value;
+  const value = await readLibraryStamp(userId);
+  memo.set(userId ?? '', { value, at: now });
+  return value;
+}
+
+async function readLibraryStamp(userId: string | null): Promise<string> {
   const row = await env.DB.prepare(
     `SELECT (SELECT max(rated_at) FROM rating WHERE user_id = ?1) AS rated,
-            (SELECT count(*) FROM rating WHERE user_id = ?1) AS ratings,
+            -- Only for a user's values: those for no one (artists' likeness,
+            -- the library's shape) do not move with ratings.
+            (SELECT max(rowid) FROM rating WHERE ?1 IS NOT NULL) AS ratings,
             (SELECT max(rowid) FROM play) AS plays,
             (SELECT max(rowid) FROM artist_credit) AS credits,
             (SELECT max(rowid) FROM genre_tag) AS genres,
@@ -27,9 +51,8 @@ export async function libraryStamp(userId: string | null): Promise<string> {
             (SELECT max(rowid) FROM release_group) AS releases,
             -- Hand edits: a rename or a picture order changes no count.
             (SELECT max(edited_at) FROM field_override) AS edits,
-            -- Pictures found later (a cover, an artist photo) change what pages show.
-            (SELECT count(*) FROM release WHERE art_key IS NOT NULL) AS covers,
-            (SELECT count(*) FROM artist_image WHERE hidden = 0) AS pictures`,
+            -- Pictures found later (a cover, an artist photo), and the genre tree.
+            ${CHANGE_VERSIONS} AS changed`,
   )
     .bind(userId)
     .first<Record<string, string | number | null>>();

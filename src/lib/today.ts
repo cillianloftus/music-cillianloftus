@@ -81,18 +81,38 @@ export function affinity(stats: { average: number | null; rated: number; release
 }
 
 /**
- * Per artist: average track score, rated tracks, releases here. Grouped in
- * one pass each: as subqueries per artist it re-scored every rating for
- * each of thousands of artists.
+ * Per artist, for the artists in ?2 only: average track score, rated
+ * tracks, releases here. Grouped in one pass each: as subqueries per artist
+ * it re-scored every rating for each artist.
  */
 const ARTIST_STATS = `
   SELECT a.id, scored.average, coalesce(scored.rated, 0) AS rated, coalesce(own.releases, 0) AS releases
   FROM artist a
   LEFT JOIN (SELECT c.artist_id, avg(s.quality_score) AS average, count(*) AS rated
              FROM artist_credit c JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
-             WHERE c.entity_type = 'recording' AND c.role = 'primary' GROUP BY c.artist_id) scored ON scored.artist_id = a.id
+             WHERE c.artist_id IN (SELECT value FROM json_each(?2)) AND c.entity_type = 'recording' AND c.role = 'primary'
+             GROUP BY c.artist_id) scored ON scored.artist_id = a.id
   LEFT JOIN (SELECT artist_id, count(*) AS releases FROM artist_credit
-             WHERE entity_type = 'release_group' AND role = 'primary' GROUP BY artist_id) own ON own.artist_id = a.id`;
+             WHERE artist_id IN (SELECT value FROM json_each(?2)) AND entity_type = 'release_group' AND role = 'primary'
+             GROUP BY artist_id) own ON own.artist_id = a.id
+  WHERE a.id IN (SELECT value FROM json_each(?2))`;
+
+/**
+ * The month-days (MM-DD) the window covers from today, so the database
+ * returns only dates that can fall in it rather than every dated artist
+ * and album. 29 February is asked for whenever 28 February is in the
+ * window (nextOccurrence marks it then in other years); nextOccurrence
+ * still decides exactly.
+ */
+export function windowMonthDays(today: string, days = WINDOW_DAYS): string[] {
+  const [y, m, d] = today.split('-').map(Number) as [number, number, number];
+  const out = new Set<string>();
+  for (let i = 0; i < days; i++) {
+    out.add(new Date(Date.UTC(y, m - 1, d + i)).toISOString().slice(5, 10));
+  }
+  if (out.has('02-28')) out.add('02-29');
+  return [...out];
+}
 
 /** Today's date in Dublin, as YYYY-MM-DD. */
 export function todayIn(now: Date = new Date(), zone = ZONE): string {
@@ -133,8 +153,9 @@ export async function todayPicks(
   options: { now?: Date; includeUnrated?: boolean; /** Off: the calendar only. */ fill?: boolean } = {},
 ): Promise<Pick[]> {
   const today = todayIn(options.now);
-  const [people, albums, unrated, stats] = await env.DB.batch([
-    // Artists who are main artists here, with a day-precise begin date.
+  const monthDays = JSON.stringify(windowMonthDays(today));
+  const [people, albums, unrated] = await env.DB.batch([
+    // Artists who are main artists here, with a day-precise begin date in the window.
     env.DB.prepare(
       `SELECT a.id, a.name AS title, a.kind, a.begin_date AS date, a.spotify_id,
               (SELECT i.key FROM artist_image i WHERE i.artist_id = a.id AND i.hidden = 0 ORDER BY i.position LIMIT 1) AS image_key,
@@ -146,8 +167,9 @@ export async function todayPicks(
                ORDER BY g.first_release_date DESC LIMIT 1) AS art_key
        FROM artist a
        WHERE a.begin_precision = 'day' AND a.end_date IS NULL
+         AND substr(a.begin_date, 6, 5) IN (SELECT value FROM json_each(?1))
          AND EXISTS (SELECT 1 FROM artist_credit c WHERE c.artist_id = a.id AND c.role = 'primary' AND c.entity_type = 'release_group')`,
-    ),
+    ).bind(monthDays),
     env.DB.prepare(
       `SELECT g.id, g.title, g.type, g.first_release_date AS date, g.spotify_id, r.art_key,
               (SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
@@ -157,28 +179,35 @@ export async function todayPicks(
        FROM release_group g
        LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
        LEFT JOIN release r ON r.id = gc.release_id
-       WHERE g.date_precision = 'day' AND g.status = 'released'`,
-    ),
-    // Albums with no rating of any kind from this viewer.
+       WHERE g.date_precision = 'day' AND g.status = 'released'
+         AND substr(g.first_release_date, 6, 5) IN (SELECT value FROM json_each(?1))`,
+    ).bind(monthDays),
+    // Albums with no rating of any kind from this viewer: ids only, the
+    // day's one is filled in below.
     env.DB.prepare(
-      `SELECT g.id, g.title, g.type, g.spotify_id, r.art_key,
-              (SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
-               WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary') AS by
-       FROM release_group g
-       LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
-       LEFT JOIN release r ON r.id = gc.release_id
+      `SELECT g.id FROM release_group g
        WHERE g.status = 'released'
-         AND NOT EXISTS (SELECT 1 FROM v_release_score s WHERE s.release_group_id = g.id AND s.user_id = ?1)
+         AND g.id NOT IN (SELECT s.release_group_id FROM v_release_score s WHERE s.user_id = ?1)
        ORDER BY g.id`,
     ).bind(viewerId),
-    env.DB.prepare(ARTIST_STATS).bind(viewerId),
   ]);
 
   type Row = Record<string, string | null>;
   const picks: Pick[] = [];
-  const artistCare = new Map(
-    ((stats?.results ?? []) as { id: string; average: number | null; rated: number; releases: number }[]).map((a) => [a.id, affinity(a)]),
-  );
+  // How much each artist in the window matters: only those, not every artist.
+  const artistIds = [
+    ...((people?.results ?? []) as Row[]).map((p) => p.id!),
+    ...((albums?.results ?? []) as Row[]).map((a) => a.artist_id).filter((id): id is string => Boolean(id)),
+  ];
+  const stats = artistIds.length
+    ? (await env.DB.prepare(ARTIST_STATS).bind(viewerId, JSON.stringify([...new Set(artistIds)])).all<{
+        id: string;
+        average: number | null;
+        rated: number;
+        releases: number;
+      }>()).results
+    : [];
+  const artistCare = new Map(stats.map((a) => [a.id, affinity(a)]));
 
   for (const p of (people?.results ?? []) as Row[]) {
     const { days, years } = nextOccurrence(p.date!, today);
@@ -253,8 +282,21 @@ export async function todayPicks(
 
   // One album not rated yet, never one already in the row.
   const pool = ((unrated?.results ?? []) as Row[]).filter((u) => !seen.has(u.id!));
-  if (options.includeUnrated && pool.length > 0) {
-    const u = pool[hash(today) % pool.length]!;
+  const chosen = options.includeUnrated && pool.length > 0 ? pool[hash(today) % pool.length]!.id! : null;
+  const u = chosen
+    ? await env.DB.prepare(
+        `SELECT g.id, g.title, g.type, g.spotify_id, r.art_key,
+                (SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+                 WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary') AS by
+         FROM release_group g
+         LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
+         LEFT JOIN release r ON r.id = gc.release_id
+         WHERE g.id = ?1`,
+      )
+        .bind(chosen)
+        .first<Row>()
+    : null;
+  if (u) {
     add({
       kind: 'unrated',
       id: u.id!,

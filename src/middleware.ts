@@ -2,6 +2,7 @@ import { defineMiddleware } from 'astro:middleware';
 import { env } from 'cloudflare:workers';
 import { verifyAccessJwt, type AccessIdentity } from './lib/auth/access';
 import { userForEmail } from './lib/auth/user';
+import { forgetLibraryStamp } from './lib/library-cache';
 import { currentStamp, forgetStamp, isCacheablePage, isKeepable, pageKey, PAGE_MAX_AGE } from './lib/page-cache';
 import { THEME_COOKIE } from './lib/theme';
 
@@ -55,6 +56,18 @@ function movedTo(pathname: string): string | null {
 }
 
 export const onRequest = defineMiddleware(async (context, next) => {
+  // Development: log each page's D1 rows read (src/lib/dev/rows-meter.ts).
+  if (import.meta.env.DEV) {
+    const meter = await import('./lib/dev/rows-meter');
+    meter.meterRows(env.DB);
+    const report = meter.startCount();
+    const response = await handle(context, next);
+    return meter.reportWhenDone(response, () => report(`${context.request.method} ${context.url.pathname}`));
+  }
+  return handle(context, next);
+});
+
+async function handle(context: Parameters<Parameters<typeof defineMiddleware>[0]>[0], next: () => Promise<Response>): Promise<Response> {
   const moved = movedTo(context.url.pathname);
   if (moved) return context.redirect(`${moved}${context.url.search}`, 301);
 
@@ -73,6 +86,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
   if (context.request.method !== 'GET' && context.request.method !== 'HEAD') {
     const response = await next();
     forgetStamp();
+    forgetLibraryStamp();
     return response;
   }
 
@@ -107,4 +121,4 @@ export const onRequest = defineMiddleware(async (context, next) => {
   // Browsers revalidate: the next visit asks again and the edge answers.
   kept.headers.set('Cache-Control', 'private, no-cache');
   return kept;
-});
+}

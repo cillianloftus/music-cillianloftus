@@ -24,10 +24,20 @@ export function isCacheablePage(pathname: string): boolean {
 export const PAGE_MAX_AGE = 15 * 60;
 
 /**
+ * What changes in place without growing a table: covers, artist pictures
+ * and the genre tree. Triggers bump a number in app_setting for each
+ * (migration 0049), so reading them is three lookups where counting them
+ * read about 4,000 rows.
+ */
+export const CHANGE_VERSIONS = `(SELECT group_concat(key || '=' || value) FROM app_setting
+   WHERE key IN ('covers_version', 'pictures_version', 'genres_version'))`;
+
+/**
  * A short string that moves whenever anything a public page shows does.
  * Tables only ever added to are stamped by their highest rowid (one seek,
  * not a count): ratings are append-only, so theirs alone covers every
- * user's ratings. Small tables that change in place are read whole.
+ * user's ratings. What changes in place is stamped by CHANGE_VERSIONS;
+ * small tables are read whole.
  */
 export async function siteStamp(): Promise<string> {
   const row = await env.DB.prepare(
@@ -39,20 +49,14 @@ export async function siteStamp(): Promise<string> {
             (SELECT max(rowid) FROM recording) AS recordings,
             (SELECT max(rowid) FROM artist_credit) AS credits,
             (SELECT max(rowid) FROM genre_tag) AS tags,
-            (SELECT max(rowid) FROM artist_image) AS images,
-            (SELECT count(*) FROM artist_image WHERE hidden = 1) AS hidden,
-            (SELECT count(*) FROM release WHERE art_key IS NOT NULL) AS covers,
+            ${CHANGE_VERSIONS} AS changed,
             (SELECT max(edited_at) FROM field_override) AS edits,
             (SELECT max(updated_at) || ':' || count(*) FROM definition) AS playlists,
             (SELECT count(*) FROM definition_pin) AS pins,
             (SELECT count(*) FROM definition_exclude) AS excludes,
             (SELECT max(rowid) FROM definition_run) AS runs,
             (SELECT max(rowid) || ':' || count(*) FROM holding) AS holdings,
-            (SELECT group_concat(id) FROM weights WHERE active = 1) AS weights,
-            -- Renames and moves in the genre tree; it is small.
-            (SELECT group_concat(id || '=' || name || '<' || coalesce(parent_id, ''), '|') FROM genre) AS genres,
-            -- Further parents (0013) move genre pages as much as a primary one.
-            (SELECT group_concat(genre_id || '<' || parent_id, '|') FROM genre_extra_parent) AS alsoUnder`,
+            (SELECT group_concat(id) FROM weights WHERE active = 1) AS weights`,
   ).first<Record<string, string | number | null>>();
   return fingerprint(Object.values(row ?? {}).join('\u0000'));
 }

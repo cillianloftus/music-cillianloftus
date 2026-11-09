@@ -380,33 +380,49 @@ export function favouriteScore(rating: number | null, plays: number, mostPlays: 
 
 /** An artist's favourite recordings, as primary artist: rated highly, played a lot, or both. */
 export async function artistTopTracks(artistId: string, viewerId: string | null, limit = 5): Promise<ArtistTrack[]> {
+  // Ranked first on what decides it (score and plays), then the album and
+  // cover looked up for the few shown: working those out for every rated
+  // or played track first read 67,000 rows for an artist with 2,000.
+  type Ranked = Pick<ArtistTrack, 'id' | 'title' | 'quality_score' | 'personal_score' | 'plays'>;
   const { results } = await env.DB.prepare(
-    `WITH theirs AS (
+    `SELECT * FROM (
        SELECT r.id, r.title, s.quality_score, s.personal_score,
               (SELECT count(*) FROM play p WHERE p.user_id = ?1 AND p.recording_id = r.id AND p.counted = 1) AS plays
        FROM artist_credit c
        JOIN recording r ON r.id = c.entity_id
        LEFT JOIN v_recording_score s ON s.recording_id = r.id AND s.user_id = ?1
        WHERE c.entity_type = 'recording' AND c.artist_id = ?2 AND c.role = 'primary'
-     )
-     SELECT t.*, ra.release_group_id AS album_id, g.title AS album_title,
-            -- The cover it first came out under: a single's, before the album's.
-            coalesce((SELECT fa.art_key FROM v_recording_first_art fa WHERE fa.recording_id = t.id), x.art_key) AS art_key
-     FROM theirs t
-     LEFT JOIN v_recording_album ra ON ra.recording_id = t.id
-     LEFT JOIN release_group g ON g.id = ra.release_group_id
-     LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
-     LEFT JOIN release x ON x.id = gc.release_id
-     WHERE t.quality_score IS NOT NULL OR t.plays > 0`,
+     ) WHERE quality_score IS NOT NULL OR plays > 0`,
   )
     .bind(viewerId, artistId)
-    .all<ArtistTrack>();
+    .all<Ranked>();
   const most = Math.max(0, ...results.map((t) => t.plays));
-  return results
+  const top = results
     .map((t) => ({ t, favour: favouriteScore(t.personal_score, t.plays, most) }))
     .sort((a, b) => b.favour - a.favour || (b.t.quality_score ?? 0) - (a.t.quality_score ?? 0) || a.t.title.localeCompare(b.t.title))
     .slice(0, limit)
     .map(({ t }) => t);
+  if (top.length === 0) return [];
+
+  const { results: placed } = await env.DB.prepare(
+    `SELECT t.value AS id, ra.release_group_id AS album_id, g.title AS album_title,
+            -- The cover it first came out under: a single's, before the album's.
+            coalesce((SELECT fa.art_key FROM v_recording_first_art fa WHERE fa.recording_id = t.value), x.art_key) AS art_key
+     FROM json_each(?1) t
+     LEFT JOIN v_recording_album ra ON ra.recording_id = t.value
+     LEFT JOIN release_group g ON g.id = ra.release_group_id
+     LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
+     LEFT JOIN release x ON x.id = gc.release_id`,
+  )
+    .bind(JSON.stringify(top.map((t) => t.id)))
+    .all<Pick<ArtistTrack, 'id' | 'album_id' | 'album_title' | 'art_key'>>();
+  const where = new Map(placed.map((p) => [p.id, p]));
+  return top.map((t) => ({
+    ...t,
+    album_id: where.get(t.id)?.album_id ?? null,
+    album_title: where.get(t.id)?.album_title ?? null,
+    art_key: where.get(t.id)?.art_key ?? null,
+  }));
 }
 
 export interface Collaborator {

@@ -3,7 +3,22 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { migratedDb, seedLibrary } from '../test/db';
-import { care, isMilestone, nextOccurrence, ordinal, todayIn, todayPicks, whenText, type Pick } from './today';
+import { care, isMilestone, nextOccurrence, ordinal, todayIn, todayPicks, whenText, windowMonthDays, type Pick } from './today';
+
+describe('the days the window asks the database for', () => {
+  it('runs over the year end', () => {
+    const days = windowMonthDays('2025-12-25', 14);
+    expect(days[0]).toBe('12-25');
+    expect(days).toContain('12-31');
+    expect(days.at(-1)).toBe('01-07');
+  });
+
+  it('asks for 29 February whenever 28 February is in it, leap year or not', () => {
+    expect(windowMonthDays('2025-02-20', 14)).toContain('02-29');
+    expect(windowMonthDays('2024-02-20', 14)).toContain('02-29');
+    expect(windowMonthDays('2025-03-02', 14)).not.toContain('02-29');
+  });
+});
 
 let db: DatabaseSync;
 

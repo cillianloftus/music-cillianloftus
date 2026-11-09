@@ -43,8 +43,11 @@ export function isExcluded(table: string): boolean {
   );
 }
 
-/** Tables the migrations fill with built-in rows (credit roles). */
-const SEEDED = new Set(['credit_role']);
+/**
+ * Tables the migrations fill with built-in rows (credit roles, the change
+ * versions in app_setting, which triggers also write as rows are restored).
+ */
+const SEEDED = new Set(['credit_role', 'app_setting']);
 
 /** Tables whose insert triggers check that a polymorphic entity exists. */
 const POLYMORPHIC = ['artist_credit', 'genre_tag', 'rating'];
@@ -170,7 +173,11 @@ function restoreStatements(backup: Backup, verbFor: (table: string) => string, k
   // UPDATEs that fill a forward column, waiting on the table they point at.
   const waiting = new Map<string, string[]>();
 
-  for (const table of backup.restore_order) {
+  // Settings go last, whatever order the backup was taken in: restoring
+  // covers, pictures and genres bumps their change versions there
+  // (migration 0049), and the backup's own values must be what remains.
+  const order = [...backup.restore_order.filter((t) => t !== 'app_setting'), ...backup.restore_order.filter((t) => t === 'app_setting')];
+  for (const table of order) {
     const dump = backup.tables[table];
     if (dump && dump.rows.length > 0) {
       const columns = dump.columns.map(ident).join(', ');
