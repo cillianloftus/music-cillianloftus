@@ -28,6 +28,10 @@ const deezer = (async (url: string) => {
         }
       : path === '/album/9'
         ? { id: 9, title: 'Album A' }
+        : path === '/track/isrc:GBBBB2600001'
+          ? { id: 201, title: 'Song B1', isrc: 'GBBBB2600001', track_position: 4, disk_number: 1, rank: 7 }
+          : path === '/track/201'
+            ? { bpm: 90, gain: -11 }
         : path === '/track/101'
           ? { bpm: 120.04, gain: -8.2 }
           : path === '/track/103'
@@ -45,6 +49,12 @@ describe('tempo and loudness from Deezer', () => {
     // Same position, another title: not taken for it.
     expect(sound('a2')).toEqual({ bpm: null, loudness: null, explicit: null, isrc: null, deezer_id: null });
     expect(sound('a3')).toEqual({ bpm: null, loudness: -2, explicit: 0, isrc: null, deezer_id: 103 });
+  });
+
+  it('finds a track by ISRC when Deezer does not have its album under that name', async () => {
+    db.exec(`UPDATE recording SET isrc = 'GBBBB2600001' WHERE id = 'b1'`);
+    expect(await fillSoundFromDeezer('rg-b', deezer)).toEqual({ matched: 1, tempos: 1 });
+    expect(sound('b1')).toEqual({ bpm: 90, loudness: -11, explicit: null, isrc: 'GBBBB2600001', deezer_id: 201 });
   });
 
   it('looks at each album once: one that matched never again, one that did not after three months', async () => {

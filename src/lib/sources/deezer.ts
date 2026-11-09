@@ -123,6 +123,27 @@ interface DeezerTrackDetail {
   gain?: number;
 }
 
+/** A track on Deezer by ISRC, or by artist and title when both match exactly (ignoring case and punctuation). */
+async function findDeezerTrack(
+  track: { isrc: string | null; title: string; artist: string | null },
+  fetcher: Fetcher,
+): Promise<DeezerTrackRow | null> {
+  if (track.isrc) {
+    const byCode = await get<DeezerTrackRow>(`/track/isrc:${track.isrc}`, fetcher);
+    if (byCode?.id) return byCode;
+  }
+  if (!track.artist) return null;
+  const search = await get<{ data: (DeezerTrackRow & { artist: { name: string } })[] }>(
+    `/search/track?q=${encodeURIComponent(`artist:"${track.artist}" track:"${track.title}"`)}`,
+    fetcher,
+  );
+  const title = normaliseTitle(track.title);
+  const artist = normaliseName(track.artist);
+  return (
+    search?.data.find((d) => [d.title, d.title_short].some((t) => t && normaliseTitle(t) === title) && normaliseName(d.artist.name) === artist) ?? null
+  );
+}
+
 export interface SoundFill {
   /** Library tracks matched to a Deezer track. */
   matched: number;
@@ -152,25 +173,31 @@ export async function fillSoundFromDeezer(albumId: string, fetcher: Fetcher = fe
   const album = row?.artist ? await findDeezerAlbum({ artist: row.artist, title: row.title, barcode: row.barcode }, fetcher) : null;
 
   const statements: D1PreparedStatement[] = [];
-  if (row && album) {
+  if (row) {
     const [theirs, { results: ours }] = await Promise.all([
-      get<{ data: DeezerTrackRow[] }>(`/album/${album.id}/tracks?limit=300`, fetcher),
+      album ? get<{ data: DeezerTrackRow[] }>(`/album/${album.id}/tracks?limit=300`, fetcher) : Promise.resolve(null),
       env.DB.prepare(
-        `SELECT t.disc, t.position, r.id, coalesce(t.title_on_release, r.title) AS title, r.isrc, r.bpm
-         FROM track t JOIN recording r ON r.id = t.recording_id WHERE t.release_id = ?`,
+        `SELECT t.disc, t.position, r.id, coalesce(t.title_on_release, r.title) AS title, r.isrc, r.bpm,
+                (SELECT a.name FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+                 WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary' ORDER BY c.position LIMIT 1) AS artist
+         FROM track t JOIN recording r ON r.id = t.recording_id WHERE t.release_id = ? AND r.deezer_id IS NULL`,
       )
         .bind(row.release_id)
-        .all<{ disc: number; position: number; id: string; title: string; isrc: string | null; bpm: number | null }>(),
+        .all<{ disc: number; position: number; id: string; title: string; isrc: string | null; bpm: number | null; artist: string | null }>(),
     ]);
     for (const track of ours) {
       const title = normaliseTitle(track.title);
-      const match = theirs?.data.find(
-        (d) =>
-          (track.isrc && d.isrc === track.isrc) ||
-          (d.disk_number === track.disc &&
-            d.track_position === track.position &&
-            [d.title, d.title_short].some((t) => t && normaliseTitle(t) === title)),
-      );
+      // On the album's tracklist; else, when Deezer has the album under
+      // another name or not at all, the track itself by ISRC, or by its
+      // artist and title (both must match).
+      const match =
+        theirs?.data.find(
+          (d) =>
+            (track.isrc && d.isrc === track.isrc) ||
+            (d.disk_number === track.disc &&
+              d.track_position === track.position &&
+              [d.title, d.title_short].some((t) => t && normaliseTitle(t) === title)),
+        ) ?? (await findDeezerTrack(track, fetcher));
       if (!match) continue;
       report.matched += 1;
       const detail = track.bpm === null ? await get<DeezerTrackDetail>(`/track/${match.id}`, fetcher) : null;
