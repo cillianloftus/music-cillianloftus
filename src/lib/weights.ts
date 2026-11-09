@@ -60,18 +60,6 @@ export const weightsForm = z
     return weights;
   });
 
-/** The form fields for a set of weights, for prefilling and links. */
-export function weightsToForm(w: Weights): Record<string, string> {
-  return {
-    ...Object.fromEntries(CRAFT_KEYS.map((k) => [k, String(w.craft[k])])),
-    ...Object.fromEntries(ALBUM_KEYS.map((k) => [k, String(w.album[k])])),
-    tracks_share: String(Math.round(w.release.tracks * 100)),
-    trim_lowest: w.release.trim_lowest ? 'on' : '',
-    interlude_share: String(Math.round(w.release.interlude * 100)),
-    length_share: String(Math.round(w.release.length * 100)),
-  };
-}
-
 /** A payload saved before the split: production's weight is shared by its two halves. */
 function legacyCraft(craft: (Partial<Weights['craft']> & { production?: number }) | undefined): Partial<Weights['craft']> {
   if (!craft) return {};

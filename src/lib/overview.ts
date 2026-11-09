@@ -7,7 +7,7 @@
 import { env } from 'cloudflare:workers';
 import { albumScores } from './album-scores';
 import { byLibrary } from './library-cache';
-import { artistLines, releaseGroupsByIds, type CreditPart, type ReleaseGroupSummary } from './catalogue';
+import { artistLines, type CreditPart } from './catalogue';
 
 export interface LibraryStats {
   albums: number;
@@ -33,17 +33,6 @@ export async function libraryStats(userId: string | null): Promise<LibraryStats>
     env.DB.prepare(`SELECT count(*) AS n FROM rating WHERE user_id = ?1`).bind(userId).first<number>('n'),
   ]);
   return { ...size, ratings: ratings ?? 0, ratedAlbums: Object.keys(scores).length };
-}
-
-/** Albums by quality, best first; ties by personal score, then title. */
-export async function topReleaseGroups(userId: string | null, limit = 10): Promise<ReleaseGroupSummary[]> {
-  const ids = Object.entries(await albumScores(userId))
-    .sort(([a, x], [b, y]) => y.quality - x.quality || y.personal - x.personal || a.localeCompare(b))
-    .slice(0, limit)
-    .map(([id]) => id);
-  const albums = await releaseGroupsByIds(ids, userId);
-  const byId = new Map(albums.map((a) => [a.id, a]));
-  return ids.map((id) => byId.get(id)).filter((a): a is ReleaseGroupSummary => a !== undefined);
 }
 
 export interface RecentRating {
