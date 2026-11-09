@@ -274,6 +274,19 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
       <Fragment slot="more">
         <StandingLines lines={standingLines} />
 
+
+        {
+          extras.rating && (
+            <p class="community muted">
+              Rated {extras.rating.value.toFixed(1)} of 5 by {extras.rating.votes} on MusicBrainz
+            </p>
+          )
+        }
+
+        <PageActions listenHref={listenHref} spotifyId={albumSpotifyId} kind="album" editHref={user ? `/edit/album/${album.id}` : null} links={links} />
+
+        <GenreChips genres={genres} />
+
         {
           extras.lists.length > 0 && (
             <div class="lists">
@@ -302,18 +315,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
             </div>
           )
         }
-
-        {
-          extras.rating && (
-            <p class="community muted">
-              Rated {extras.rating.value.toFixed(1)} of 5 by {extras.rating.votes} on MusicBrainz
-            </p>
-          )
-        }
-
-        <PageActions listenHref={listenHref} spotifyId={albumSpotifyId} kind="album" editHref={user ? `/edit/album/${album.id}` : null} links={links} />
-
-        <GenreChips genres={genres} />
 
       </Fragment>
     </EntityHero>

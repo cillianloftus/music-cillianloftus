@@ -56,8 +56,10 @@ export async function albumExtras(albumId: string): Promise<AlbumExtras> {
   };
 }
 
-/** How a place in a list or an award reads: "No. 42", "1998 winner", or nothing. */
+/** How a place in a list or an award reads: "No. 42", "1998 winner", "2011.11.14", or nothing. */
 export function placeIn(list: AlbumList): string | null {
   if (!list.number) return null;
-  return /^\d+$/.test(list.number) && list.type !== 'Release group award' ? `No. ${list.number}` : list.number;
+  // A plain number that is not a year is a place on the list, whatever kind
+  // of series MusicBrainz files it as (some ranked lists are filed as awards).
+  return /^\d{1,3}$/.test(list.number) ? `No. ${list.number}` : list.number;
 }
