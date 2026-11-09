@@ -207,3 +207,18 @@ describe('safety', () => {
     }
   });
 });
+
+describe('fields from Deezer, ListenBrainz and MusicBrainz', () => {
+  it('filters tracks on tempo, version, explicit and listeners, and albums on lists', () => {
+    db.exec(`UPDATE recording SET bpm = 150, explicit = 1, listener_count = 40 WHERE id = 'a1'`);
+    db.exec(`UPDATE recording SET bpm = 90, is_live = 1, listener_count = 90000 WHERE id = 'b1'`);
+    const opts = { collapse_by_work: false };
+    expect(run(tracks({ field: 'bpm', op: 'gte', value: 120 }, opts))).toEqual(['a1']);
+    expect(run(tracks({ field: 'version', op: 'eq', value: 'live' }, opts))).toEqual(['b1']);
+    expect(run(tracks({ field: 'explicit', op: 'eq', value: 'yes' }, opts))).toEqual(['a1']);
+    expect(run(tracks({ field: 'listeners', op: 'lt', value: 1000 }, opts))).toEqual(['a1']);
+    db.exec(`INSERT INTO series (id, mbid, name, type) VALUES ('s1', 'mb-s1', 'A list', 'Release group series')`);
+    db.exec(`INSERT INTO release_group_series (release_group_id, series_id, number) VALUES ('rg-b', 's1', '3')`);
+    expect(run({ entity: 'release_group', where: { field: 'lists', op: 'gte', value: 1 } })).toEqual(['rg-b']);
+  });
+});

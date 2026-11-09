@@ -166,6 +166,25 @@ export const ENTITIES: Record<Entity, EntitySpec> = {
         sortable: true,
       },
       genre: { label: 'Genre', type: 'genre', sortable: false },
+      // From Deezer, ListenBrainz and MusicBrainz (migrations 0054, 0055).
+      bpm: { label: 'Tempo (BPM)', type: 'number', sql: 'e.bpm', sortable: true },
+      explicit: {
+        label: 'Explicit',
+        type: 'enum',
+        sql: `CASE e.explicit WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END`,
+        values: ['yes', 'no'],
+        sortable: false,
+      },
+      version: {
+        label: 'Version',
+        type: 'enum',
+        sql: `CASE WHEN e.is_live = 1 THEN 'live' WHEN e.is_cover = 1 THEN 'cover' WHEN e.is_instrumental = 1 THEN 'instrumental' ELSE 'studio' END`,
+        values: ['studio', 'live', 'cover', 'instrumental'],
+        sortable: false,
+      },
+      listeners: { label: 'Listeners (ListenBrainz)', type: 'number', sql: 'e.listener_count', sortable: true },
+      listens: { label: 'Listens (ListenBrainz)', type: 'number', sql: 'e.listen_count', sortable: true },
+      community_rating: { label: 'MusicBrainz rating (0–5)', type: 'number', sql: 'e.mb_rating', sortable: true },
       ...CREDIT_FIELDS,
     },
     groups: {
@@ -243,6 +262,21 @@ export const ENTITIES: Record<Entity, EntitySpec> = {
         sortable: true,
       },
       genre: { label: 'Genre', type: 'genre', sortable: false },
+      // From MusicBrainz's second look (migration 0055).
+      community_rating: { label: 'MusicBrainz rating (0–5)', type: 'number', sql: 'e.mb_rating', sortable: true },
+      lists: {
+        label: 'Critics’ lists and awards',
+        type: 'number',
+        sql: '(SELECT count(*) FROM release_group_series x WHERE x.release_group_id = e.id)',
+        sortable: true,
+      },
+      label: {
+        label: 'Label',
+        type: 'text',
+        sql: `(SELECT group_concat(l.name, ', ') FROM release r JOIN release_label rl ON rl.release_id = r.id JOIN label l ON l.id = rl.label_id
+               WHERE r.release_group_id = e.id)`,
+        sortable: true,
+      },
       ...CREDIT_FIELDS,
     },
     groups: {
