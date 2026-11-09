@@ -11,6 +11,7 @@
  */
 
 import type { CreditRole } from '../import/plan';
+import { recordingsInGenres } from '../genres';
 
 export type Entity = 'recording' | 'release_group' | 'artist';
 
@@ -62,12 +63,22 @@ export interface EntitySpec {
   label: string;
   /** FROM clause and joins. The entity's row alias is `e`. */
   from: string;
+  /**
+   * The same without joins that only add columns (at most one row each),
+   * used when nothing in the query names them: `aliases` are the ones it
+   * leaves out.
+   */
+  lean?: { from: string; aliases: string[] };
   /** Predicate on artist_credit `c` matching credits on this entity itself. */
   ownCredit?: string;
   /** As ownCredit, but also its editions and the recordings on its standard edition. */
   deepCredit?: string;
-  /** Predicate on a genre view matching this entity; `{genres}` is the genre id set. */
-  genre?: string;
+  /**
+   * Predicate matching this entity to a set of genres. `genres()` returns
+   * SQL for the genre ids, adding its parameters each time it is called, so
+   * a predicate may use the set more than once.
+   */
+  genre?: (genres: () => string) => string;
   /** Expression for a recording's work, enabling collapse_by_work. */
   work?: string;
   fields: Record<string, Field>;
@@ -107,9 +118,18 @@ export const ENTITIES: Record<Entity, EntitySpec> = {
       LEFT JOIN v_recording_score s ON s.recording_id = e.id AND s.user_id = ${USER}
       LEFT JOIN v_recording_album ra ON ra.recording_id = e.id
       LEFT JOIN release_group ag ON ag.id = ra.release_group_id`,
+    // Each track's album is a lookup per track (8 rows or so): over the
+    // whole library that was most of a query that never showed an album.
+    lean: {
+      from: `
+      FROM recording e
+      LEFT JOIN v_recording_score s ON s.recording_id = e.id AND s.user_id = ${USER}`,
+      aliases: ['ra', 'ag'],
+    },
     ownCredit: `c.entity_type = 'recording' AND c.entity_id = e.id`,
     deepCredit: `c.entity_type = 'recording' AND c.entity_id = e.id`,
-    genre: `EXISTS (SELECT 1 FROM v_recording_genre vg WHERE vg.recording_id = e.id AND vg.genre_id IN ({genres}))`,
+    // The genre's tracks once, not the genre view per track (see recordingsInGenres).
+    genre: (genres) => `e.id IN (${recordingsInGenres(genres)})`,
     work: 'e.work_id',
     fields: {
       title: { label: 'Title', type: 'text', sql: 'e.title', sortable: true },
@@ -168,7 +188,7 @@ export const ENTITIES: Record<Entity, EntitySpec> = {
             SELECT t.recording_id FROM track t
             JOIN v_release_group_canonical cc ON cc.release_id = t.release_id
             WHERE cc.release_group_id = e.id)))`,
-    genre: `EXISTS (SELECT 1 FROM v_release_group_genre vg WHERE vg.release_group_id = e.id AND vg.genre_id IN ({genres}))`,
+    genre: (genres) => `EXISTS (SELECT 1 FROM v_release_group_genre vg WHERE vg.release_group_id = e.id AND vg.genre_id IN (${genres()}))`,
     fields: {
       title: { label: 'Title', type: 'text', sql: 'e.title', sortable: true },
       artist: {

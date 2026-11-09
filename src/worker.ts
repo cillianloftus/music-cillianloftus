@@ -81,6 +81,11 @@ export default {
             ['Release details from Discogs', () => fillAlbumsFromDiscogs({ budgetMs: 25_000 })],
             // Listens of tracks imported since they were heard join their recordings.
             ['Listens matched to the catalogue', async () => rematchListens(await catalogueIndex())],
+            // Planner statistics kept current as the library grows. Without
+            // them SQLite guessed, and walked an artist's credits through an
+            // index on entity_type (62,000 rows for 2,000). Only tables whose
+            // statistics have drifted are looked at again.
+            ['Planner statistics', async () => void (await env.DB.exec('PRAGMA optimize'))],
           ] as const) {
             try {
               await task();

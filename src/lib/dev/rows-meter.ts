@@ -15,7 +15,7 @@
 type Entry = { rows: number; sql: string };
 let log: Entry[] = [];
 
-const targets = new WeakMap<object, D1PreparedStatement>();
+const targets = new WeakMap<object, { statement: D1PreparedStatement; sql: string }>();
 
 function record(meta: { rows_read?: number } | undefined, sql: string): void {
   log.push({ rows: meta?.rows_read ?? 0, sql });
@@ -44,7 +44,7 @@ function wrap(statement: D1PreparedStatement, sql: string): D1PreparedStatement 
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  targets.set(proxy, statement);
+  targets.set(proxy, { statement, sql });
   return proxy;
 }
 
@@ -56,15 +56,10 @@ export function meterRows(db: D1Database): void {
   installed = true;
   const prepare = db.prepare.bind(db);
   const batch = db.batch.bind(db);
-  const sqlOf = new WeakMap<object, string>();
-  db.prepare = (sql: string) => {
-    const statement = wrap(prepare(sql), sql);
-    sqlOf.set(statement, sql);
-    return statement;
-  };
+  db.prepare = (sql: string) => wrap(prepare(sql), sql);
   db.batch = async <T = unknown>(statements: D1PreparedStatement[]) => {
-    const results = await batch<T>(statements.map((s) => targets.get(s) ?? s));
-    results.forEach((result, i) => record(result.meta, sqlOf.get(statements[i]!) ?? '(batch)'));
+    const results = await batch<T>(statements.map((s) => targets.get(s)?.statement ?? s));
+    results.forEach((result, i) => record(result.meta, `(batch) ${targets.get(statements[i]!)?.sql ?? ''}`));
     return results;
   };
 }

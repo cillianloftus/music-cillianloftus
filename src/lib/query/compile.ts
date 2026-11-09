@@ -115,15 +115,15 @@ function creditCondition(spec: EntitySpec, field: Field, op: Condition['op'], va
 }
 
 function genreCondition(spec: EntitySpec, op: Condition['op'], value: unknown, p: Params): string {
-  let genres: string;
-  if (op === 'in_tree') genres = GENRE_TREE(p, value);
-  else if (op === 'eq') genres = GENRE_BY_NAME(p, value);
-  else {
+  // Built afresh at each use, so each use adds its own parameters in place.
+  const genres = (): string => {
+    if (op === 'in_tree') return GENRE_TREE(p, value);
+    if (op === 'eq') return GENRE_BY_NAME(p, value);
     const names = JSON.stringify(value);
-    genres = `SELECT id FROM genre WHERE lower(name) IN (SELECT lower(value) FROM json_each(${p.add(names)}))
+    return `SELECT id FROM genre WHERE lower(name) IN (SELECT lower(value) FROM json_each(${p.add(names)}))
       UNION SELECT genre_id FROM genre_alias WHERE lower(name) IN (SELECT lower(value) FROM json_each(${p.add(names)}))`;
-  }
-  return spec.genre!.replace('{genres}', genres);
+  };
+  return spec.genre!(genres);
 }
 
 function compileCondition(spec: EntitySpec, condition: Condition, p: Params): string {
@@ -202,9 +202,13 @@ export function compile(definition: Definition, options: CompileOptions): Compil
     filter = `${filter} AND e.id NOT IN ${listParam(options.excludes, p)}`;
   }
 
+  // Joins that only add columns are left out when nothing here names them.
+  const named = `${columns.join(' ')} ${filter}`;
+  const from =
+    spec.lean && !spec.lean.aliases.some((alias) => new RegExp(`\\b${alias}\\.`).test(named)) ? spec.lean.from : spec.from;
   const ctes = [
     `params AS (SELECT ${userParam} AS user_id)`,
-    `base AS (SELECT ${columns.join(', ')} ${spec.from} WHERE ${filter})`,
+    `base AS (SELECT ${columns.join(', ')} ${from} WHERE ${filter})`,
   ];
 
   let source = 'base';

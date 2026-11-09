@@ -7,6 +7,8 @@
 import { EVIDENCE } from './roster';
 import { env } from 'cloudflare:workers';
 import { artistLines, releaseGroupsByIds, type CreditPart, type ReleaseGroupSummary } from './catalogue';
+import { recordingsInGenres, trackCountsByGenre } from './genres';
+import { byLibrary } from './library-cache';
 import type { CreditRole } from './import/plan';
 
 export interface TrackDetail {
@@ -159,7 +161,7 @@ const treeOf = (deep: boolean) =>
 export async function genreDetail(id: string, deep = false): Promise<GenreDetail | null> {
   const genre = await env.DB.prepare(`SELECT id, name FROM genre WHERE id = ?`).bind(id).first<{ id: string; name: string }>();
   if (!genre) return null;
-  const [ancestors, children, counts, parents] = await env.DB.batch([
+  const [ancestors, children, parents] = await env.DB.batch([
     env.DB.prepare(
       `WITH RECURSIVE up(id, name, parent_id, depth) AS (
          SELECT g.id, g.name, g.parent_id, 0 FROM genre g WHERE g.id = (SELECT parent_id FROM genre WHERE id = ?1)
@@ -168,38 +170,41 @@ export async function genreDetail(id: string, deep = false): Promise<GenreDetail
        )
        SELECT id, name FROM up ORDER BY depth DESC`,
     ).bind(id),
-    env.DB.prepare(
-      `SELECT g.id, g.name, (SELECT count(DISTINCT vg.recording_id) FROM v_recording_genre vg WHERE vg.genre_id = g.id) AS tracks
-       FROM v_genre_edge e JOIN genre g ON g.id = e.genre_id WHERE e.parent_id = ? ORDER BY tracks DESC, g.name`,
-    ).bind(id),
-    env.DB.prepare(
-      `${treeOf(deep)}
-       SELECT (SELECT count(DISTINCT recording_id) FROM v_recording_genre WHERE genre_id IN (SELECT id FROM tree)) AS tracks,
-              (SELECT count(DISTINCT release_group_id) FROM v_release_group_genre WHERE genre_id IN (SELECT id FROM tree)) AS albums,
-              (WITH RECURSIVE below(id) AS (SELECT ?1 UNION SELECT e.genre_id FROM v_genre_edge e JOIN below ON e.parent_id = below.id)
-               SELECT count(DISTINCT recording_id) FROM v_recording_genre WHERE genre_id IN (SELECT id FROM below)) AS tracksBeneath,
-              (SELECT count(DISTINCT recording_id) FROM v_recording_genre WHERE genre_id = ?1) AS tracksDirect`,
-    ).bind(id),
+    env.DB.prepare(`SELECT g.id, g.name FROM v_genre_edge e JOIN genre g ON g.id = e.genre_id WHERE e.parent_id = ?`).bind(id),
     env.DB.prepare(
       `SELECT g.id, g.name, e.is_primary AS "primary" FROM v_genre_edge e JOIN genre g ON g.id = e.parent_id
        WHERE e.genre_id = ? ORDER BY e.is_primary DESC, g.name`,
     ).bind(id),
   ]);
-  const count = (counts!.results[0] ?? { tracks: 0, albums: 0, tracksBeneath: 0, tracksDirect: 0 }) as {
-    tracks: number;
-    albums: number;
-    tracksBeneath: number;
-    tracksDirect: number;
-  };
+  // How much is in it: the library's, not anyone's ratings, so kept until it
+  // changes. Counted afresh, a big genre's subtree read about 180,000 rows.
+  const [count, trackCounts] = await Promise.all([
+    byLibrary(`genre-counts:v1:${id}:${deep ? 'deep' : 'own'}`, null, async () => {
+      const row = await env.DB.prepare(
+        `${treeOf(deep)}
+         SELECT (SELECT count(*) FROM (${recordingsInGenres('SELECT id FROM tree')})) AS tracks,
+                (SELECT count(DISTINCT release_group_id) FROM v_release_group_genre WHERE genre_id IN (SELECT id FROM tree)) AS albums,
+                (WITH RECURSIVE below(id) AS (SELECT ?1 UNION SELECT e.genre_id FROM v_genre_edge e JOIN below ON e.parent_id = below.id)
+                 SELECT count(*) FROM (${recordingsInGenres('SELECT id FROM below')})) AS tracksBeneath`,
+      )
+        .bind(id)
+        .first<{ tracks: number; albums: number; tracksBeneath: number }>();
+      return row ?? { tracks: 0, albums: 0, tracksBeneath: 0 };
+    }),
+    trackCountsByGenre(),
+  ]);
+  const childRows = (children!.results as { id: string; name: string }[])
+    .map((c) => ({ ...c, tracks: trackCounts[c.id] ?? 0 }))
+    .sort((a, b) => b.tracks - a.tracks || a.name.localeCompare(b.name));
   return {
     ...genre,
     ancestors: ancestors!.results as { id: string; name: string }[],
-    children: children!.results as GenreDetail['children'],
+    children: childRows,
     parents: (parents!.results as { id: string; name: string; primary: number }[]).map((p) => ({ ...p, primary: p.primary === 1 })),
     tracks: count.tracks,
     albums: count.albums,
     tracksBeneath: count.tracksBeneath,
-    tracksDirect: count.tracksDirect,
+    tracksDirect: trackCounts[id] ?? 0,
   };
 }
 
@@ -226,10 +231,9 @@ export async function genreAlbums(id: string, viewerId: string | null, limit = 2
 export async function genreTopTracks(id: string, viewerId: string | null, limit = 10, deep = false): Promise<string[]> {
   const { results } = await env.DB.prepare(
     `${treeOf(deep)}
-     SELECT DISTINCT vg.recording_id AS id, s.personal_score
-     FROM v_recording_genre vg
-     JOIN v_recording_score s ON s.recording_id = vg.recording_id AND s.user_id = ?2
-     WHERE vg.genre_id IN (SELECT id FROM tree)
+     SELECT s.recording_id AS id, s.personal_score
+     FROM v_recording_score s
+     WHERE s.user_id = ?2 AND s.recording_id IN (${recordingsInGenres('SELECT id FROM tree')})
      ORDER BY s.personal_score DESC
      LIMIT ?3`,
   )
@@ -255,7 +259,7 @@ export interface GenreArtist {
 export async function genreArtists(id: string, viewerId: string | null, limit = 8, deep = false): Promise<GenreArtist[]> {
   const { results } = await env.DB.prepare(
     `${treeOf(deep)},
-     tracks AS (SELECT DISTINCT vg.recording_id FROM v_recording_genre vg WHERE vg.genre_id IN (SELECT id FROM tree)),
+     tracks AS (${recordingsInGenres('SELECT id FROM tree')}),
      rated AS (
        SELECT t.recording_id, s.quality_score FROM tracks t
        JOIN v_recording_score s ON s.recording_id = t.recording_id AND s.user_id = ?2

@@ -6,6 +6,7 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { byLibrary } from './library-cache';
 
 export interface GenreRow {
   id: string;
@@ -32,37 +33,82 @@ export interface GenreTreeNode {
   children: GenreTreeNode[];
 }
 
+/**
+ * SQL for the distinct recordings in any of a set of genres, as
+ * v_recording_genre has them: a track's own tags (manual ones winning),
+ * else its albums'. `genres` is SQL for the genre ids (a subquery, or a
+ * list), or a function giving it, called once per use in the order the
+ * uses appear (for positional parameters). Written out because SQLite
+ * pushes `genre_id = ?` into the view but not `genre_id IN (SELECT …)`:
+ * through the view, rock's tracks cost 88,000 rows (the whole view), and
+ * this way 4,600.
+ */
+export function recordingsInGenres(genres: string | (() => string)): string {
+  const set = typeof genres === 'string' ? () => genres : genres;
+  const own = set();
+  const inherited = set();
+  return `SELECT t.entity_id AS recording_id FROM genre_tag t
+          WHERE t.entity_type = 'recording' AND t.genre_id IN (${own})
+            AND (t.source = 'manual'
+                 OR NOT EXISTS (SELECT 1 FROM genre_tag m
+                                WHERE m.entity_type = 'recording' AND m.entity_id = t.entity_id AND m.source = 'manual'))
+          UNION
+          SELECT tr.recording_id FROM v_release_group_genre rg
+          JOIN release r ON r.release_group_id = rg.release_group_id
+          JOIN track tr ON tr.release_id = r.id
+          WHERE rg.genre_id IN (${inherited})
+            AND NOT EXISTS (SELECT 1 FROM genre_tag own WHERE own.entity_type = 'recording' AND own.entity_id = tr.recording_id)`;
+}
+
+/**
+ * Distinct tracks tagged with each genre (v_recording_genre), by genre id.
+ * One pass over the library (about 108,000 rows), kept until the library
+ * changes: counted per genre, one genre cost 4,300 rows, and the genre map
+ * and a big genre's page counted dozens. Ratings do not move it.
+ */
+export async function trackCountsByGenre(): Promise<Record<string, number>> {
+  return byLibrary('genre-track-counts:v1', null, async () => {
+    const { results } = await env.DB.prepare(
+      `SELECT genre_id, count(DISTINCT recording_id) AS n FROM v_recording_genre GROUP BY genre_id`,
+    ).all<{ genre_id: string; n: number }>();
+    return Object.fromEntries(results.map((r) => [r.genre_id, r.n]));
+  });
+}
+
 export async function genreRows(): Promise<GenreRow[]> {
-  const { results } = await env.DB.prepare(
-    `SELECT g.id, g.name, g.parent_id,
-            (SELECT json_group_array(p.parent_id) FROM genre_extra_parent p WHERE p.genre_id = g.id) AS also,
-            (SELECT count(DISTINCT vg.recording_id) FROM v_recording_genre vg WHERE vg.genre_id = g.id) AS tracks
-     FROM genre g
-     ORDER BY g.name`,
-  ).all<Omit<GenreRow, 'also'> & { also: string }>();
-  return results.map((r) => ({ ...r, also: JSON.parse(r.also ?? '[]') as string[] }));
+  const [{ results }, counts] = await Promise.all([
+    env.DB.prepare(
+      `SELECT g.id, g.name, g.parent_id,
+              (SELECT json_group_array(p.parent_id) FROM genre_extra_parent p WHERE p.genre_id = g.id) AS also
+       FROM genre g
+       ORDER BY g.name`,
+    ).all<Omit<GenreRow, 'also' | 'tracks'> & { also: string }>(),
+    trackCountsByGenre(),
+  ]);
+  return results.map((r) => ({ ...r, also: JSON.parse(r.also ?? '[]') as string[], tracks: counts[r.id] ?? 0 }));
 }
 
 /**
  * Everything beneath one genre, on its primary parents only, counted the
- * same way as genreRows: its subgenres' map on the genre's page, without
- * counting the whole library.
+ * same way as genreRows: its subgenres' map on the genre's page.
  */
 export async function genreSubtreeRows(id: string): Promise<GenreRow[]> {
-  const { results } = await env.DB.prepare(
-    `WITH RECURSIVE below(id) AS (
-       SELECT id FROM genre WHERE parent_id = ?1
-       UNION SELECT g.id FROM genre g JOIN below b ON g.parent_id = b.id
-     )
-     SELECT g.id, g.name, g.parent_id,
-            (SELECT count(DISTINCT vg.recording_id) FROM v_recording_genre vg WHERE vg.genre_id = g.id) AS tracks
-     FROM genre g WHERE g.id IN (SELECT id FROM below)
-     ORDER BY g.name`,
-  )
-    .bind(id)
-    .all<Omit<GenreRow, 'also'>>();
+  const [{ results }, counts] = await Promise.all([
+    env.DB.prepare(
+      `WITH RECURSIVE below(id) AS (
+         SELECT id FROM genre WHERE parent_id = ?1
+         UNION SELECT g.id FROM genre g JOIN below b ON g.parent_id = b.id
+       )
+       SELECT g.id, g.name, g.parent_id
+       FROM genre g WHERE g.id IN (SELECT id FROM below)
+       ORDER BY g.name`,
+    )
+      .bind(id)
+      .all<Omit<GenreRow, 'also' | 'tracks'>>(),
+    trackCountsByGenre(),
+  ]);
   // The genre itself is not among them, so its children are the roots.
-  return results.map((r) => ({ ...r, also: [] }));
+  return results.map((r) => ({ ...r, also: [], tracks: counts[r.id] ?? 0 }));
 }
 
 /**
