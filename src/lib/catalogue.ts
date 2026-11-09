@@ -389,7 +389,7 @@ export function favouriteScore(rating: number | null, plays: number, mostPlays: 
 export const TRACKS_PER_PAGE = 10;
 
 type RankedTrack = Pick<ArtistTrack, 'id' | 'title' | 'quality_score' | 'personal_score' | 'plays'>;
-type TrackPlace = Pick<ArtistTrack, 'album_id' | 'album_title' | 'art_key'>;
+export type TrackPlace = Pick<ArtistTrack, 'album_id' | 'album_title' | 'art_key'>;
 
 /**
  * An artist's favourite recordings, as primary artist: rated highly,
@@ -410,7 +410,7 @@ export async function artistTracks(
   const ranked = await byLibrary(`artist-ranking:v1:${artistId}`, viewerId, () => rankArtistTracks(artistId, viewerId));
   const stretch = ranked.slice(from, from + limit);
   if (stretch.length === 0) return { tracks: [], total: ranked.length };
-  const places = await byLibraryMap<TrackPlace>('track-place:v1', null, stretch.map((t) => t.id), placeTracks);
+  const places = await trackPlaces(stretch.map((t) => t.id));
   return {
     tracks: stretch.map((t) => ({ ...t, album_id: null, album_title: null, art_key: null, ...places[t.id] })),
     total: ranked.length,
@@ -435,6 +435,15 @@ async function rankArtistTracks(artistId: string, viewerId: string | null): Prom
     .map((t) => ({ t, favour: favouriteScore(t.personal_score, t.plays, most) }))
     .sort((a, b) => b.favour - a.favour || (b.t.quality_score ?? 0) - (a.t.quality_score ?? 0) || a.t.title.localeCompare(b.t.title))
     .map(({ t }) => t);
+}
+
+/**
+ * Where each of some recordings sits (its album, and the cover it first
+ * came out under), kept per library state and grown a track at a time:
+ * for any list of tracks that shows their covers.
+ */
+export function trackPlaces(ids: string[]): Promise<Record<string, TrackPlace | null>> {
+  return byLibraryMap<TrackPlace>('track-place:v1', null, ids, placeTracks);
 }
 
 /** Where each recording sits: its album, and the cover it first came out under. */

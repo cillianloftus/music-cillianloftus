@@ -17,6 +17,10 @@ import Findings from '../components/Findings.astro';
 import { byLibrary } from '../lib/library-cache';
 import { changedMinds } from '../lib/minds';
 import { scoreTone } from '../lib/format';
+import { FEW_LISTENERS, hiddenGems, medianListeners, tempoBands } from '../lib/insights-crowd';
+import { trackPlaces } from '../lib/catalogue';
+import MediaRow from '../components/MediaRow.astro';
+import RowList from '../components/RowList.astro';
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
 // Kept per library state: every chart here reads the whole library.
 const [data, deep, facts, minds] = viewerId
@@ -54,6 +58,13 @@ const tells = (bands: Band[] | undefined) => {
   return Math.max(...averages) - Math.min(...averages) >= 3;
 };
 const sweetSpot = deep ? lead(deep.length) : null;
+// From each track's tempo and its listeners on ListenBrainz (migration 0054).
+const tempo = tempoBands(facts);
+const tempoLead = lead(tempo);
+const gems = hiddenGems(facts);
+const gemPlaces = gems.length ? await trackPlaces(gems.map((g) => g.id)) : {};
+const crowd = medianListeners(facts);
+const compactNumber = new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 });
 const placeLead = deep ? lead(deep.position) : null;
 const ageLead = deep ? lead(deep.ageByYear) : null;
 const solo = deep?.features.find((b) => b.key === '0');
@@ -223,6 +234,43 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
                 </p>
               )}
               <BarChart title="Average track score by length" min={floorOf(deep.length.map((b) => b.average))} valueLabel="Average score" max={100} bars={bandBars(deep.length)} />
+            </section>
+          )}
+
+          {tells(tempo) && (
+            <section aria-labelledby="tempo-heading" class="finding">
+              <h2 id="tempo-heading">Tempo</h2>
+              {tempoLead && (
+                <p class="lead-line">
+                  Your sweet spot is <strong>{tempoLead.best.label.replace(/^Under/, 'under')}</strong>: an average of {Math.round(tempoLead.best.average)}
+                  {tempoLead.margin > 0 && <>, {tempoLead.margin} {tempoLead.margin === 1 ? 'point' : 'points'} above everything else</>}.
+                </p>
+              )}
+              <BarChart title="Average track score by tempo" min={floorOf(tempo.map((b) => b.average))} valueLabel="Average score" max={100} bars={bandBars(tempo)} />
+            </section>
+          )}
+
+          {gems.length >= 3 && (
+            <section aria-labelledby="gems-heading" class="finding">
+              <h2 id="gems-heading">Hidden gems</h2>
+              <p class="lead-line">
+                Your best-rated tracks that fewer than {FEW_LISTENERS.toLocaleString('en-GB')} people listen to on ListenBrainz
+                {crowd && <>; the middle track you rate has {compactNumber.format(crowd.median)} listeners there</>}.
+              </p>
+              <RowList>
+                {gems.map((g) => {
+                  const place = gemPlaces[g.id];
+                  const artist = g.credits.filter((c) => c.role === 'primary').map((c) => c.name).join(', ');
+                  return (
+                    <MediaRow href={`/track/${g.id}`} title={g.title} artKey={place?.art_key ?? null} artTitle={place?.album_title ?? g.title} score={{ quality: g.score, personal: null }}>
+                      <span>
+                        {artist}
+                        {g.listeners !== null && ` · ${g.listeners.toLocaleString('en-GB')} ${g.listeners === 1 ? 'listener' : 'listeners'}`}
+                      </span>
+                    </MediaRow>
+                  );
+                })}
+              </RowList>
             </section>
           )}
 
