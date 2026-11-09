@@ -199,9 +199,14 @@ const meta = (a: RosterArtist) =>
     color: var(--text);
   }
 
+  /* A thousand artists: groups off screen are not laid out or painted
+     until they come near (the size stands in meanwhile, so the scrollbar
+     and jumps to a letter still land right). */
   .group {
     display: grid;
     gap: var(--space-3);
+    content-visibility: auto;
+    contain-intrinsic-size: auto 900px;
   }
 
   .letter {
