@@ -487,64 +487,125 @@ export async function wikidataParents(names: string[]): Promise<Map<string, stri
 export const DERIVE_THRESHOLD = 0.4;
 
 /**
- * Album genres from track genres (ARCHITECTURE.md §3, "Genre"). Recomputed
- * from scratch: every derived album tag is replaced in one transaction,
- * from the tracks of each album's standard edition and their own tags
- * (manual or imported, never derived). Manual and imported album tags are
- * never touched. The weight is the share of tracks, which orders them.
- * An album left with no genres then takes its tracks' genres from the
- * other albums they appear on.
- * Returns how many derived tags now exist.
+ * Album genres from track genres (ARCHITECTURE.md §3, "Genre"): from the
+ * tracks of each album's standard edition and their own tags (manual or
+ * imported, never derived). Manual and imported album tags are never
+ * touched. The weight is the share of tracks, which orders them. An album
+ * left with no genres then takes its tracks' genres from the other albums
+ * they appear on. Returns how many derived tags now exist.
+ *
+ * Worked out here from four plain reads, and only what changed is
+ * written. In SQL it read about 190,000 rows, and deleting every derived
+ * tag to write them again moved the library's cache stamp each time, so
+ * every page was worked out afresh after a run that changed nothing.
  */
 export async function deriveAlbumGenres(threshold = DERIVE_THRESHOLD): Promise<number> {
-  await env.DB.batch([
-    env.DB.prepare(`DELETE FROM genre_tag WHERE entity_type = 'release_group' AND source = 'derived'`),
-    env.DB.prepare(
-      `INSERT INTO genre_tag (entity_type, entity_id, genre_id, source, weight)
-       WITH canon AS (
-         SELECT DISTINCT c.release_group_id, t.recording_id
-         FROM v_release_group_canonical c JOIN track t ON t.release_id = c.release_id
-       ),
-       sizes AS (SELECT release_group_id, count(*) AS n FROM canon GROUP BY release_group_id),
-       tagged AS (
-         SELECT canon.release_group_id, gt.genre_id, count(DISTINCT canon.recording_id) AS k
-         FROM canon
-         JOIN genre_tag gt ON gt.entity_type = 'recording' AND gt.entity_id = canon.recording_id AND gt.source <> 'derived'
-         GROUP BY canon.release_group_id, gt.genre_id
-       )
-       SELECT 'release_group', tagged.release_group_id, tagged.genre_id, 'derived', round(1.0 * k / n, 3)
-       FROM tagged JOIN sizes ON sizes.release_group_id = tagged.release_group_id
-       WHERE 1.0 * k / n >= ?1`,
-    ).bind(threshold),
-    // An album still with no genres at all (a single, typically) takes them
-    // from its tracks as they stand anywhere else: the "All Day" single is
-    // pop rap because "All Day" is, on the album it also appears on.
-    env.DB.prepare(
-      `INSERT INTO genre_tag (entity_type, entity_id, genre_id, source, weight)
-       WITH canon AS (
-         SELECT DISTINCT c.release_group_id, t.recording_id
-         FROM v_release_group_canonical c JOIN track t ON t.release_id = c.release_id
-       ),
-       sizes AS (SELECT release_group_id, count(*) AS n FROM canon GROUP BY release_group_id),
-       bare AS (
-         SELECT release_group_id FROM sizes
-         WHERE NOT EXISTS (SELECT 1 FROM genre_tag g WHERE g.entity_type = 'release_group' AND g.entity_id = sizes.release_group_id)
-       ),
-       elsewhere AS (
-         SELECT canon.release_group_id, canon.recording_id, rg.genre_id
-         FROM canon
-         JOIN track t2 ON t2.recording_id = canon.recording_id
-         JOIN release r2 ON r2.id = t2.release_id AND r2.release_group_id <> canon.release_group_id
-         JOIN v_release_group_genre rg ON rg.release_group_id = r2.release_group_id
-         WHERE canon.release_group_id IN (SELECT release_group_id FROM bare)
-       ),
-       tagged AS (
-         SELECT release_group_id, genre_id, count(DISTINCT recording_id) AS k FROM elsewhere GROUP BY release_group_id, genre_id
-       )
-       SELECT 'release_group', tagged.release_group_id, tagged.genre_id, 'derived', round(1.0 * k / n, 3)
-       FROM tagged JOIN sizes ON sizes.release_group_id = tagged.release_group_id
-       WHERE 1.0 * k / n >= ?1`,
-    ).bind(threshold),
+  const [canonRows, trackRows, recordingTags, albumTags] = await env.DB.batch([
+    env.DB.prepare(`SELECT release_group_id AS a, release_id AS x FROM v_release_group_canonical`),
+    env.DB.prepare(`SELECT t.release_id AS x, t.recording_id AS r, rl.release_group_id AS a FROM track t JOIN release rl ON rl.id = t.release_id`),
+    env.DB.prepare(`SELECT entity_id AS r, genre_id AS g FROM genre_tag WHERE entity_type = 'recording' AND source <> 'derived'`),
+    env.DB.prepare(`SELECT entity_id AS a, genre_id AS g, source, weight FROM genre_tag WHERE entity_type = 'release_group'`),
   ]);
-  return (await env.DB.prepare(`SELECT count(*) AS n FROM genre_tag WHERE source = 'derived'`).first<number>('n')) ?? 0;
+  const want = derivedAlbumGenres(
+    canonRows!.results as { a: string; x: string }[],
+    trackRows!.results as { x: string; r: string; a: string }[],
+    recordingTags!.results as { r: string; g: string }[],
+    (albumTags!.results as { a: string; g: string; source: string; weight: number }[]).filter((t) => t.source !== 'derived'),
+    threshold,
+  );
+  const have = new Map(
+    (albumTags!.results as { a: string; g: string; source: string; weight: number }[])
+      .filter((t) => t.source === 'derived')
+      .map((t) => [`${t.a} ${t.g}`, t.weight]),
+  );
+  const gone = [...have.keys()].filter((k) => !want.has(k)).map((k) => k.split(' '));
+  const changed = [...want].filter(([k, w]) => have.get(k) !== w).map(([k, w]) => [...k.split(' '), w] as const);
+  const statements: D1PreparedStatement[] = [];
+  for (let i = 0; i < gone.length; i += 200) {
+    statements.push(
+      env.DB.prepare(
+        `DELETE FROM genre_tag WHERE entity_type = 'release_group' AND source = 'derived'
+           AND (entity_id, genre_id) IN (SELECT j.value ->> 0, j.value ->> 1 FROM json_each(?1) j)`,
+      ).bind(JSON.stringify(gone.slice(i, i + 200))),
+    );
+  }
+  for (let i = 0; i < changed.length; i += 200) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO genre_tag (entity_type, entity_id, genre_id, source, weight)
+         SELECT 'release_group', j.value ->> 0, j.value ->> 1, 'derived', j.value ->> 2 FROM json_each(?1) j WHERE true
+         ON CONFLICT (entity_type, entity_id, genre_id, source) DO UPDATE SET weight = excluded.weight`,
+      ).bind(JSON.stringify(changed.slice(i, i + 200))),
+    );
+  }
+  if (statements.length > 0) await env.DB.batch(statements);
+  return want.size;
+}
+
+/**
+ * The derived album tags, by "album genre", with their weights. Pure.
+ * `albumTags` are the albums' own (non-derived) tags.
+ */
+export function derivedAlbumGenres(
+  canon: { a: string; x: string }[],
+  tracks: { x: string; r: string; a: string }[],
+  recordingTags: { r: string; g: string }[],
+  albumTags: { a: string; g: string; source: string }[],
+  threshold: number,
+): Map<string, number> {
+  const round = (n: number) => Math.round(n * 1000) / 1000;
+  const standardOf = new Map(canon.map((c) => [c.a, c.x]));
+  const onRelease = new Map<string, Set<string>>();
+  const albumsOf = new Map<string, Set<string>>();
+  for (const t of tracks) {
+    (onRelease.get(t.x) ?? onRelease.set(t.x, new Set()).get(t.x)!).add(t.r);
+    (albumsOf.get(t.r) ?? albumsOf.set(t.r, new Set()).get(t.r)!).add(t.a);
+  }
+  const tagsOf = new Map<string, Set<string>>();
+  for (const t of recordingTags) (tagsOf.get(t.r) ?? tagsOf.set(t.r, new Set()).get(t.r)!).add(t.g);
+
+  // Each album's standard edition's tracks.
+  const canonTracks = new Map<string, Set<string>>();
+  for (const [a, x] of standardOf) {
+    const set = onRelease.get(x);
+    if (set && set.size > 0) canonTracks.set(a, set);
+  }
+
+  // From its own tracks' tags.
+  const out = new Map<string, number>();
+  for (const [a, rs] of canonTracks) {
+    const k = new Map<string, number>();
+    for (const r of rs) for (const g of tagsOf.get(r) ?? []) k.set(g, (k.get(g) ?? 0) + 1);
+    for (const [g, n] of k) if (n / rs.size >= threshold) out.set(`${a} ${g}`, round(n / rs.size));
+  }
+
+  // Albums' genres as v_release_group_genre has them, the derived ones included.
+  const own = new Map<string, { manual: Set<string>; other: Set<string> }>();
+  const note = (a: string, g: string, manual: boolean) => {
+    const e = own.get(a) ?? own.set(a, { manual: new Set(), other: new Set() }).get(a)!;
+    (manual ? e.manual : e.other).add(g);
+  };
+  for (const t of albumTags) note(t.a, t.g, t.source === 'manual');
+  for (const k of out.keys()) {
+    const [a, g] = k.split(' ');
+    note(a!, g!, false);
+  }
+  const genresOfAlbum = (a: string): Set<string> => {
+    const e = own.get(a);
+    if (!e) return new Set();
+    return e.manual.size > 0 ? e.manual : new Set([...e.other]);
+  };
+
+  // An album with no genres at all takes its tracks' genres from the other albums they are on.
+  for (const [a, rs] of canonTracks) {
+    if (own.has(a)) continue;
+    const k = new Map<string, number>();
+    for (const r of rs) {
+      const found = new Set<string>();
+      for (const other of albumsOf.get(r) ?? []) if (other !== a) for (const g of genresOfAlbum(other)) found.add(g);
+      for (const g of found) k.set(g, (k.get(g) ?? 0) + 1);
+    }
+    for (const [g, n] of k) if (n / rs.size >= threshold) out.set(`${a} ${g}`, round(n / rs.size));
+  }
+  return out;
 }

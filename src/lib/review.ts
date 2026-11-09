@@ -98,15 +98,20 @@ export const OUTDATED_RATINGS = `
 
 /** Runs every rule over the whole catalogue. Reads only. */
 export async function findAnomalies(): Promise<Finding[]> {
-  const [artists, recordings, groups, counts, noArt, orphans, outdated] = await env.DB.batch([
+  const [artists, recordingRows, studioRows, groups, counts, noArt, orphans, outdated] = await env.DB.batch([
     env.DB.prepare(`SELECT id, name FROM artist`),
     env.DB.prepare(
-      // studio: on at least one release that is neither live nor unofficial.
-      `SELECT r.id, r.title, r.work_id, r.length_ms, c.artist_id,
-              EXISTS (SELECT 1 FROM track t JOIN release x ON x.id = t.release_id JOIN release_group g ON g.id = x.release_group_id
-                      WHERE t.recording_id = r.id AND g.type <> 'live' AND coalesce(g.official, 1) = 1) AS studio
+      `SELECT r.id, r.title, r.work_id, r.length_ms, c.artist_id
        FROM recording r
        JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary'`,
+    ),
+    // studio: on at least one release that is neither live nor unofficial.
+    // One pass over the tracks, where a lookup per recording read about
+    // 120,000 rows a check.
+    env.DB.prepare(
+      `SELECT DISTINCT t.recording_id AS id FROM track t
+       JOIN release x ON x.id = t.release_id JOIN release_group g ON g.id = x.release_group_id
+       WHERE g.type <> 'live' AND coalesce(g.official, 1) = 1`,
     ),
     env.DB.prepare(
       `SELECT g.id, g.title, g.type, c.artist_id
@@ -152,7 +157,9 @@ export async function findAnomalies(): Promise<Finding[]> {
   // generic title ("Intro", "Freestyle") that many different tracks share,
   // or a pair already linked as one song.
   type Rec = { id: string; title: string; work_id: string | null; length_ms: number | null; artist_id: string; studio: number };
-  const candidates = rows<Rec>(recordings).filter((r) => r.studio && !GENERIC_TITLE.test(normaliseTitle(r.title)));
+  const studio = new Set(rows<{ id: string }>(studioRows).map((r) => r.id));
+  const recordings = rows<Omit<Rec, 'studio'>>(recordingRows).map((r) => ({ ...r, studio: studio.has(r.id) ? 1 : 0 }));
+  const candidates = recordings.filter((r) => r.studio && !GENERIC_TITLE.test(normaliseTitle(r.title)));
   findings.push(
     ...pairsWithin(groupBy(candidates, (r) => `${r.artist_id}\u0000${normaliseTitle(r.title)}`), (x, y) =>
       x.id === y.id ||
@@ -166,7 +173,7 @@ export async function findAnomalies(): Promise<Finding[]> {
   // A remix, sped-up, acoustic or live take beside the song itself, by the
   // same artist and not yet linked: "Link as a version" puts both in one
   // work. Ordered: the original first, then the version.
-  for (const [original, version] of versionPairs(rows<Rec>(recordings), GENERIC_TITLE)) {
+  for (const [original, version] of versionPairs(recordings, GENERIC_TITLE)) {
     findings.push({ kind: 'version_of_recording', entity_type: 'recording', entity_a: original, entity_b: version });
   }
 
