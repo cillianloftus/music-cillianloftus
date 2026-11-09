@@ -1,8 +1,15 @@
 ---
+/**
+ * The results of a query or a search: albums as cards, tracks as rows,
+ * artists as plain rows. Tracks and albums use the shared pieces (MediaRow,
+ * CardGrid), so results look like every other list of them.
+ */
 import type { QueryResult } from '../lib/query/run';
 import AlbumCard from './AlbumCard.astro';
-import CoverArt from './CoverArt.astro';
+import CardGrid from './CardGrid.astro';
 import CreditLine from './CreditLine.astro';
+import MediaRow from './MediaRow.astro';
+import RowList from './RowList.astro';
 import Score from './Score.astro';
 import { describeDuration, formatDuration } from '../lib/format';
 
@@ -20,15 +27,13 @@ const kind = results[0]?.kind;
   results.length === 0 ? (
     <p class="empty">Nothing matches yet.</p>
   ) : kind === 'release_group' ? (
-    <ol class="albums" role="list">
-      {results.map((r) => r.kind === 'release_group' && <li><AlbumCard album={r} /></li>)}
-    </ol>
+    <CardGrid>{results.map((r) => r.kind === 'release_group' && <li><AlbumCard album={r} /></li>)}</CardGrid>
   ) : kind === 'artist' ? (
     <ol class="rows" role="list">
       {results.map(
         (r, i) =>
           r.kind === 'artist' && (
-            <li class="row row--artist">
+            <li class="row">
               <span class="rank tabular" aria-hidden="true">{i + 1}</span>
               <div class="main">
                 <a class="title" href={`/artist/${r.id}`}>{r.name}</a>
@@ -42,28 +47,30 @@ const kind = results[0]?.kind;
       )}
     </ol>
   ) : (
-    <ol class:list={['rows', { unranked: !ranked }]} role="list">
+    <RowList ordered={ranked}>
       {results.map(
         (r, i) =>
           r.kind === 'recording' && (
-            <li class="row">
-              {ranked && <span class="rank tabular" aria-hidden="true">{i + 1}</span>}
-              <div class="thumb">
-                <CoverArt artKey={r.art_key} title={r.album_title ?? r.title} sizes="3rem" />
-              </div>
-              <div class="main">
-                <a class="title track-link" href={`/track/${r.id}`}>{r.title}</a>
-                <span class="sub">
-                  <CreditLine credits={r.credits} />
-                  {r.album_id && (
-                    <>
-                      {' · '}
-                      <a href={`/album/${r.album_id}`}>{r.album_title}</a>
-                    </>
-                  )}
-                </span>
-              </div>
-              <span class="length tabular">
+            <MediaRow
+              href={`/track/${r.id}`}
+              title={r.title}
+              artKey={r.art_key}
+              artTitle={r.album_title ?? r.title}
+              rank={ranked ? i + 1 : undefined}
+              score={{ quality: r.quality_score, personal: r.personal_score }}
+              scoreSize="s"
+              ranked
+            >
+              <span>
+                <CreditLine credits={r.credits} />
+                {r.album_id && (
+                  <>
+                    {' · '}
+                    <a class="album-link" href={`/album/${r.album_id}`}>{r.album_title}</a>
+                  </>
+                )}
+              </span>
+              <span slot="aside" class="tabular">
                 {r.length_ms != null && (
                   <>
                     <span aria-hidden="true">{formatDuration(r.length_ms)}</span>
@@ -71,23 +78,14 @@ const kind = results[0]?.kind;
                   </>
                 )}
               </span>
-              <Score ranked quality={r.quality_score} personal={r.personal_score} size="s" />
-            </li>
+            </MediaRow>
           ),
       )}
-    </ol>
+    </RowList>
   )
 }
 
 <style>
-  .track-link {
-    text-decoration: none;
-  }
-
-  .track-link:hover {
-    text-decoration: underline;
-  }
-
   .empty {
     padding: var(--space-6);
     border: 1px dashed var(--border);
@@ -95,43 +93,30 @@ const kind = results[0]?.kind;
     color: var(--text-muted);
   }
 
-  .albums {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40%), 1fr));
-    gap: var(--space-6) var(--space-4);
-    margin: 0;
-    padding: 0;
-    list-style: none;
+  .album-link {
+    color: inherit;
   }
 
+  /* Artists: no picture here, so a rank, the name and a line beneath. */
   .rows {
     margin: 0;
     padding: 0;
     list-style: none;
-    border-top: 1px solid var(--border);
   }
 
   .row {
     display: grid;
-    grid-template-columns: 1.75rem 3rem minmax(0, 1fr) auto auto;
+    grid-template-columns: 1.75rem minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--space-3);
-    min-height: 4rem;
     padding-block: var(--space-2);
     border-bottom: 1px solid var(--border);
   }
 
-  .row--artist {
-    grid-template-columns: 1.75rem minmax(0, 1fr) auto;
-  }
-
   .rank {
     color: var(--text-subtle);
+    font-weight: 700;
     text-align: right;
-  }
-
-  .thumb :global(.cover) {
-    border-radius: var(--radius-s);
   }
 
   .main {
@@ -140,10 +125,15 @@ const kind = results[0]?.kind;
   }
 
   .title {
-    font-weight: 600;
+    font-weight: 650;
+    text-decoration: none;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .title:hover {
+    text-decoration: underline;
   }
 
   .sub {
@@ -152,30 +142,5 @@ const kind = results[0]?.kind;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .length {
-    color: var(--text-muted);
-    font-size: var(--step--1);
-  }
-
-  @media (max-width: 30rem) {
-    .length {
-      display: none;
-    }
-
-    .row {
-      grid-template-columns: 1.5rem 3rem minmax(0, 1fr) auto;
-    }
-
-    .unranked .row {
-      grid-template-columns: 3rem minmax(0, 1fr) auto;
-    }
-  }
-
-  @media (min-width: 30.01rem) {
-    .unranked .row {
-      grid-template-columns: 3rem minmax(0, 1fr) auto auto;
-    }
   }
 </style>

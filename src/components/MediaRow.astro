@@ -2,7 +2,8 @@
 /**
  * One row of a list of things (tracks, albums, versions): an optional
  * rank, a small cover, a title linking to it with lines beneath, and a
- * score at the end. Used inside RowList. One look wherever such a list
+ * score at the end, with room for something small before it (slot
+ * "aside": a length). Used inside RowList. One look wherever such a list
  * appears, so a change here changes every list.
  */
 import CoverArt from './CoverArt.astro';
@@ -29,7 +30,7 @@ interface Props {
 const { href, title, hiddenTitle, artKey = null, artTitle, rank, score = null, ranked = false, scoreSize = 'm' } = Astro.props;
 ---
 
-<li class:list={['media-row', { 'has-rank': rank !== undefined }]}>
+<li class:list={['media-row', { 'has-rank': rank !== undefined, 'has-aside': Astro.slots.has('aside') }]}>
   {
     rank !== undefined && (
       <span class="rank tabular" aria-hidden="true">
@@ -47,6 +48,7 @@ const { href, title, hiddenTitle, artKey = null, artTitle, rank, score = null, r
     </a>
     <slot />
   </span>
+  {Astro.slots.has('aside') && <span class="aside"><slot name="aside" /></span>}
   {
     score && (
       <Score quality={score.quality} personal={score.personal} completeness={score.completeness} size={scoreSize} ranked={ranked} quietWhenEmpty />
@@ -66,6 +68,35 @@ const { href, title, hiddenTitle, artKey = null, artTitle, rank, score = null, r
 
   .media-row.has-rank {
     grid-template-columns: 1.75rem 3rem minmax(0, 1fr) auto;
+  }
+
+  /* Something small between the text and the score (a length). */
+  .media-row.has-aside {
+    grid-template-columns: 3rem minmax(0, 1fr) auto auto;
+  }
+
+  .media-row.has-rank.has-aside {
+    grid-template-columns: 1.75rem 3rem minmax(0, 1fr) auto auto;
+  }
+
+  .aside {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  /* A narrow phone keeps the room for the title. */
+  @media (max-width: 30rem) {
+    .media-row.has-aside {
+      grid-template-columns: 3rem minmax(0, 1fr) auto;
+    }
+
+    .media-row.has-rank.has-aside {
+      grid-template-columns: 1.75rem 3rem minmax(0, 1fr) auto;
+    }
+
+    .aside {
+      display: none;
+    }
   }
 
   .rank {
