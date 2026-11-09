@@ -16,6 +16,7 @@
  * The same engine runs over one artist's tracks for their page.
  */
 
+import { artistRank } from './artist-rank';
 import { env } from 'cloudflare:workers';
 import { albumScores } from './album-scores';
 import { byLibrary, byLibraryMap } from './library-cache';
@@ -865,7 +866,10 @@ async function libraryRanks(userId: string): Promise<{ libraryAverage: number; r
     ).bind(userId),
   ]);
   const libraryAverage = (library!.results[0] as { average: number } | undefined)?.average ?? 0;
-  const ranking = ranks!.results as { artist_id: string; average: number; n: number }[];
+  // Ranked as /artists ranks them: each average as sure as its ratings (artist-rank.ts).
+  const ranking = (ranks!.results as { artist_id: string; average: number; n: number }[]).sort(
+    (a, b) => artistRank(b.average, b.n, libraryAverage) - artistRank(a.average, a.n, libraryAverage),
+  );
   const spreads = await env.DB.prepare(
     `SELECT c.artist_id, s.quality_score AS score
      FROM v_recording_score s JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = s.recording_id AND c.role = 'primary'
@@ -883,7 +887,7 @@ export async function artistBreakdown(userId: string, artistId: string): Promise
   const facts = await trackFacts(userId, { artistId });
   if (facts.length < 3) return null;
   const [{ libraryAverage, ranking, typicalSpread }, albumScoreMap] = await Promise.all([
-    byLibrary('artist-ranks:v1', userId, () => libraryRanks(userId)),
+    byLibrary('artist-ranks:v2', userId, () => libraryRanks(userId)),
     albumScores(userId),
   ]);
 

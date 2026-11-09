@@ -4,6 +4,7 @@
  * what has been played a lot but never rated. Reads only.
  */
 
+import { artistRank } from './artist-rank';
 import { env } from 'cloudflare:workers';
 import { albumScores, byRank } from './album-scores';
 import { genresOfRecordings } from './genres';
@@ -141,25 +142,44 @@ export interface LovedArtist {
   tracks: number;
 }
 
-/** Artists rated highest, with at least three rated tracks of their own. */
+/**
+ * Artists rated highest, with at least three rated tracks of their own:
+ * ranked by their average as sure as the ratings behind it make it
+ * (artist-rank.ts), then their picture and latest cover looked up for the
+ * few shown.
+ */
 export async function lovedArtists(userId: string | null, limit = 12): Promise<LovedArtist[]> {
   const { results } = await env.DB.prepare(
+    `SELECT c.artist_id AS id, avg(s.quality_score) AS average, count(*) AS tracks
+     FROM artist_credit c
+     JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
+     WHERE c.entity_type = 'recording' AND c.role = 'primary'
+     GROUP BY c.artist_id HAVING count(*) >= 3`,
+  )
+    .bind(userId)
+    .all<{ id: string; average: number; tracks: number }>();
+  const mean = results.length ? results.reduce((sum, r) => sum + r.average * r.tracks, 0) / results.reduce((sum, r) => sum + r.tracks, 0) : 0;
+  const top = results
+    .map((r) => ({ ...r, rank: artistRank(r.average, r.tracks, mean) }))
+    .sort((a, b) => b.rank - a.rank || b.tracks - a.tracks || (a.id < b.id ? -1 : 1))
+    .slice(0, limit);
+  if (top.length === 0) return [];
+  const { results: shown } = await env.DB.prepare(
     `SELECT a.id, a.name,
             (SELECT i.key FROM artist_image i WHERE i.artist_id = a.id AND i.hidden = 0 ORDER BY i.position, i.key LIMIT 1) AS image_key,
             (SELECT x.art_key FROM artist_credit c2 JOIN v_release_group_canonical v ON v.release_group_id = c2.entity_id
              JOIN release x ON x.id = v.release_id JOIN release_group g ON g.id = c2.entity_id
              WHERE c2.artist_id = a.id AND c2.entity_type = 'release_group' AND c2.role = 'primary' AND x.art_key IS NOT NULL
-             ORDER BY g.first_release_date DESC LIMIT 1) AS art_key,
-            avg(s.quality_score) AS average, count(*) AS tracks
-     FROM artist_credit c JOIN artist a ON a.id = c.artist_id
-     JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
-     WHERE c.entity_type = 'recording' AND c.role = 'primary'
-     GROUP BY a.id HAVING count(*) >= 3
-     ORDER BY average DESC, tracks DESC LIMIT ?2`,
+             ORDER BY g.first_release_date DESC LIMIT 1) AS art_key
+     FROM artist a WHERE a.id IN (SELECT value FROM json_each(?1))`,
   )
-    .bind(userId, limit)
-    .all<LovedArtist>();
-  return results;
+    .bind(JSON.stringify(top.map((t) => t.id)))
+    .all<Pick<LovedArtist, 'id' | 'name' | 'image_key' | 'art_key'>>();
+  const byId = new Map(shown.map((a) => [a.id, a]));
+  return top.flatMap((t) => {
+    const a = byId.get(t.id);
+    return a ? [{ ...a, average: t.average, tracks: t.tracks }] : [];
+  });
 }
 
 export interface LovedGenre {

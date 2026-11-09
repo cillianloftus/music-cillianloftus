@@ -4,7 +4,7 @@
  * its own inherits its album's).
  */
 
-import { EVIDENCE } from './roster';
+import { artistRank } from './artist-rank';
 import { env } from 'cloudflare:workers';
 import { artistLines, releaseGroupsByIds, type CreditPart, type ReleaseGroupSummary } from './catalogue';
 import { recordingsInGenres, trackCountsByGenre } from './genres';
@@ -274,9 +274,9 @@ export interface GenreArtist {
 
 /**
  * The artists rated highest in a genre: those with two or more rated tracks
- * in it, each average pulled toward the genre's own as if EVIDENCE more
- * tracks had been rated at it, so a single great track does not top the
- * list. The average shown is the artist's own.
+ * in it, ranked by their average there as sure as its number of ratings
+ * makes it, against the genre's own average (artist-rank.ts), so a single
+ * great track does not top the list. The average shown is the artist's own.
  */
 export async function genreArtists(id: string, viewerId: string | null, limit = 8, deep = false): Promise<GenreArtist[]> {
   const { results } = await env.DB.prepare(
@@ -291,16 +291,31 @@ export async function genreArtists(id: string, viewerId: string | null, limit = 
        FROM rated r JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = r.recording_id AND c.role = 'primary'
        GROUP BY c.artist_id HAVING count(*) >= 2
      )
-     SELECT a.id, a.name, sc.average, sc.rated,
-            (SELECT i.key FROM artist_image i WHERE i.artist_id = a.id AND i.hidden = 0 ORDER BY i.position, i.key LIMIT 1) AS image_key
+     SELECT a.id, a.name, a.sort_name, sc.average, sc.rated, norm.mean
      FROM scored sc JOIN artist a ON a.id = sc.artist_id
-     CROSS JOIN (SELECT avg(quality_score) AS mean FROM rated) norm
-     ORDER BY (sc.average * sc.rated + norm.mean * ?4) / (sc.rated + ?4) DESC, sc.rated DESC, a.sort_name
-     LIMIT ?3`,
+     CROSS JOIN (SELECT avg(quality_score) AS mean FROM rated) norm`,
   )
-    .bind(id, viewerId, limit, EVIDENCE)
-    .all<GenreArtist>();
-  return results;
+    .bind(id, viewerId)
+    .all<Omit<GenreArtist, 'image_key'> & { sort_name: string; mean: number }>();
+  const top = results
+    .map((r) => ({ ...r, rank: artistRank(r.average, r.rated, r.mean) }))
+    .sort((a, b) => b.rank - a.rank || b.rated - a.rated || a.sort_name.localeCompare(b.sort_name))
+    .slice(0, limit);
+  return withImages(top.map(({ id, name, average, rated }) => ({ id, name, average, rated })));
+}
+
+/** Each artist's first picture, looked up for the few shown. */
+async function withImages<T extends { id: string }>(artists: T[]): Promise<(T & { image_key: string | null })[]> {
+  if (artists.length === 0) return [];
+  const { results } = await env.DB.prepare(
+    `SELECT j.value AS id,
+            (SELECT i.key FROM artist_image i WHERE i.artist_id = j.value AND i.hidden = 0 ORDER BY i.position, i.key LIMIT 1) AS image_key
+     FROM json_each(?) j`,
+  )
+    .bind(JSON.stringify(artists.map((a) => a.id)))
+    .all<{ id: string; image_key: string | null }>();
+  const images = new Map(results.map((r) => [r.id, r.image_key]));
+  return artists.map((a) => ({ ...a, image_key: images.get(a.id) ?? null }));
 }
 
 /**

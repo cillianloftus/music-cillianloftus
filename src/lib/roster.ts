@@ -5,6 +5,7 @@
  * cover), how much of theirs is here, and how it scores.
  */
 
+import { artistRank } from './artist-rank';
 import { env } from 'cloudflare:workers';
 
 export interface RosterArtist {
@@ -28,13 +29,6 @@ export interface Roster {
 
 export type RosterSort = 'score' | 'rated' | 'releases' | 'recent' | 'name';
 
-/**
- * For ordering by score: each artist's average is pulled toward the
- * viewer's overall track average as if this many more tracks had been
- * rated at it. One rated track barely moves an artist from the norm;
- * twenty mostly speak for themselves. The average shown is never adjusted.
- */
-export const EVIDENCE = 4;
 
 /**
  * Every artist with music of their own, unordered: one read serves every
@@ -93,13 +87,13 @@ const byName = (a: RosterArtist, b: RosterArtist) => {
 const desc = (x: number | null, y: number | null) => (x === y ? 0 : x === null ? 1 : y === null ? -1 : y - x);
 
 /**
- * The roster in one order. By score, each average is weighed by how much
- * stands behind it (see EVIDENCE), so one 99 does not outrank twenty tracks
- * averaging 95; the unrated follow, by how much of theirs is here.
+ * The roster in one order. By score, each average is as sure as the
+ * ratings behind it (artist-rank.ts), so one 99 does not outrank twenty
+ * tracks averaging 95; the unrated follow, by how much of theirs is here.
  */
 export function sortRoster({ artists, mean }: Roster, sort: RosterSort): RosterArtist[] {
   const weighed = (a: RosterArtist) =>
-    a.average === null ? null : mean === null ? a.average : (a.average * a.rated + mean * EVIDENCE) / (a.rated + EVIDENCE);
+    a.average === null ? null : mean === null ? a.average : artistRank(a.average, a.rated, mean);
   const orders: Record<RosterSort, (a: RosterArtist, b: RosterArtist) => number> = {
     score: (a, b) => desc(weighed(a), weighed(b)) || b.rated - a.rated || b.releases - a.releases || byName(a, b),
     rated: (a, b) => b.rated - a.rated || desc(a.average, b.average) || b.releases - a.releases || byName(a, b),
