@@ -246,17 +246,30 @@ export async function genreAlbums(id: string, viewerId: string | null, limit = 2
 
 /** The best-rated tracks in the genre (or beneath it, when deep). */
 export async function genreTopTracks(id: string, viewerId: string | null, limit = 10, deep = false): Promise<string[]> {
-  const { results } = await env.DB.prepare(
-    `${treeOf(deep)}
-     SELECT s.recording_id AS id, s.personal_score
-     FROM v_recording_score s
-     WHERE s.user_id = ?2 AND s.recording_id IN (${recordingsInGenres('SELECT id FROM tree')})
-     ORDER BY s.personal_score DESC
-     LIMIT ?3`,
-  )
-    .bind(id, viewerId, limit)
-    .all<{ id: string }>();
-  return results.map((r) => r.id);
+  const rated = await ratedInGenre(id, viewerId, deep);
+  return rated
+    .sort((a, b) => b.personal - a.personal)
+    .slice(0, limit)
+    .map((r) => r.id);
+}
+
+/**
+ * The viewer's rated tracks in a genre (or its subtree), with their scores:
+ * the genre's tracks from the genre index, met with the viewer's scores in
+ * code. Through the genre's tag rows in SQL, a big genre cost 13,000 rows
+ * for its top tracks and 19,000 for its artists.
+ */
+async function ratedInGenre(id: string, viewerId: string | null, deep: boolean): Promise<{ id: string; quality: number; personal: number }[]> {
+  if (!viewerId) return [];
+  const [index, edges, { results: scored }] = await Promise.all([
+    genreIndex(),
+    deep ? genreEdges() : Promise.resolve([]),
+    env.DB.prepare(`SELECT recording_id AS id, quality_score AS quality, personal_score AS personal FROM v_recording_score WHERE user_id = ?`)
+      .bind(viewerId)
+      .all<{ id: string; quality: number; personal: number }>(),
+  ]);
+  const inGenre = membersOf(index.tracks, deep ? subtreeOf(id, edges) : [id]);
+  return scored.filter((s) => inGenre.has(s.id));
 }
 
 export interface GenreArtist {
@@ -274,12 +287,11 @@ export interface GenreArtist {
  * great track does not top the list. The average shown is the artist's own.
  */
 export async function genreArtists(id: string, viewerId: string | null, limit = 8, deep = false): Promise<GenreArtist[]> {
+  const rated = await ratedInGenre(id, viewerId, deep);
+  if (rated.length === 0) return [];
   const { results } = await env.DB.prepare(
-    `${treeOf(deep)},
-     tracks AS (${recordingsInGenres('SELECT id FROM tree')}),
-     rated AS (
-       SELECT t.recording_id, s.quality_score FROM tracks t
-       JOIN v_recording_score s ON s.recording_id = t.recording_id AND s.user_id = ?2
+    `WITH rated AS (
+       SELECT j.value ->> '$.id' AS recording_id, j.value ->> '$.quality' AS quality_score FROM json_each(?1) j
      ),
      scored AS (
        SELECT c.artist_id, avg(r.quality_score) AS average, count(*) AS rated
@@ -290,7 +302,7 @@ export async function genreArtists(id: string, viewerId: string | null, limit = 
      FROM scored sc JOIN artist a ON a.id = sc.artist_id
      CROSS JOIN (SELECT avg(quality_score) AS mean FROM rated) norm`,
   )
-    .bind(id, viewerId)
+    .bind(JSON.stringify(rated))
     .all<Omit<GenreArtist, 'image_key'> & { sort_name: string; mean: number }>();
   const top = results
     .map((r) => ({ ...r, rank: artistRank(r.average, r.rated, r.mean) }))
