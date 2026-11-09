@@ -35,19 +35,22 @@ const USER_AGENT = 'music-cillianloftus/0.1 ( https://music.cillianloftus.com )'
 const MIN_INTERVAL_MS = 1100;
 const MAX_ATTEMPTS = 4;
 
-let queue: Promise<unknown> = Promise.resolve();
-let lastRequestAt = 0;
+/** The earliest time the next request may start. */
+let nextSlot = 0;
 
-/** Runs `task` after every earlier task, at least MIN_INTERVAL_MS apart. */
-function throttle<T>(task: () => Promise<T>): Promise<T> {
-  const run = queue.then(async () => {
-    const wait = lastRequestAt + MIN_INTERVAL_MS - Date.now();
-    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-    lastRequestAt = Date.now();
-    return task();
-  });
-  queue = run.catch(() => undefined);
-  return run;
+/**
+ * Runs `task` at least MIN_INTERVAL_MS after the last one started. Each
+ * caller reserves the next free slot and waits for it on its own timer:
+ * nothing is shared between requests but a number. (Chaining every call
+ * onto one shared promise made a request wait on another's promise, which
+ * the Workers runtime cancels as hung when two run at once.)
+ */
+async function throttle<T>(task: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const slot = Math.max(now, nextSlot);
+  nextSlot = slot + MIN_INTERVAL_MS;
+  if (slot > now) await new Promise((resolve) => setTimeout(resolve, slot - now));
+  return task();
 }
 
 export class MusicBrainzError extends Error {
