@@ -161,6 +161,28 @@ const runningOrder = (standardTracks.length ? standardTracks : tracks).map((t) =
 }));
 const shape = hasShape(runningOrder.map((t) => t.score)) ? shapeOf(runningOrder.map((t) => t.score)) : null;
 
+// More to say about it, under the score with where it stands, each only
+// when it says something: its best track, how its ratings sit together,
+// how much it is played and what most.
+const ratedScores = runningOrder.map((t) => t.score).filter((s): s is number => s !== null);
+const albumNotes: { text: string; href?: string }[] = [];
+if (best) albumNotes.push({ text: `Best track: ${best.title}, ${Math.round(best.quality)}`, href: best.href });
+if (ratedScores.length >= 4) {
+  const low = Math.round(Math.min(...ratedScores));
+  const high = Math.round(Math.max(...ratedScores));
+  if (low >= 80) albumNotes.push({ text: `Every track rated is ${low} or above` });
+  else if (high - low <= 10) albumNotes.push({ text: `Remarkably even: every track within ${high - low} points` });
+}
+if (totalPlays > 0) {
+  const [topId, topPlays] = [...plays.entries()].sort((a, b) => b[1] - a[1])[0]!;
+  const top = tracks.find((t) => t.recording_id === topId);
+  albumNotes.push({
+    text: `Played ${totalPlays.toLocaleString('en-GB')} ${totalPlays === 1 ? 'time' : 'times'}${top && topPlays > 1 && plays.size > 1 ? `, ${top.title} most (${topPlays})` : ''}`,
+    href: top && topPlays > 1 && plays.size > 1 ? `/track/${top.recording_id}` : undefined,
+  });
+}
+const standingLines = [...albumLines, ...albumNotes];
+
 const similar = await similarAlbums(album.id, viewerId, 10);
 const albumArtistKey = album.credits.map((c) => c.artist_id).join();
 const totalMs = tracks.reduce((sum, t) => sum + (t.length_ms ?? 0), 0);
@@ -238,7 +260,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
           ratedTracks={album.rated_track_count}
           trackCount={album.track_count}
           rating={albumRating}
-          best={best}
           rateHref={user ? rateHref('release_group', album.id) : null}
           nextHref={user && nextUnrated ? rateHref('recording', nextUnrated.recording_id) : null}
         />
@@ -246,9 +267,9 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
 
       <div class="more">
         {
-          albumLines.length > 0 && (
+          standingLines.length > 0 && (
             <ul class="standing" role="list" aria-label="Where it stands">
-              {albumLines.map((s) => (
+              {standingLines.map((s) => (
                 <li>{s.href ? <a href={s.href}>{s.text}</a> : s.text}</li>
               ))}
             </ul>
