@@ -1,0 +1,39 @@
+---
+/**
+ * What a list or section says when it has nothing in it yet: a few quiet
+ * words in a dashed outline where the content will go, with room for a
+ * way forward (a button or a link) beneath. Plain drops the outline, for
+ * places where the box would be bigger than the thing it stands in for.
+ */
+interface Props {
+  plain?: boolean;
+  class?: string | undefined;
+}
+
+const { plain = false, class: className } = Astro.props;
+---
+
+<div class:list={['empty-state', className, { plain }]}>
+  <slot />
+</div>
+
+<style>
+  .empty-state {
+    display: grid;
+    gap: var(--space-4);
+    justify-items: start;
+    padding: var(--space-6);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-l);
+    color: var(--text-muted);
+  }
+
+  .plain {
+    padding: var(--space-5) 0;
+    border: 0;
+  }
+
+  .empty-state > :global(*) {
+    margin: 0;
+  }
+</style>

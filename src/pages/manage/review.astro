@@ -6,6 +6,7 @@
  * differs marked; "Same" merges them whole (src/lib/merge.ts), "Different"
  * never asks again, "Skip" sends it to the back for later.
  */
+import EmptyState from '../../components/EmptyState.astro';
 import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import CoverArt from '../../components/CoverArt.astro';
@@ -171,7 +172,7 @@ const SOURCES: Record<string, string> = {
       )
     }
 
-    {total === 0 && !showGaps && <p class="empty">Nothing to review.</p>}
+    {total === 0 && !showGaps && <EmptyState plain>Nothing to review.</EmptyState>}
 
     {
       kind && (
@@ -629,12 +630,6 @@ const SOURCES: Record<string, string> = {
 
   .more {
     text-align: center;
-  }
-
-  .empty {
-    padding: var(--space-6) 0;
-    color: var(--text-muted);
-    font-size: var(--step-1);
   }
 
   .gaps {

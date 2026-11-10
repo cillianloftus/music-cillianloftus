@@ -1,4 +1,5 @@
 ---
+import EmptyState from '../components/EmptyState.astro';
 import { pictureAt, pictureSrcset } from '../lib/pictures';
 import CardGrid from '../components/CardGrid.astro';
 /**
@@ -486,14 +487,14 @@ const statItems = [
       </div>
       {
         recent.length === 0 ? (
-          <div class="empty">
+          <EmptyState>
             <p>Nothing in the catalogue yet.</p>
             {Astro.locals.user && (
               <a class="button button--primary" href="/manage/import">
                 Import an album
               </a>
             )}
-          </div>
+          </EmptyState>
         ) : (
           <CardGrid>
             {recent.map((album) => (
@@ -920,16 +921,6 @@ const statItems = [
   }
 
   /* Recently added */
-
-  .empty {
-    display: grid;
-    gap: var(--space-4);
-    justify-items: start;
-    padding: var(--space-6);
-    border: 1px dashed var(--border);
-    border-radius: var(--radius-l);
-    color: var(--text-muted);
-  }
 
   /* A genre has no cover: its initial on its family's colour. */
   .pick-art.genre {

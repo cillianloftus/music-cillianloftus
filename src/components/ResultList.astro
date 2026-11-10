@@ -4,6 +4,7 @@
  * artists as plain rows. Tracks and albums use the shared pieces (MediaRow,
  * CardGrid), so results look like every other list of them.
  */
+import EmptyState from './EmptyState.astro';
 import type { QueryResult } from '../lib/query/run';
 import AlbumCard from './AlbumCard.astro';
 import CardGrid from './CardGrid.astro';
@@ -25,7 +26,7 @@ const kind = results[0]?.kind;
 
 {
   results.length === 0 ? (
-    <p class="empty">Nothing matches yet.</p>
+    <EmptyState>Nothing matches yet.</EmptyState>
   ) : kind === 'release_group' ? (
     <CardGrid>{results.map((r) => r.kind === 'release_group' && <li><AlbumCard album={r} /></li>)}</CardGrid>
   ) : kind === 'artist' ? (
@@ -86,13 +87,6 @@ const kind = results[0]?.kind;
 }
 
 <style>
-  .empty {
-    padding: var(--space-6);
-    border: 1px dashed var(--border);
-    border-radius: var(--radius-l);
-    color: var(--text-muted);
-  }
-
   .album-link {
     color: inherit;
   }

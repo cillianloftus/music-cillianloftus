@@ -6,6 +6,7 @@
  * once whichever services reported it (src/lib/listens/dedupe.ts).
  * Personal: each signed-in listener sees their own.
  */
+import EmptyState from '../../components/EmptyState.astro';
 import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import CoverArt from '../../components/CoverArt.astro';
@@ -172,14 +173,14 @@ const SHOW = 10;
 
     {
       !user ? (
-        <section class="empty">
+        <EmptyState>
           <p>Recaps are personal: each listener sees their own.</p>
           <a class="button button--primary" href="/manage">
             Sign in
           </a>
-        </section>
+        </EmptyState>
       ) : !hasData ? (
-        <section class="empty">
+        <EmptyState>
           {span?.first ? (
             <p>Nothing was played {range.kind === 'all' ? 'yet' : 'in this stretch'}.{span.last && ` The last listen was on ${dayLabel(span.last)}.`}</p>
           ) : (
@@ -196,7 +197,7 @@ const SHOW = 10;
               <p class="muted small">Both can be used together: a stream that is in the export and was also scrobbled counts once.</p>
             </>
           )}
-        </section>
+        </EmptyState>
       ) : (
         r &&
         view && (
@@ -725,13 +726,6 @@ const SHOW = 10;
   .range-label {
     margin-top: calc(-1 * var(--space-3));
     font-size: var(--step-0);
-  }
-
-  .empty {
-    padding: var(--space-5);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg, 16px);
-    justify-items: start;
   }
 
   .how {
