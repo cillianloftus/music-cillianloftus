@@ -6,6 +6,7 @@
  * once whichever services reported it (src/lib/listens/dedupe.ts).
  * Personal: each signed-in listener sees their own.
  */
+import Segmented from '../../components/Segmented.astro';
 import EmptyState from '../../components/EmptyState.astro';
 import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
@@ -105,16 +106,12 @@ const SHOW = 10;
   <div class="wrap page">
     <PageHeader title="Recap" />
 
-    <nav class="ranges" aria-label="Time period">
-      <div class="pills" role="list">
-        {
-          PRESETS.map((p) => (
-            <a role="listitem" href={p === 'last-30-days' ? '/recap' : `/recap/${p}`} aria-current={range.slug === p ? 'page' : undefined}>
-              {PRESET_LABEL[p]}
-            </a>
-          ))
-        }
-      </div>
+    <div class="ranges">
+      <Segmented
+        label="Time period"
+        emphasis
+        items={PRESETS.map((p) => ({ href: p === 'last-30-days' ? '/recap' : `/recap/${p}`, label: PRESET_LABEL[p], current: range.slug === p }))}
+      />
       <details class="more-ranges" open={!PRESETS.includes(range.slug as never) || undefined}>
         <summary>Pick a month, year or dates</summary>
         <div class="pickers">
@@ -163,7 +160,7 @@ const SHOW = 10;
           </form>
         </div>
       </details>
-    </nav>
+    </div>
 
     <p class="range-label">
       <strong>{range.label}</strong>
@@ -607,41 +604,6 @@ const SHOW = 10;
     display: grid;
     gap: var(--space-2);
     min-width: 0;
-  }
-
-  .pills {
-    display: flex;
-    gap: var(--space-1);
-    max-width: 100%;
-    width: fit-content;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .pills::-webkit-scrollbar {
-    display: none;
-  }
-
-  .pills a {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    min-height: calc(var(--target) - 6px);
-    padding: 0 var(--space-4);
-    border-radius: 999px;
-    color: var(--text-muted);
-    font-size: var(--step--1);
-    font-weight: 650;
-    text-decoration: none;
-    white-space: nowrap;
-  }
-
-  .pills a[aria-current='page'] {
-    background: var(--text);
-    color: var(--bg);
   }
 
   .more-ranges summary {
