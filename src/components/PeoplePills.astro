@@ -1,0 +1,93 @@
+---
+/**
+ * People (or bands) as a wrapping row of pills, each with a quiet note:
+ * "Works with" and who an artist samples on artist pages. One in the
+ * library leads to its page; one known only elsewhere, to that page.
+ */
+interface Person {
+  name: string;
+  /** Their page here, or elsewhere when `external`. */
+  href?: string | null;
+  external?: boolean;
+  note?: string | null;
+  /** More about the note, on hover. */
+  title?: string | undefined;
+}
+
+interface Props {
+  people: Person[];
+  label?: string;
+}
+
+const { people, label } = Astro.props;
+---
+
+<ul class="people" role="list" aria-label={label}>
+  {
+    people.map((p) => (
+      <li title={p.title}>
+        {p.href ? (
+          p.external ? (
+            <a href={p.href} rel="external noopener" target="_blank">
+              {p.name}
+              <span class="visually-hidden"> (opens in a new tab)</span>
+            </a>
+          ) : (
+            <a href={p.href}>{p.name}</a>
+          )
+        ) : (
+          <span class="name">{p.name}</span>
+        )}
+        {p.note && <span class="note tabular">{p.note}</span>}
+      </li>
+    ))
+  }
+</ul>
+
+<style>
+  .people {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    display: inline-flex;
+    max-width: 100%;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-height: var(--target);
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+  }
+
+  a,
+  .name {
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  /* Known only elsewhere: the same pill, a step quieter. */
+  a[rel~='external'] {
+    color: var(--text-muted);
+  }
+
+  li:has(a):hover {
+    border-color: var(--text-subtle);
+  }
+
+  li:has(a:hover) a {
+    text-decoration: underline;
+  }
+
+  .note {
+    flex: none;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+</style>

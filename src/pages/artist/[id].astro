@@ -7,6 +7,8 @@ import Backdrop from '../../components/Backdrop.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import Score from '../../components/Score.astro';
 import ElsewhereLink from '../../components/ElsewhereLink.astro';
+import PeoplePills from '../../components/PeoplePills.astro';
+import { artistSampling, type SampledArtist } from '../../lib/song-links';
 import GenreChips from '../../components/GenreChips.astro';
 import Tile from '../../components/Tile.astro';
 import Tiles from '../../components/Tiles.astro';
@@ -41,7 +43,7 @@ if (!artist) {
 }
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const [albums, appearances, { tracks: topTracks, total: trackTotal }, collaborators, about, images, genres, breakdown, kin] = await Promise.all([
+const [albums, appearances, { tracks: topTracks, total: trackTotal }, collaborators, about, images, genres, breakdown, kin, sampling] = await Promise.all([
   artistReleaseGroups(artist.id, viewerId),
   artistAppearances(artist.id),
   artistTracks(artist.id, viewerId, 0, TRACKS_PER_PAGE),
@@ -51,7 +53,20 @@ const [albums, appearances, { tracks: topTracks, total: trackTotal }, collaborat
   artistGenres(artist.id),
   viewerId ? artistBreakdown(viewerId, id) : Promise.resolve(null),
   kinOf(id, 6),
+  artistSampling(id, 8),
 ]);
+// "6 samples", "3 interpolations", or "12 songs" when both, with the split as a tooltip.
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+const takings = (a: SampledArtist) =>
+  a.samples && a.interpolations ? plural(a.samples + a.interpolations, 'song') : a.samples ? plural(a.samples, 'sample') : plural(a.interpolations, 'interpolation');
+const asPeople = (list: SampledArtist[]) =>
+  list.map((a) => ({
+    name: a.name,
+    href: a.id ? `/artist/${a.id}` : a.url,
+    external: !a.id,
+    note: takings(a),
+    title: a.samples && a.interpolations ? `${plural(a.samples, 'sample')}, ${plural(a.interpolations, 'interpolation')}` : undefined,
+  }));
 // Releases by kind, each newest first: the records, then the shorter ones.
 // Sections that earn their place: mixtapes get their own only when there
 // are enough of them (Logic's dozen, not Quadeca's one), and so do EPs and
@@ -591,16 +606,27 @@ import { splitVersion } from '../../lib/versions';
       collaborators.length > 0 && (
         <section aria-labelledby="with-heading">
           <h2 id="with-heading">Works with</h2>
-          <ul class="people" role="list">
-            {collaborators.map((c) => (
-              <li>
-                <a href={`/artist/${c.id}`}>{c.name}</a>
-                <span class="muted small tabular">
-                  {c.count} {c.count === 1 ? 'credit' : 'credits'}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <PeoplePills people={collaborators.map((c) => ({ name: c.name, href: `/artist/${c.id}`, note: `${c.count} ${c.count === 1 ? 'credit' : 'credits'}` }))} />
+        </section>
+      )
+    }
+
+    {
+      (sampling.takesFrom.length > 0 || sampling.takenBy.length > 0) && (
+        <section class="sampling" aria-labelledby="sampling-heading">
+          <h2 id="sampling-heading">Samples</h2>
+          {sampling.takesFrom.length > 0 && (
+            <div>
+              <h3>Takes from</h3>
+              <PeoplePills people={asPeople(sampling.takesFrom)} label="Artists they sample" />
+            </div>
+          )}
+          {sampling.takenBy.length > 0 && (
+            <div>
+              <h3>Taken up by</h3>
+              <PeoplePills people={asPeople(sampling.takenBy)} label="Artists who sample them" />
+            </div>
+          )}
         </section>
       )
     }
@@ -1347,37 +1373,28 @@ import { splitVersion } from '../../lib/versions';
     scroll-snap-align: start;
   }
 
-  .people {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    margin: 0;
-    padding: 0;
-    list-style: none;
+  .sampling {
+    display: grid;
+    gap: var(--space-4);
   }
 
-  .people li {
-    display: inline-flex;
-    align-items: baseline;
-    gap: var(--space-2);
-    min-height: var(--target);
-    padding: var(--space-2) var(--space-4);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface-1);
+  .sampling h2 {
+    grid-column: 1 / -1;
   }
 
-  .people a {
+  @media (min-width: 48rem) {
+    .sampling {
+      grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+      align-items: start;
+      column-gap: var(--space-7);
+    }
+  }
+
+  .sampling h3 {
+    margin-bottom: var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--step--1);
     font-weight: 650;
-    text-decoration: none;
-  }
-
-  .people li:hover {
-    border-color: var(--text-subtle);
-  }
-
-  .people li:has(a:hover) a {
-    text-decoration: underline;
   }
 
   /* Role links read as a list, not a row of underlines: the line shows on hover. */

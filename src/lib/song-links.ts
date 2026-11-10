@@ -53,3 +53,88 @@ export async function trackLinks(recordingId: string): Promise<TrackLinks> {
       .map(({ kind: _k, uses: _u, ...track }) => track);
   return { samples: of('samples', 1), interpolates: of('interpolates', 1), sampledIn: of('samples', 0), interpolatedIn: of('interpolates', 0) };
 }
+
+/** An artist on the other side of an artist's samples, with how many songs each way. */
+export interface SampledArtist {
+  name: string;
+  /** Their artist page here, when the library has an artist of that name. */
+  id: string | null;
+  /** One of their songs on Genius, for those the library does not have. */
+  url: string;
+  samples: number;
+  interpolations: number;
+}
+
+export interface ArtistSampling {
+  /** Whom their songs take from. */
+  takesFrom: SampledArtist[];
+  /** Who takes from their songs. */
+  takenBy: SampledArtist[];
+}
+
+type SamplingRow = { takes: 0 | 1; kind: 'samples' | 'interpolates'; name: string; url: string; n: number };
+
+/**
+ * Whom an artist samples and interpolates, and who samples them, by artist
+ * and most songs first, from the links of their own tracks (lead or
+ * featured). Themselves left out. One seek of the credits, then of the
+ * links each way, by index: a few hundred rows for a big artist.
+ */
+export async function artistSampling(artistId: string, limit = 12): Promise<ArtistSampling> {
+  const { results } = await env.DB.prepare(
+    `WITH mine AS (
+       SELECT DISTINCT r.genius_url AS url
+       FROM artist_credit c JOIN recording r ON r.id = c.entity_id
+       WHERE c.entity_type = 'recording' AND c.artist_id = ?1 AND c.role IN ('primary', 'featured') AND r.genius_url IS NOT NULL
+     ),
+     linked AS (
+       SELECT 1 AS takes, l.kind, l.source_artist AS name, min(l.source_url) AS url, count(DISTINCT l.source_url) AS n
+       FROM mine JOIN song_link l ON l.song_url = mine.url
+       GROUP BY l.kind, l.source_artist
+       UNION ALL
+       SELECT 0, l.kind, l.song_artist, min(l.song_url), count(DISTINCT l.song_url)
+       FROM mine JOIN song_link l ON l.source_url = mine.url
+       GROUP BY l.kind, l.song_artist
+     )
+     SELECT k.* FROM linked k
+     WHERE k.name <> (SELECT name FROM artist WHERE id = ?1) COLLATE NOCASE`,
+  )
+    .bind(artistId)
+    .all<SamplingRow>();
+  // A few times as many as are shown are matched to the library, so that
+  // artists here come first; matching every name read 11,000 rows for an
+  // artist sampled by 700 others.
+  const takesFrom = bySongs(results.filter((r) => r.takes === 1), limit * 4);
+  const takenBy = bySongs(results.filter((r) => r.takes === 0), limit * 4);
+  const shown = [...takesFrom, ...takenBy];
+  if (shown.length) {
+    const { results: found } = await env.DB.prepare(
+      `SELECT j.value AS name, (SELECT a.id FROM artist a WHERE a.name = j.value COLLATE NOCASE ORDER BY a.id LIMIT 1) AS id
+       FROM json_each(?1) j`,
+    )
+      .bind(JSON.stringify([...new Set(shown.map((a) => a.name))]))
+      .all<{ name: string; id: string | null }>();
+    const ids = new Map(found.map((f) => [f.name, f.id]));
+    for (const a of shown) a.id = ids.get(a.name) ?? null;
+  }
+  // Stable: within each, still most songs first.
+  const hereFirst = (list: SampledArtist[]) => [...list].sort((a, b) => Number(b.id !== null) - Number(a.id !== null)).slice(0, limit);
+  return { takesFrom: hereFirst(takesFrom), takenBy: hereFirst(takenBy) };
+}
+
+/** One entry per artist, both kinds together, most songs first. Pure. */
+export function bySongs(rows: SamplingRow[], limit: number): SampledArtist[] {
+  const by = new Map<string, SampledArtist>();
+  for (const r of rows) {
+    // Genius's placeholder for an account since removed.
+    if (r.name === 'Deleted Artist') continue;
+    const key = r.name.toLowerCase();
+    const one = by.get(key) ?? { name: r.name, id: null, url: r.url, samples: 0, interpolations: 0 };
+    if (r.kind === 'samples') one.samples += r.n;
+    else one.interpolations += r.n;
+    by.set(key, one);
+  }
+  return [...by.values()]
+    .sort((a, b) => b.samples + b.interpolations - (a.samples + a.interpolations) || a.name.localeCompare(b.name))
+    .slice(0, limit);
+}
