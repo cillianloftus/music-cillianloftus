@@ -21,6 +21,10 @@ const fact = (id: string, score: number, extra: Partial<TrackFact> = {}): TrackF
   plays: 0,
   axes: { arrangement: null, sound: null, songwriting: null, lyrics: null, performance: null, originality: null },
   gut: null,
+  bpm: null,
+  loudness: null,
+  explicit: null,
+  listeners: null,
   ...extra,
 });
 

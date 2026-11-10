@@ -20,6 +20,7 @@ import Tiles from '../../components/Tiles.astro';
 import RowList from '../../components/RowList.astro';
 import GenreChips from '../../components/GenreChips.astro';
 import StandingLines from '../../components/StandingLines.astro';
+import Disclosure from '../../components/Disclosure.astro';
 import { ownerId } from '../../lib/auth/user';
 import { redirectFor, standardTracklist, trackGenres } from '../../lib/catalogue';
 import AlbumShape from '../../components/AlbumShape.astro';
@@ -386,10 +387,7 @@ function ordinalOf(n: number): string {
 
     {
       history.length > 1 && (
-        <details class="history-box">
-          <summary>
-            <h2 id="history-heading">Rated {history.length} times</h2>
-          </summary>
+        <Disclosure heading={`Rated ${history.length} times`} headingId="history-heading" ruled={false}>
           <ol role="list" class="history">
             {history.map((r) => (
               <li>
@@ -408,7 +406,7 @@ function ordinalOf(n: number): string {
               </li>
             ))}
           </ol>
-        </details>
+        </Disclosure>
       )
     }
   </article>
@@ -464,42 +462,6 @@ function ordinalOf(n: number): string {
 
   /* Long titles step down a size and wrap with a full first line, rather
      than being split evenly into two short ones. */
-
-  .history-box summary {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-3);
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .history-box summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .history-box summary h2 {
-    display: inline;
-  }
-
-  .history-box summary::after {
-    content: '';
-    width: 0.55rem;
-    height: 0.55rem;
-    margin-left: auto;
-    border-right: 2px solid var(--text-muted);
-    border-bottom: 2px solid var(--text-muted);
-    rotate: 45deg;
-    translate: 0 -0.2rem;
-    transition: rotate 0.2s;
-  }
-
-  .history-box[open] summary::after {
-    rotate: 225deg;
-  }
-
-  .history-box .history {
-    margin-top: var(--space-4);
-  }
 
   /* Under the hero: where it appears (and other versions) beside its credits. */
   .below {

@@ -1,0 +1,86 @@
+---
+/**
+ * A section that opens on request: its heading (and a quiet note beside
+ * it) with a chevron at the far end that turns as it opens. "Rated 3
+ * times" on track pages and "All credits" on album pages are both this.
+ * Attributes such as id pass through to the details element.
+ */
+interface Props {
+  heading: string;
+  /** Beside the heading, quieter: "17 credits · 8 people". */
+  note?: string | undefined;
+  headingId?: string | undefined;
+  class?: string | undefined;
+  id?: string | undefined;
+  /** A hairline above, to set it apart from what comes before. */
+  ruled?: boolean;
+}
+
+const { heading, note, headingId, class: className, id, ruled = true } = Astro.props;
+---
+
+<details class:list={['disclosure', className, { ruled }]} id={id}>
+  <summary>
+    <h2 id={headingId}>{heading}</h2>
+    {note && <span class="note">{note}</span>}
+  </summary>
+  <div class="body">
+    <slot />
+  </div>
+</details>
+
+<style>
+  .ruled {
+    border-top: 1px solid var(--border);
+    padding-top: var(--space-5);
+  }
+
+  summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-4);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  summary::-webkit-details-marker {
+    display: none;
+  }
+
+  h2 {
+    display: inline;
+    margin: 0;
+  }
+
+  .note {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  summary::after {
+    content: '';
+    width: 0.55rem;
+    height: 0.55rem;
+    margin-left: auto;
+    border-right: 2px solid var(--text-muted);
+    border-bottom: 2px solid var(--text-muted);
+    rotate: 45deg;
+    translate: 0 -0.2rem;
+    transition: rotate 0.2s;
+  }
+
+  [open] > summary::after {
+    rotate: 225deg;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    summary::after {
+      transition: none;
+    }
+  }
+
+  .body {
+    margin-top: var(--space-4);
+  }
+</style>

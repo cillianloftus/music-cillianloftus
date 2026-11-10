@@ -21,6 +21,7 @@ import EntityHero from '../../components/EntityHero.astro';
 import ImpactNote from '../../components/ImpactNote.astro';
 import GenreChips from '../../components/GenreChips.astro';
 import StandingLines from '../../components/StandingLines.astro';
+import Disclosure from '../../components/Disclosure.astro';
 import { groupCredits } from '../../lib/credits';
 import { spotifyLink } from '../../lib/spotify/links';
 import { env } from 'cloudflare:workers';
@@ -555,13 +556,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     </div>
     {
       allCreditsShown && (
-        <details class="all-credits" id="all-credits">
-          <summary>
-            <h2>All credits</h2>
-            <span class="muted">
-              {people.length} credits · {people_count} people
-            </span>
-          </summary>
+        <Disclosure class="all-credits" id="all-credits" heading="All credits" note={`${people.length} credits · ${people_count} people`}>
           <div class="families">
             {creditFamilies.map((f) => (
               <section aria-label={f.name} class="family">
@@ -582,7 +577,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
               </section>
             ))}
           </div>
-        </details>
+        </Disclosure>
       )
     }
     {
@@ -1001,52 +996,13 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   }
 
   /* Every credit, by kind, across the full width under everything else. */
-  .all-credits {
+  :global(details.all-credits) {
     grid-column: 1 / -1;
-    border-top: 1px solid var(--border);
-    padding-top: var(--space-5);
-  }
-
-  .all-credits summary {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: var(--space-2) var(--space-4);
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .all-credits summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .all-credits summary h2 {
-    display: inline;
-  }
-
-  .all-credits summary .muted {
-    font-size: var(--step--1);
-  }
-
-  .all-credits summary::after {
-    content: '';
-    width: 0.55rem;
-    height: 0.55rem;
-    margin-left: auto;
-    border-right: 2px solid var(--text-muted);
-    border-bottom: 2px solid var(--text-muted);
-    rotate: 45deg;
-    transition: rotate 0.2s;
-  }
-
-  .all-credits[open] summary::after {
-    rotate: 225deg;
   }
 
   .families {
     columns: 22rem;
     column-gap: var(--space-7);
-    margin-top: var(--space-5);
   }
 
   .family {
