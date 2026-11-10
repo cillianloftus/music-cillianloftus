@@ -66,14 +66,15 @@ export const onRequest = defineMiddleware((context, next) =>
 async function metered(context: APIContext, next: MiddlewareNext): Promise<Response> {
   const meter = await import('./lib/dev/rows-meter');
   meter.meterRows(env.DB);
-  const report = meter.startCount();
-  // ?__cold: as after a rating, with the library cache empty.
-  const cold = context.url.searchParams.has('__cold');
-  devCold.on = cold;
-  const response = await handle(context, next);
-  return meter.reportWhenDone(response, () => {
-    devCold.on = false;
-    report(`${context.request.method} ${context.url.pathname}${cold ? ' (cold)' : ''}`);
+  return meter.counted(async (report) => {
+    // ?__cold: as after a rating, with the library cache empty.
+    const cold = context.url.searchParams.has('__cold');
+    devCold.on = cold;
+    const response = await handle(context, next);
+    return meter.reportWhenDone(response, () => {
+      devCold.on = false;
+      report(`${context.request.method} ${context.url.pathname}${cold ? ' (cold)' : ''}`);
+    });
   });
 }
 

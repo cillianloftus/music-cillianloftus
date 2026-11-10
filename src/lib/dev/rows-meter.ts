@@ -8,17 +8,19 @@
  *
  * It wraps the binding's prepare and batch. first() is answered through
  * all(), which carries the meta first() drops; the answer is the same.
- * Requests running at once share the count, which is fine for a dev
- * server driven one page at a time.
+ * Each request keeps its own count (an AsyncLocalStorage), so a long
+ * background fill and the pages loaded while it runs are told apart.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 type Entry = { rows: number; sql: string };
-let log: Entry[] = [];
+const current = new AsyncLocalStorage<Entry[]>();
 
 const targets = new WeakMap<object, { statement: D1PreparedStatement; sql: string }>();
 
 function record(meta: { rows_read?: number } | undefined, sql: string): void {
-  log.push({ rows: meta?.rows_read ?? 0, sql });
+  current.getStore()?.push({ rows: meta?.rows_read ?? 0, sql });
 }
 
 function wrap(statement: D1PreparedStatement, sql: string): D1PreparedStatement {
@@ -64,19 +66,18 @@ export function meterRows(db: D1Database): void {
   };
 }
 
-/** Starts counting for a request; the returned function reports it. */
-export function startCount(): (label: string) => void {
-  const from = log.length;
-  return (label) => {
-    const mine = log.slice(from);
+/** Runs a request with a count of its own; report logs what it has read so far. */
+export function counted<T>(fn: (report: (label: string) => void) => T): T {
+  const mine: Entry[] = [];
+  const report = (label: string) => {
     const total = mine.reduce((n, e) => n + e.rows, 0);
     const top = [...mine].sort((a, b) => b.rows - a.rows).slice(0, label.includes('(cold)') ? 14 : 3);
     const lines = top
       .filter((e) => e.rows > 0)
       .map((e) => `           ${String(e.rows).padStart(8)}  ${e.sql.replace(/\s+/g, ' ').trim().slice(0, 110)}`);
     console.log([`[rows] ${label} ${total.toLocaleString('en-GB')} rows, ${mine.length} statements`, ...lines].join('\n'));
-    if (log.length > 5_000) log = log.slice(-1_000);
   };
+  return current.run(mine, () => fn(report));
 }
 
 /** The response, reporting once its body has been read to the end. */
