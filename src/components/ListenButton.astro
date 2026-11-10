@@ -1,0 +1,57 @@
+---
+/**
+ * Listen: the button that opens a track or album on Spotify (or a search
+ * there when it has no Spotify id yet), with the Spotify mark. With a
+ * Spotify id it carries data-play, so the in-page player can take it
+ * instead of leaving. Anything else given (data-*, aria-keyshortcuts)
+ * passes to the link; the slot follows the label, for a key hint.
+ */
+import type { HTMLAttributes } from 'astro/types';
+
+interface Props extends Omit<HTMLAttributes<'a'>, 'href'> {
+  href: string;
+  /** The Spotify id, when known. Without it the button searches. */
+  spotifyId?: string | null;
+  /** What it plays in place: set only where the in-page player should take it. */
+  kind?: 'track' | 'album' | undefined;
+}
+
+const { href, spotifyId = null, kind, class: className, ...rest } = Astro.props;
+const known = spotifyId != null;
+---
+
+<a
+  class:list={['button', 'listen', className]}
+  href={href}
+  target="_blank"
+  rel="noopener"
+  data-play={kind && known ? '' : undefined}
+  data-track={kind === 'track' && known ? spotifyId : undefined}
+  data-album={kind === 'album' && known ? spotifyId : undefined}
+  {...rest}
+>
+  <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+    <circle cx="12" cy="12" r="9"></circle>
+    <path d="M7.5 10c3-1 6.3-.7 9 .8M8.2 13.2c2.4-.7 5-.5 7.2.6M8.8 16.2c1.8-.4 3.6-.3 5.3.4"></path>
+  </svg>
+  {known || !kind ? 'Listen' : 'Search'}
+  <span class="visually-hidden">{known || !kind ? ' on Spotify' : ' for it on Spotify'} (opens in a new tab)</span>
+  <slot />
+</a>
+
+<style>
+  .listen {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .mark {
+    width: 1.15rem;
+    height: 1.15rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+  }
+</style>
