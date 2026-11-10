@@ -5,6 +5,7 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { formatPartialDate } from './dates';
 
 export interface EditionLabel {
   release_id: string;
@@ -61,5 +62,9 @@ export function placeIn(list: AlbumList): string | null {
   if (!list.number) return null;
   // A plain number that is not a year is a place on the list, whatever kind
   // of series MusicBrainz files it as (some ranked lists are filed as awards).
-  return /^\d{1,3}$/.test(list.number) ? `No. ${list.number}` : list.number;
+  if (/^\d{1,3}$/.test(list.number)) return `No. ${list.number}`;
+  // A date is when it was given (certifications are numbered by theirs).
+  if (/^\d{4}-\d{2}-\d{2}$/.test(list.number)) return formatPartialDate(list.number, 'day');
+  if (/^\d{4}-\d{2}$/.test(list.number)) return formatPartialDate(list.number, 'month');
+  return list.number;
 }
