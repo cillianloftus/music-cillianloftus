@@ -1,4 +1,5 @@
 ---
+import BackLink from '../../../../components/BackLink.astro';
 import { env } from 'cloudflare:workers';
 import Base from '../../../../layouts/Base.astro';
 import { typeLabel } from '../../../../lib/format';
@@ -84,7 +85,7 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
         <CoverArt artKey={subject.art_key} title={subject.album_title ?? subject.title} sizes="4.5rem" />
       </div>
       <div>
-        <a class="back" href={returnTo}>← Back</a>
+        <BackLink href={returnTo}>Back</BackLink>
         <p class="eyebrow">{entityType === 'recording' ? 'Rate track' : `Rate ${subject.type ? (typeLabel(subject.type) === 'EP' ? 'EP' : typeLabel(subject.type).toLowerCase()) : 'album'}`}</p>
         <h1>{subject.title}</h1>
         <p class="muted">
@@ -145,14 +146,6 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
     display: grid;
     gap: var(--space-4);
     --content-max: 40rem;
-  }
-
-  .back {
-    display: inline-flex;
-    align-items: center;
-    min-height: 2rem;
-    color: var(--text-muted);
-    font-size: var(--step--1);
   }
 
   .subject {

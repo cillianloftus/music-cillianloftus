@@ -4,6 +4,7 @@
  * Preview shows exactly what will be created (the dry run, ARCHITECTURE.md
  * §5); Add writes it through the same import writer as everything else.
  */
+import BackLink from '../../../components/BackLink.astro';
 import { env } from 'cloudflare:workers';
 import Base from '../../../layouts/Base.astro';
 import ChipInput from '../../../components/ChipInput.astro';
@@ -69,7 +70,7 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
 <Base title="Add by hand">
   <div class="wrap page">
     <header>
-      <p><a class="back" href="/manage/import">← Import</a></p>
+      <p><BackLink href="/manage/import">Import</BackLink></p>
       <h1>Add by hand</h1>
       <p class="muted">For music on no database: mixtapes, demos, bedroom releases. Paste the tracklist.</p>
     </header>
@@ -198,13 +199,6 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
 
   h2 {
     font-size: var(--step-1);
-  }
-
-  .back {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
-    color: var(--text-muted);
   }
 
   .muted,

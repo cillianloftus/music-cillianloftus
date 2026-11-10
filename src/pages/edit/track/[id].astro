@@ -4,6 +4,7 @@
  * it. Credits edited here are the track's from then on; no import or
  * lookup adds to them or takes from them again.
  */
+import BackLink from '../../../components/BackLink.astro';
 import { kindsOf } from '../../../lib/track-kinds';
 import { env } from 'cloudflare:workers';
 import Base from '../../../layouts/Base.astro';
@@ -45,7 +46,7 @@ const hasGenius = Boolean(await geniusToken());
 
 <Base title={`Edit ${track.title}`}>
   <div class="wrap page">
-    <p><a class="back" href={`/track/${id}`}>← {track.title}</a></p>
+    <p><BackLink href={`/track/${id}`}>{track.title}</BackLink></p>
     <header class="subject">
       <span class="thumb"><CoverArt artKey={home?.art_key ?? null} title={home?.title ?? track.title} sizes="5rem" /></span>
       <div>
@@ -58,7 +59,7 @@ const hasGenius = Boolean(await geniusToken());
     {params.get('error') && <p class="notice notice--error" role="alert">{params.get('error')}</p>}
     {params.get('done') && <p class="notice" role="status">{params.get('done')}</p>}
 
-    <form method="post" action="/api/write/track/edit" class="card title-form">
+    <form method="post" action="/api/write/track/edit" class="form-card title-form">
       <input type="hidden" name="id" value={id} />
       <input type="hidden" name="intent" value="details" />
       <div class="field">
@@ -100,7 +101,7 @@ const hasGenius = Boolean(await geniusToken());
         {!byHand && <p class="hint">Once you change anything here, imports and lookups leave these credits alone. Put them back as they were, or undo, and that ends.</p>}
     </CreditEditor>
 
-    <form method="post" action="/api/write/track-kind" class="card kind-form">
+    <form method="post" action="/api/write/track-kind" class="form-card kind-form">
       <input type="hidden" name="id" value={id} />
       <input type="hidden" name="back" value={`/edit/track/${id}?done=${encodeURIComponent('Kind saved.')}`} />
       <fieldset>
@@ -126,13 +127,6 @@ const hasGenius = Boolean(await geniusToken());
     --content-max: 44rem;
   }
 
-  .back {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
-    color: var(--text-muted);
-  }
-
   .subject {
     display: grid;
     grid-template-columns: 5rem minmax(0, 1fr);
@@ -154,14 +148,6 @@ const hasGenius = Boolean(await geniusToken());
     font-size: var(--step-1);
   }
 
-  .card {
-    display: grid;
-    gap: var(--space-3);
-    padding: var(--space-5);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-l);
-    background: var(--surface-1);
-  }
 
   .title-form {
     gap: var(--space-4);

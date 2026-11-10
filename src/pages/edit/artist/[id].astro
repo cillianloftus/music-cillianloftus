@@ -1,4 +1,5 @@
 ---
+import BackLink from '../../../components/BackLink.astro';
 import { pictureAt } from '../../../lib/pictures';
 /**
  * Correct an artist by hand: who they are, other names they go by, how
@@ -38,7 +39,7 @@ const links = [
 
 <Base title={`Edit ${artist.name}`}>
   <div class="wrap page">
-    <p><a class="back" href={`/artist/${id}`}>← {artist.name}</a></p>
+    <p><BackLink href={`/artist/${id}`}>{artist.name}</BackLink></p>
     <header>
       <p class="eyebrow">Edit artist</p>
       <h1>{artist.name}</h1>
@@ -93,7 +94,7 @@ const links = [
       </div>
     </form>
 
-    <section aria-labelledby="names-heading" class="card">
+    <section aria-labelledby="names-heading" class="form-card">
       <h2 id="names-heading">Other names</h2>
       {
         about.aliases.length > 0 && (
@@ -124,7 +125,7 @@ const links = [
       </form>
     </section>
 
-    <section aria-labelledby="links-heading" class="card">
+    <section aria-labelledby="links-heading" class="form-card">
       <h2 id="links-heading">Linked artists</h2>
       {
         links.length > 0 && (
@@ -162,7 +163,7 @@ const links = [
       </form>
     </section>
 
-    <section aria-labelledby="merge-heading" class="card">
+    <section aria-labelledby="merge-heading" class="form-card">
       <h2 id="merge-heading">Merge a duplicate</h2>
       <p class="muted small">
         The same artist entered twice (say, once by a stage name and once by their own). The other one's credits, names, pictures and links move here, its
@@ -190,7 +191,7 @@ const links = [
 
     {
       allImages.results.length > 0 && (
-        <section aria-labelledby="pictures-heading" class="card">
+        <section aria-labelledby="pictures-heading" class="form-card">
           <h2 id="pictures-heading">Pictures</h2>
           <p class="muted small drag-hint" hidden data-drag-hint>Drag to reorder.</p>
           <ul role="list" class="pictures" data-pictures data-artist={id}>
@@ -289,13 +290,6 @@ const links = [
     --content-max: 44rem;
   }
 
-  .back {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
-    color: var(--text-muted);
-  }
-
   h1 {
     font-size: var(--step-2);
   }
@@ -341,14 +335,6 @@ const links = [
     gap: var(--space-3);
   }
 
-  .card {
-    display: grid;
-    gap: var(--space-3);
-    padding: var(--space-5);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-l);
-    background: var(--surface-1);
-  }
 
   .chips {
     display: flex;

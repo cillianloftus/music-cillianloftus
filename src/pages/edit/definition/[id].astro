@@ -4,6 +4,7 @@
  * natural language come later and produce the same JSON this accepts.
  * Posts to itself so errors re-render with the input intact.
  */
+import BackLink from '../../../components/BackLink.astro';
 import Base from '../../../layouts/Base.astro';
 import DefinitionChips from '../../../components/DefinitionChips.astro';
 import ResultList from '../../../components/ResultList.astro';
@@ -102,7 +103,7 @@ try {
   <div class="wrap page">
     <header>
       <p class="nav-links">
-        <a class="back" href={existing ? `/playlist/${existing.id}` : '/playlists'}>← Back</a>
+        <BackLink href={existing ? `/playlist/${existing.id}` : '/playlists'}>Back</BackLink>
         <a href={chipsHref}>Edit with filters</a>
       </p>
       <h1>{isNew ? 'New playlist' : `Edit ${existing!.name}`}</h1>
@@ -232,13 +233,6 @@ try {
 
   h2 {
     font-size: var(--step-1);
-  }
-
-  .back {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
-    color: var(--text-muted);
   }
 
   .muted,

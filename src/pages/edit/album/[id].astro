@@ -3,6 +3,7 @@
  * Correct an album by hand. Every change is recorded as an override, so
  * no import or nightly lookup will ever put the old value back.
  */
+import BackLink from '../../../components/BackLink.astro';
 import { env } from 'cloudflare:workers';
 import Base from '../../../layouts/Base.astro';
 import ChipInput from '../../../components/ChipInput.astro';
@@ -109,7 +110,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
 
 <Base title={`Edit ${album.title}`}>
   <div class="wrap page">
-    <p><a class="back" href={`/album/${id}`}>← {album.title}</a></p>
+    <p><BackLink href={`/album/${id}`}>{album.title}</BackLink></p>
     <header class="subject">
       <span class="thumb"><CoverArt artKey={album.art_key} title={album.title} sizes="5rem" /></span>
       <div>
@@ -207,7 +208,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
       <p class="hint">Writers, producers and the rest are credited on tracks, below.</p>
     </CreditEditor>
 
-    <section aria-labelledby="editions-heading" class="card">
+    <section aria-labelledby="editions-heading" class="form-card">
       <h2 id="editions-heading">{allEditions.length === 1 ? 'The edition' : `Editions (${allEditions.length})`}</h2>
       <ul role="list" class="editions">
         {allEditions.map((e) => (
@@ -268,7 +269,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
       </ul>
     </section>
 
-    <section aria-labelledby="writer-heading" class="card" id="track-credits">
+    <section aria-labelledby="writer-heading" class="form-card" id="track-credits">
       <h2 id="writer-heading">Track credits, in bulk</h2>
       <p class="muted">
         {
@@ -342,7 +343,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
       }
     </section>
 
-    <section aria-labelledby="new-edition-heading" class="card">
+    <section aria-labelledby="new-edition-heading" class="form-card">
       <h2 id="new-edition-heading">Add an edition</h2>
       <p class="muted">Songs already on the album are matched by title and keep their ratings.</p>
       <form method="post" action="/api/write/album/edit" class="ed-form">
@@ -409,7 +410,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
 
     {
       siblings.results.length > 0 && (
-        <section aria-labelledby="fold-heading" class="card">
+        <section aria-labelledby="fold-heading" class="form-card">
           <h2 id="fold-heading">An edition of another album?</h2>
           <p class="muted">A deluxe or reissue imported as its own album. Its editions join the other album.</p>
           <form method="post" action="/api/write/album/edit" class="inline">
@@ -433,7 +434,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
 
     {
       canRefresh && (
-        <section aria-labelledby="refresh-heading" class="card">
+        <section aria-labelledby="refresh-heading" class="form-card">
           <h2 id="refresh-heading">Refresh from its sources</h2>
           <p class="muted">Fills gaps only. Nothing you edited changes.</p>
           <form method="post" action="/api/write/album/refresh">
@@ -444,7 +445,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
       )
     }
 
-    <section aria-labelledby="remove-heading" class="card">
+    <section aria-labelledby="remove-heading" class="form-card">
       <h2 id="remove-heading">Not really theirs?</h2>
       <p class="muted">
         Takes it out of the library, with its tracks that are on nothing else. A copy is kept, and imports will not bring it back. Not
@@ -513,13 +514,6 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
     --content-max: 44rem;
   }
 
-  .back {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
-    color: var(--text-muted);
-  }
-
   .subject {
     display: grid;
     grid-template-columns: 5rem minmax(0, 1fr);
@@ -578,14 +572,6 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
     gap: var(--space-3);
   }
 
-  .card {
-    display: grid;
-    gap: var(--space-3);
-    padding: var(--space-5);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-l);
-    background: var(--surface-1);
-  }
 
   .editions {
     display: grid;

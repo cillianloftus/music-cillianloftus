@@ -44,7 +44,7 @@ const PLAYBACK_SINCE = '2026-11-08T16:00:00Z';
 
     {
       !configured ? (
-        <section class="card" aria-labelledby="setup-heading">
+        <section class="form-card" aria-labelledby="setup-heading">
           <h2 id="setup-heading">Set up</h2>
           <ol>
             <li>
@@ -64,13 +64,13 @@ const PLAYBACK_SINCE = '2026-11-08T16:00:00Z';
           </ol>
         </section>
       ) : !status ? (
-        <section class="card" aria-labelledby="connect-heading">
+        <section class="form-card" aria-labelledby="connect-heading">
           <h2 id="connect-heading">Not connected</h2>
           <p class="muted">Connect the account playlists should be created in.</p>
           <a class="button button--primary" href="/api/write/spotify/connect">Connect Spotify</a>
         </section>
       ) : (
-        <section class="card" aria-labelledby="status-heading">
+        <section class="form-card" aria-labelledby="status-heading">
           <h2 id="status-heading">Connected</h2>
           <dl>
             <div>
@@ -110,7 +110,7 @@ const PLAYBACK_SINCE = '2026-11-08T16:00:00Z';
     }
     {
       configured && status && (
-        <section class="card" aria-labelledby="link-heading">
+        <section class="form-card" aria-labelledby="link-heading">
           <h2 id="link-heading">Album links</h2>
           <p class="muted">Found each night and after every import. Exact matches only.</p>
           <form method="post" action="/api/write/spotify/link">
@@ -133,14 +133,9 @@ const PLAYBACK_SINCE = '2026-11-08T16:00:00Z';
     font-size: var(--step-1);
   }
 
-  .card {
-    display: grid;
+  .form-card {
     gap: var(--space-4);
     justify-items: start;
-    padding: var(--space-5);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-l);
-    background: var(--surface-1);
   }
 
   ol {

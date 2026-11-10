@@ -1,0 +1,24 @@
+---
+/**
+ * The way back to what a form edits or belongs to ("← Album title",
+ * "← Import"), above its heading. Quiet, and a full touch target tall.
+ */
+interface Props {
+  href: string;
+}
+
+const { href } = Astro.props;
+---
+
+<a class="back" href={href}><span aria-hidden="true">←</span><span><slot /></span></a>
+
+<style>
+  .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    min-height: var(--target);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+</style>

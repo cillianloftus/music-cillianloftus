@@ -33,7 +33,7 @@ const listId = `credit-artists-${entity}`;
 const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean>();
 ---
 
-<section aria-labelledby={`credits-heading-${entity}`} id="credits" class="card credits-card">
+<section aria-labelledby={`credits-heading-${entity}`} id="credits" class="form-card credits-card">
   <div class="section-head">
     <h2 id={`credits-heading-${entity}`}>{heading}</h2>
     {
@@ -350,14 +350,6 @@ const creditEdits = byHand ? await editsOf(entity, id) : new Map<string, boolean
     min-width: 12rem;
   }
 
-  .card {
-    display: grid;
-    gap: var(--space-3);
-    padding: var(--space-5);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-l);
-    background: var(--surface-1);
-  }
 
   h2 {
     font-size: var(--step-1);

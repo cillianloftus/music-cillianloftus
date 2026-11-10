@@ -4,6 +4,7 @@
  * folder; the browser reads each file's tags and fingerprint and sends
  * only that text. Audio never leaves the machine.
  */
+import BackLink from '../../../components/BackLink.astro';
 import Base from '../../../layouts/Base.astro';
 import { MAX_FILES } from '../../../lib/import/files';
 ---
@@ -11,7 +12,7 @@ import { MAX_FILES } from '../../../lib/import/files';
 <Base title="Import from files">
   <div class="wrap page">
     <header>
-      <p><a class="back" href="/manage/import">← Import</a></p>
+      <p><BackLink href="/manage/import">Import</BackLink></p>
       <h1>Import from files</h1>
       <p class="muted">Only tags, file names and checksums leave this device.</p>
     </header>
@@ -278,13 +279,6 @@ import { MAX_FILES } from '../../../lib/import/files';
 
   h2 {
     font-size: var(--step-1);
-  }
-
-  .back {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
-    color: var(--text-muted);
   }
 
   .muted,

@@ -14,7 +14,7 @@ const counts = await env.DB.prepare(
 <Base title="Refresh everything">
   <div class="wrap page">
     <h1>Refresh everything</h1>
-    <div class="card">
+    <div class="form-card">
       <p>
         Looks every album up again at MusicBrainz, Spotify and Deezer ({counts?.sourced ?? 0} of {counts?.albums ?? 0} have a source), and every
         one of the {counts?.artists ?? 0} artists again for their details, bio and pictures. Genius credits are asked for again too.
@@ -40,13 +40,8 @@ const counts = await env.DB.prepare(
     --content-max: 40rem;
   }
 
-  .card {
-    display: grid;
+  .form-card {
     gap: var(--space-4);
-    padding: var(--space-5);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-l);
-    background: var(--surface-1);
   }
 
   ul {
