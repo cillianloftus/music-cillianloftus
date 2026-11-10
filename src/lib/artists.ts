@@ -233,28 +233,24 @@ export async function enrichArtists({
   count?: boolean;
 }): Promise<{ done: number; left: number }> {
   const deadline = Date.now() + budgetMs;
-  const waiting = `FROM artist a
-     WHERE a.mbid IS NOT NULL
-       AND (a.enriched_at IS NULL OR a.enriched_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-90 days'))`;
-  // Artists with records of their own first, then everyone else credited.
-  // Two short reads that stop once they have enough, where sorting every
-  // due artist by whether they had a record read about 11,000 rows a time.
-  const { results: primary } = await env.DB.prepare(
-    `SELECT a.id ${waiting}
-       AND EXISTS (SELECT 1 FROM artist_credit c WHERE c.artist_id = a.id AND c.role = 'primary')
-     LIMIT ?`,
-  )
-    .bind(limit)
-    .all<{ id: string }>();
-  const { results: others } =
-    primary.length < limit
-      ? await env.DB.prepare(`SELECT a.id ${waiting} AND a.id NOT IN (SELECT value FROM json_each(?1)) LIMIT ?2`)
-          .bind(JSON.stringify(primary.map((p) => p.id)), limit - primary.length)
-          .all<{ id: string }>()
-      : { results: [] as { id: string }[] };
-  const results = [...primary, ...others];
+  const pool = count ? COUNT_UP_TO : limit * 4;
+  const due = await dueArtists(pool);
+  // Artists with records of their own first, then everyone else credited:
+  // one probe of the credits index for each artist in the pool. Filtering
+  // every artist by that in SQL read the whole table (about 11,000 rows)
+  // each time, 8,600 times a day, once no due artist had a record.
+  const { results: primary } = due.length
+    ? await env.DB.prepare(
+        `SELECT j.value AS id FROM json_each(?1) j
+          WHERE EXISTS (SELECT 1 FROM artist_credit c WHERE c.artist_id = j.value AND c.role = 'primary')`,
+      )
+        .bind(JSON.stringify(due))
+        .all<{ id: string }>()
+    : { results: [] as { id: string }[] };
+  const first = new Set(primary.map((p) => p.id));
+  const results = [...due.filter((id) => first.has(id)), ...due.filter((id) => !first.has(id))].slice(0, limit);
   let done = 0;
-  for (const { id } of results) {
+  for (const id of results) {
     if (Date.now() > deadline) break;
     try {
       if (await enrichArtist(id)) done++;
@@ -262,8 +258,32 @@ export async function enrichArtists({
       console.warn('Artist enrichment failed', id, error);
     }
   }
-  const left = count ? ((await env.DB.prepare(`SELECT count(*) AS n ${waiting}`).first<{ n: number }>())?.n ?? 0) : 0;
+  // What is left of the pool: exact under COUNT_UP_TO, "at least" above it.
+  const left = count ? Math.max(0, due.length - done) : 0;
   return { done, left };
+}
+
+/** How far a catch-up counts what is left; past it, it says at least this many. */
+const COUNT_UP_TO = 500;
+
+/**
+ * Up to n artists due a look: never looked at first, then those last
+ * looked at over 90 days ago, oldest first. Each is a range of the
+ * partial index artist_enrich_due (0059), read only as far as it returns;
+ * left to itself the planner chose the mbid index and walked every artist.
+ */
+export async function dueArtists(n: number): Promise<string[]> {
+  const stale = new Date(Date.now() - 90 * 86_400_000).toISOString();
+  const read = (where: string, take: number, bind: unknown[] = []) =>
+    env.DB.prepare(
+      `SELECT a.id FROM artist a INDEXED BY artist_enrich_due
+        WHERE a.mbid IS NOT NULL AND ${where} ORDER BY a.enriched_at LIMIT ${take}`,
+    )
+      .bind(...bind)
+      .all<{ id: string }>()
+      .then((r) => r.results.map((x) => x.id));
+  const never = await read('a.enriched_at IS NULL', n);
+  return never.length < n ? [...never, ...(await read('a.enriched_at < ?1', n - never.length, [stale]))] : never;
 }
 
 export interface ArtistAbout {

@@ -7,6 +7,8 @@
 
 import { env } from 'cloudflare:workers';
 import type { SavedDefinition } from '../definitions';
+import { byLibrary } from '../library-cache';
+import { fingerprint } from '../page-cache';
 import { selectIds } from '../query/run';
 import type { ArtItem } from './playlist';
 
@@ -51,9 +53,19 @@ const SQL = {
     LEFT JOIN genre root ON root.id = up.root_id`,
 } as const;
 
+/**
+ * Kept per library state and per version of the playlist (its query, pins
+ * and exclusions): worked out through the score and genre views it read
+ * about 135,000 rows, and the art is asked for on every view of the page.
+ */
 export async function artItems(saved: SavedDefinition): Promise<ArtItem[]> {
   const entity = saved.definition.entity;
   if (entity !== 'recording' && entity !== 'release_group') return [];
+  const version = fingerprint(JSON.stringify([saved.definition, saved.pins, saved.excludes]));
+  return byLibrary(`playlist-art:v1:${saved.id}:${version}`, saved.user_id, () => workOut(saved, entity));
+}
+
+async function workOut(saved: SavedDefinition, entity: 'recording' | 'release_group'): Promise<ArtItem[]> {
   const ids = await selectIds(saved.definition, { userId: saved.user_id, pins: saved.pins, excludes: saved.excludes });
   if (ids.length === 0) return [];
   const { results } = await env.DB.prepare(SQL[entity]).bind(saved.user_id, JSON.stringify(ids)).all<ArtItem>();

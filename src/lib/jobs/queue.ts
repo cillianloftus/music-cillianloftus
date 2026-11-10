@@ -89,13 +89,20 @@ export async function claimNext(): Promise<JobRow | null> {
     `UPDATE job
      SET status = 'running', started_at = ${NOW}, error = NULL
      WHERE id = (
-       SELECT id FROM job
-       WHERE (status = 'queued'
-          OR (status = 'running'
-              AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${STALE_AFTER_MINUTES} minutes')))
-         -- Nothing starts while the queue is paused; what is running finishes.
-         AND NOT EXISTS (SELECT 1 FROM app_setting WHERE key = 'jobs_paused' AND value = '1')
-       ORDER BY created_at, rowid
+       -- The oldest queued job and the oldest stuck one, each one seek of
+       -- job_queue (status, created_at); an OR of the two read every job.
+       SELECT id FROM (
+         SELECT * FROM (SELECT id, created_at, rowid AS n FROM job WHERE status = 'queued' ORDER BY created_at, rowid LIMIT 1)
+         UNION ALL
+         SELECT * FROM (
+           SELECT id, created_at, rowid AS n FROM job
+            WHERE status = 'running'
+              AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${STALE_AFTER_MINUTES} minutes')
+            ORDER BY created_at, rowid LIMIT 1)
+       )
+       -- Nothing starts while the queue is paused; what is running finishes.
+       WHERE NOT EXISTS (SELECT 1 FROM app_setting WHERE key = 'jobs_paused' AND value = '1')
+       ORDER BY created_at, n
        LIMIT 1
      )
      RETURNING *`,
