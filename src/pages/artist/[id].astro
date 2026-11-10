@@ -6,7 +6,7 @@ import AlbumCard from '../../components/AlbumCard.astro';
 import Backdrop from '../../components/Backdrop.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import Score from '../../components/Score.astro';
-import LinkIcon from '../../components/LinkIcon.astro';
+import ElsewhereLink from '../../components/ElsewhereLink.astro';
 import GenreChips from '../../components/GenreChips.astro';
 import Tile from '../../components/Tile.astro';
 import Tiles from '../../components/Tiles.astro';
@@ -723,11 +723,7 @@ import { splitVersion } from '../../lib/versions';
             <ul class="links" role="list" aria-label="Elsewhere">
               {links.map((l) => (
                 <li>
-                  <a href={l.href} rel="external noopener" target="_blank">
-                    <LinkIcon name={l.icon} />
-                    {l.label}
-                    <span class="visually-hidden"> (opens in a new tab)</span>
-                  </a>
+                  <ElsewhereLink href={l.href} label={l.label} icon={l.icon} />
                 </li>
               ))}
             </ul>
@@ -1587,24 +1583,6 @@ import { splitVersion } from '../../lib/versions';
     margin: var(--space-5) 0 0;
     padding: 0;
     list-style: none;
-  }
-
-  .about .links a {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-height: var(--target);
-    padding: 0 var(--space-4) 0 var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface-1);
-    font-size: var(--step--1);
-    font-weight: 650;
-    text-decoration: none;
-  }
-
-  .about .links a:hover {
-    border-color: var(--accent);
   }
 
   /* The fetched outside view: Last.fm and setlist.fm side by side when both. */

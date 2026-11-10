@@ -7,6 +7,7 @@ import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import AlbumCard from '../../components/AlbumCard.astro';
 import CardGrid from '../../components/CardGrid.astro';
+import ElsewhereLink from '../../components/ElsewhereLink.astro';
 import { ownerId } from '../../lib/auth/user';
 import { labelAlbums, labelDetail } from '../../lib/labels';
 
@@ -30,9 +31,7 @@ const facts = [
       <p class="eyebrow">Label</p>
       <PageHeader title={label.name} count={albums.length}>
         {label.mbid && (
-          <a class="button button--quiet" href={`https://musicbrainz.org/label/${label.mbid}`} rel="external noopener" target="_blank">
-            MusicBrainz<span class="visually-hidden"> (opens in a new tab)</span>
-          </a>
+          <ElsewhereLink href={`https://musicbrainz.org/label/${label.mbid}`} label="MusicBrainz" icon="musicbrainz" />
         )}
       </PageHeader>
       {facts.length > 0 && <p class="facts">{facts.join(' · ')}</p>}

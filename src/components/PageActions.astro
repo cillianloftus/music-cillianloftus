@@ -5,7 +5,7 @@
  * as small round icons, so they are at hand without a row of their own.
  * Shared by track and album pages: change it here, both follow.
  */
-import LinkIcon from './LinkIcon.astro';
+import ElsewhereLink from './ElsewhereLink.astro';
 import ListenButton from './ListenButton.astro';
 
 interface Props {
@@ -33,12 +33,7 @@ const elsewhere = links.filter((l) => l.icon !== 'spotify');
     )
   }
   {
-    elsewhere.map((l) => (
-      <a class="button button--quiet icon-link" href={l.href} rel="external noopener" target="_blank" title={l.label}>
-        <LinkIcon name={l.icon} />
-        <span class="visually-hidden">{l.label} (opens in a new tab)</span>
-      </a>
-    ))
+    elsewhere.map((l) => <ElsewhereLink href={l.href} label={l.label} icon={l.icon} iconOnly />)
   }
 </p>
 
@@ -47,12 +42,5 @@ const elsewhere = links.filter((l) => l.icon !== 'spotify');
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
-  }
-
-  /* A round button holding just the site's icon. */
-  .icon-link {
-    justify-content: center;
-    width: var(--target);
-    padding: 0;
   }
 </style>

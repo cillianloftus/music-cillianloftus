@@ -1,0 +1,44 @@
+---
+/**
+ * A link to the same thing on another site (MusicBrainz, Wikipedia,
+ * Genius, the artist's own site): a pill with the site's mark and name,
+ * or just the mark in a round button where room is short. Artist, track,
+ * album, label and list pages all use it, so they all read alike.
+ */
+import LinkIcon from './LinkIcon.astro';
+
+interface Props {
+  href: string;
+  label: string;
+  /** A LinkIcon name: musicbrainz, wikipedia, genius… */
+  icon: string;
+  /** Just the mark, with the name kept for screen readers and as a tooltip. */
+  iconOnly?: boolean;
+}
+
+const { href, label, icon, iconOnly = false } = Astro.props;
+---
+
+<a
+  class:list={['button', 'button--quiet', 'elsewhere', { round: iconOnly }]}
+  href={href}
+  rel="external noopener"
+  target="_blank"
+  title={iconOnly ? label : undefined}
+>
+  <LinkIcon name={icon} />
+  {iconOnly ? <span class="visually-hidden">{label}</span> : label}
+  <span class="visually-hidden"> (opens in a new tab)</span>
+</a>
+
+<style>
+  .elsewhere {
+    padding-left: var(--space-3);
+    font-size: var(--step--1);
+  }
+
+  .round {
+    width: var(--target);
+    padding: 0;
+  }
+</style>

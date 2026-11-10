@@ -7,6 +7,7 @@ import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import MediaRow from '../../components/MediaRow.astro';
 import RowList from '../../components/RowList.astro';
+import ElsewhereLink from '../../components/ElsewhereLink.astro';
 import CreditLine from '../../components/CreditLine.astro';
 import { ownerId } from '../../lib/auth/user';
 import { placeIn } from '../../lib/album-extras';
@@ -28,9 +29,7 @@ const award = series.type === 'Release group award';
       <p class="eyebrow"><a href="/lists">{award ? 'Award' : 'List'}</a></p>
       <PageHeader title={series.name} count={entries.length}>
         {series.mbid && (
-          <a class="button button--quiet" href={`https://musicbrainz.org/series/${series.mbid}`} rel="external noopener" target="_blank">
-            MusicBrainz<span class="visually-hidden"> (opens in a new tab)</span>
-          </a>
+          <ElsewhereLink href={`https://musicbrainz.org/series/${series.mbid}`} label="MusicBrainz" icon="musicbrainz" />
         )}
       </PageHeader>
       {
