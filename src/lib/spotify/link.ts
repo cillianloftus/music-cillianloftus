@@ -49,6 +49,9 @@ export function pickAlbum(album: Pick<Album, 'title' | 'artist' | 'first_release
 }
 
 async function albumsToLink(limit: number, only?: string): Promise<Album[]> {
+  // One album (straight after its import) is a seek on its id; "?2 IS NULL
+  // OR g.id = ?2" in one statement read every album, about 2,200 rows an import.
+  const which = only ? 'g.id = ?2' : '?2 IS NULL';
   const { results } = await env.DB.prepare(
     `SELECT g.id, g.title, g.first_release_date, c.release_id,
             (SELECT a.name FROM artist_credit ac JOIN artist a ON a.id = ac.artist_id
@@ -57,7 +60,7 @@ async function albumsToLink(limit: number, only?: string): Promise<Album[]> {
             (SELECT count(*) FROM track t WHERE t.release_id = c.release_id) AS track_count
      FROM release_group g
      LEFT JOIN v_release_group_canonical c ON c.release_group_id = g.id
-     WHERE g.spotify_id IS NULL AND g.status = 'released' AND (?2 IS NULL OR g.id = ?2)
+     WHERE g.spotify_id IS NULL AND g.status = 'released' AND ${which}
          AND NOT EXISTS (SELECT 1 FROM field_override fo WHERE fo.entity_type = 'release_group' AND fo.entity_id = g.id AND fo.field = 'spotify_id')
      ORDER BY g.created_at DESC
      LIMIT ?1`,

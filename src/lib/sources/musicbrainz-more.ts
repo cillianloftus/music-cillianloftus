@@ -198,7 +198,8 @@ export async function fillMoreFromMusicBrainz(
              SELECT j.value ->> '$.id', j.value ->> '$.label', j.value ->> '$.family',
                     coalesce((SELECT max(position) FROM credit_role WHERE family = j.value ->> '$.family'), 90) + 1
              FROM json_each(?1) j
-             WHERE NOT EXISTS (SELECT 1 FROM credit_role r WHERE r.id = j.value ->> '$.id' OR r.label = j.value ->> '$.label' COLLATE NOCASE)
+             WHERE NOT EXISTS (SELECT 1 FROM credit_role r WHERE r.id = j.value ->> '$.id')
+               AND NOT EXISTS (SELECT 1 FROM credit_role r WHERE r.label = j.value ->> '$.label' COLLATE NOCASE)
              ON CONFLICT DO NOTHING`,
           )
           .bind(JSON.stringify([...roles.values()])),

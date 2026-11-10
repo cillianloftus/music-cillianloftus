@@ -33,18 +33,7 @@ export async function checkOfficialReleases({ budgetMs }: { budgetMs: number }):
   const stop = Date.now() + budgetMs;
   let lookups = 0;
 
-  const { results: artists } = await env.DB.prepare(
-    `SELECT a.id, a.mbid FROM artist a
-     WHERE a.mbid IS NOT NULL AND a.mbid <> ?
-       AND (a.releases_checked_at IS NULL OR a.releases_checked_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?))
-       -- Worked out once (about 5,000 rows), not per artist (ten million).
-       AND a.id IN (SELECT c.artist_id FROM artist_credit c JOIN release_group g ON g.id = c.entity_id
-                    WHERE c.entity_type = 'release_group' AND c.role = 'primary' AND g.mbid IS NOT NULL)
-     ORDER BY a.releases_checked_at IS NOT NULL, a.releases_checked_at
-     LIMIT 60`,
-  )
-    .bind(VARIOUS_ARTISTS_MBID, `-${RECHECK_DAYS} days`)
-    .all<{ id: string; mbid: string }>();
+  const artists = await artistsToCheck(60);
 
   for (const artist of artists) {
     if (Date.now() > stop) return lookups;
@@ -56,7 +45,8 @@ export async function checkOfficialReleases({ budgetMs }: { budgetMs: number }):
   // Whatever no artist check reached.
   while (Date.now() < stop) {
     const group = await env.DB.prepare(
-      `SELECT id, mbid FROM release_group WHERE official IS NULL AND mbid IS NOT NULL ORDER BY created_at LIMIT 1`,
+      `SELECT id, mbid FROM release_group INDEXED BY release_group_unchecked
+       WHERE official IS NULL AND mbid IS NOT NULL ORDER BY created_at LIMIT 1`,
     ).first<{ id: string; mbid: string }>();
     if (!group || artists.length > 0) break; // artists first: their checks settle most groups at once
     const releases = await browseReleases(group.mbid);
@@ -65,6 +55,44 @@ export async function checkOfficialReleases({ budgetMs }: { budgetMs: number }):
     await env.DB.prepare('UPDATE release_group SET official = ? WHERE id = ?').bind(isOfficial ? 1 : 0, group.id).run();
   }
   return lookups;
+}
+
+/**
+ * Up to n artists whose official list is wanted: first the primary artists
+ * of albums not yet checked (an album imported since its artist's check;
+ * one request settles all of theirs), then artists last checked over
+ * RECHECK_DAYS ago, oldest first. Each starts from a short range of a
+ * partial index (0062). Walking every artist instead, to test each for a
+ * MusicBrainz album, read about 34,000 rows a minute, mostly to find none.
+ */
+export async function artistsToCheck(n: number): Promise<{ id: string; mbid: string }[]> {
+  const { results: fresh } = await env.DB.prepare(
+    `SELECT a.id, a.mbid, min(g.created_at) AS since
+     FROM release_group g INDEXED BY release_group_unchecked
+     JOIN artist_credit c ON c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary'
+     JOIN artist a ON a.id = c.artist_id
+     WHERE g.official IS NULL AND g.mbid IS NOT NULL AND a.mbid IS NOT NULL AND a.mbid <> ?1
+     GROUP BY a.id
+     ORDER BY since
+     LIMIT ?2`,
+  )
+    .bind(VARIOUS_ARTISTS_MBID, n)
+    .all<{ id: string; mbid: string }>();
+  const picked = fresh.map(({ id, mbid }) => ({ id, mbid }));
+  if (picked.length >= n) return picked;
+  const stale = new Date(Date.now() - RECHECK_DAYS * 86_400_000).toISOString();
+  const { results: old } = await env.DB.prepare(
+    `SELECT a.id, a.mbid FROM artist a INDEXED BY artist_releases_checked
+     WHERE a.releases_checked_at IS NOT NULL AND a.releases_checked_at < ?1
+       AND a.mbid IS NOT NULL AND a.mbid <> ?2
+     ORDER BY a.releases_checked_at
+     LIMIT ?3`,
+  )
+    .bind(stale, VARIOUS_ARTISTS_MBID, n)
+    .all<{ id: string; mbid: string }>();
+  const seen = new Set(picked.map((a) => a.id));
+  for (const a of old) if (picked.length < n && !seen.has(a.id)) picked.push(a);
+  return picked;
 }
 
 /**

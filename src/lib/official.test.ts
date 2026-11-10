@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { markArtistGroups, removedMbids, removeReleaseGroup, removeUnofficial, RemovalError, unofficialGroups } from './official';
+import { artistsToCheck, markArtistGroups, removedMbids, removeReleaseGroup, removeUnofficial, RemovalError, unofficialGroups } from './official';
 
 let db: DatabaseSync;
 
@@ -109,5 +109,21 @@ describe('checking against MusicBrainz', () => {
     db.exec(`UPDATE release_group SET official = 1 WHERE id = 'rg-b'`);
     await markArtistGroups('art-x', ['mb-rg-a']);
     expect(count(`SELECT official n FROM release_group WHERE id = 'rg-b'`)).toBe(1);
+  });
+
+  it('picks the artists of unchecked albums, then those checked longest ago, and none once all is settled', async () => {
+    db.exec(`UPDATE release_group SET mbid = 'mb-' || id`);
+    db.exec(`UPDATE artist SET mbid = 'mb-' || id`);
+    const primaries = (db.prepare(`SELECT DISTINCT artist_id AS id FROM artist_credit WHERE entity_type = 'release_group' AND role = 'primary' ORDER BY artist_id`).all() as { id: string }[]).map((r) => r.id);
+    expect(primaries.length).toBeGreaterThan(0);
+    expect((await artistsToCheck(10)).map((a) => a.id).sort()).toEqual(primaries);
+    expect(await artistsToCheck(1)).toHaveLength(1);
+
+    for (const id of primaries) await markArtistGroups(id, []);
+    expect(await artistsToCheck(10)).toEqual([]);
+
+    // A check over ninety days old is due again.
+    db.prepare(`UPDATE artist SET releases_checked_at = ? WHERE id = ?`).run(new Date(Date.now() - 120 * 86_400_000).toISOString(), primaries[0]!);
+    expect((await artistsToCheck(10)).map((a) => a.id)).toEqual([primaries[0]]);
   });
 });
