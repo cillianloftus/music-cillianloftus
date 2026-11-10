@@ -1,0 +1,89 @@
+---
+/**
+ * Every critics' list, award and series with an album in the library, the
+ * fullest first: a way into the albums the wider world singled out.
+ */
+import Base from '../layouts/Base.astro';
+import PageHeader from '../components/PageHeader.astro';
+import { allSeries } from '../lib/series';
+
+const lists = await allSeries();
+const awards = lists.filter((l) => l.type === 'Release group award');
+const others = lists.filter((l) => l.type !== 'Release group award');
+---
+
+<Base title="Lists and awards" description="Critics’ lists, awards and series with albums in Cillian Loftus’s library.">
+  <div class="wrap page">
+    <PageHeader title="Lists and awards" count={lists.length} />
+    {lists.length === 0 && <p class="muted">None yet: they arrive as albums are looked up on MusicBrainz.</p>}
+    {
+      [
+        { heading: 'Lists', items: others },
+        { heading: 'Awards', items: awards },
+      ]
+        .filter((g) => g.items.length > 0)
+        .map((g) => (
+          <section aria-labelledby={`h-${g.heading}`}>
+            <h2 id={`h-${g.heading}`}>
+              {g.heading} <span class="count tabular">{g.items.length}</span>
+            </h2>
+            <ul role="list" class="lists">
+              {g.items.map((l) => (
+                <li>
+                  <a href={`/list/${l.id}`}>{l.name}</a>
+                  <span class="muted small tabular">
+                    {l.albums} {l.albums === 1 ? 'album' : 'albums'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))
+    }
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+  }
+
+  h2 {
+    margin-bottom: var(--space-3);
+    font-size: var(--step-2);
+    letter-spacing: -0.02em;
+  }
+
+  .lists {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+    gap: 0 var(--space-6);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .lists li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .lists a {
+    min-width: 0;
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .lists a:hover {
+    text-decoration: underline;
+  }
+
+  .lists .muted {
+    flex: none;
+  }
+</style>

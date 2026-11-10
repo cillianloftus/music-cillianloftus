@@ -1,0 +1,82 @@
+---
+/**
+ * One critics' list, award or series: the albums in the library on it, in
+ * its own order where it has one ("No. 42"), with their scores.
+ */
+import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import MediaRow from '../../components/MediaRow.astro';
+import RowList from '../../components/RowList.astro';
+import CreditLine from '../../components/CreditLine.astro';
+import { ownerId } from '../../lib/auth/user';
+import { placeIn } from '../../lib/album-extras';
+import { yearOf } from '../../lib/dates';
+import { seriesAlbums, seriesDetail } from '../../lib/series';
+
+const series = await seriesDetail(Astro.params.id!);
+if (!series) return Astro.rewrite('/404');
+const viewerId = Astro.locals.user?.id ?? (await ownerId());
+const entries = await seriesAlbums(series.id, viewerId);
+const rated = entries.filter((e) => e.album.quality_score != null);
+const average = rated.length ? Math.round(rated.reduce((sum, e) => sum + e.album.quality_score!, 0) / rated.length) : null;
+const award = series.type === 'Release group award';
+---
+
+<Base title={series.name} description={`${entries.length} ${entries.length === 1 ? 'album' : 'albums'} in Cillian Loftus’s library ${award ? 'with this award' : 'on this list'}.`}>
+  <div class="wrap page">
+    <div>
+      <p class="eyebrow"><a href="/lists">{award ? 'Award' : 'List'}</a></p>
+      <PageHeader title={series.name} count={entries.length}>
+        {series.mbid && (
+          <a class="button button--quiet" href={`https://musicbrainz.org/series/${series.mbid}`} rel="external noopener" target="_blank">
+            MusicBrainz<span class="visually-hidden"> (opens in a new tab)</span>
+          </a>
+        )}
+      </PageHeader>
+      {
+        average !== null && (
+          <p class="muted">
+            You have rated {rated.length} of them, averaging {average}.
+          </p>
+        )
+      }
+    </div>
+    <RowList>
+      {
+        entries.map((e) => (
+          <MediaRow
+            href={`/album/${e.album.id}`}
+            title={e.album.title}
+            artKey={e.album.art_key}
+            score={{ quality: e.album.quality_score, personal: e.album.personal_score, completeness: e.album.completeness }}
+          >
+            <span>
+              <CreditLine credits={e.album.credits} />
+              {yearOf(e.album.first_release_date) && ` · ${yearOf(e.album.first_release_date)}`}
+            </span>
+            {placeIn({ series_id: series.id, name: series.name, type: series.type, number: e.number }) && (
+              <span class="place">{placeIn({ series_id: series.id, name: series.name, type: series.type, number: e.number })}</span>
+            )}
+          </MediaRow>
+        ))
+      }
+    </RowList>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-6);
+    padding-top: var(--space-6);
+  }
+
+  .eyebrow a {
+    color: inherit;
+  }
+
+  .place {
+    color: var(--accent);
+    font-weight: 650;
+  }
+</style>

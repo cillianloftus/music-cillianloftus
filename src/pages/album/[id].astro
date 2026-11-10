@@ -294,7 +294,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
               <ul role="list">
                 {extras.lists.slice(0, LISTS_SHOWN).map((l) => (
                   <li>
-                    {l.name}
+                    <a href={`/list/${l.series_id}`}>{l.name}</a>
                     {placeIn(l) && <span class="muted"> · {placeIn(l)}</span>}
                   </li>
                 ))}
@@ -305,7 +305,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                   <ul role="list">
                     {extras.lists.slice(LISTS_SHOWN).map((l) => (
                       <li>
-                        {l.name}
+                        <a href={`/list/${l.series_id}`}>{l.name}</a>
                         {placeIn(l) && <span class="muted"> · {placeIn(l)}</span>}
                       </li>
                     ))}
