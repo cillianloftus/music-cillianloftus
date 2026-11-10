@@ -230,7 +230,9 @@ export async function fillMoreFromMusicBrainz(
                WHERE ${notEdited}
                  AND EXISTS (SELECT 1 FROM artist_credit p WHERE p.entity_type = 'recording' AND p.entity_id = c.entity_id
                              AND p.artist_id = a.id AND p.role <> c.role
-                             AND p.role IN (SELECT r.id FROM credit_role r WHERE r.id = j.value ->> '$.role' OR r.label = j.value ->> '$.label' COLLATE NOCASE))
+                             -- The precise role by id or by name: two seeks, where an OR of them read every role.
+                             AND (p.role = j.value ->> '$.role'
+                                  OR p.role = (SELECT r.id FROM credit_role r WHERE r.label = j.value ->> '$.label' COLLATE NOCASE)))
                  AND NOT EXISTS (SELECT 1 FROM json_each(?2) k
                                  WHERE k.value ->> '$.recording' = c.entity_id AND k.value ->> '$.artist' = j.value ->> '$.artist'
                                    AND k.value ->> '$.precise' = c.role))`,
