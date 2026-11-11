@@ -114,12 +114,26 @@ describe('divergence', () => {
     listen('a1', 3);
     listen('c1', 1); // c1 95 and a4 100: barely played
     insertPlays(db, plays);
+    // a4 is never played, but is on Spotify, so never playing it means something.
+    db.exec(`UPDATE recording SET spotify_id = 'sp-a4' WHERE id = 'a4'`);
 
     const { underplayed, overplayed } = await divergence('u-owner');
     // Perfectly anti-correlated, so the gap orders both lists end to end.
     expect(underplayed.map((d) => d.recording_id)).toEqual(['a4', 'c1', 'a1']);
     expect(overplayed.map((d) => d.recording_id)).toEqual(['a3', 'b2', 'a2']);
     expect(overplayed[0]).toMatchObject({ title: 'Song A3', plays: 40, artist: 'Xavier', album_title: 'Album A' });
+  });
+
+  it('leaves out a song not certainly on Spotify: unplayed there is not underplayed', async () => {
+    const plays: Record<string, string | number>[] = [];
+    for (const [id, n] of [['a3', 40], ['b2', 20], ['a2', 10], ['b1', 5], ['a1', 3], ['c1', 1]] as const)
+      for (let i = 0; i < n; i++)
+        plays.push({ id: `${id}-${i}`, user_id: 'u-owner', recording_id: id, played_at: `2025-01-01T00:${String(i).padStart(2, '0')}:00Z`, ms_played: 60_000, source: 'spotify_export' });
+    insertPlays(db, plays);
+    // a4 (100) has no Spotify track and no Spotify plays: perhaps only on a CD.
+    const { underplayed } = await divergence('u-owner');
+    expect(underplayed.map((d) => d.recording_id)).not.toContain('a4');
+    expect(underplayed[0]?.recording_id).toBe('c1');
   });
 
   it('says nothing for a library too small to compare', async () => {

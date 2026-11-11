@@ -124,7 +124,9 @@ export interface Divergence {
 /**
  * The interesting query (ARCHITECTURE.md §3): where what is rated and what
  * is played disagree. Rated tracks are ranked by plays and by score, each
- * as a percentile; the biggest gaps either way are the surprises.
+ * as a percentile; the biggest gaps either way are the surprises. Only
+ * tracks certainly on Spotify take part, so the percentiles are among
+ * songs that could have been streamed.
  */
 export async function divergence(userId: string, limit = 10): Promise<{ underplayed: Divergence[]; overplayed: Divergence[] }> {
   const { results } = await env.DB.prepare(
@@ -132,6 +134,11 @@ export async function divergence(userId: string, limit = 10): Promise<{ underpla
        SELECT s.recording_id, s.quality_score,
               (SELECT count(*) FROM play p WHERE p.recording_id = s.recording_id AND p.user_id = ?1 AND p.counted = 1) AS plays
        FROM v_recording_score s WHERE s.user_id = ?1
+         -- Only songs certainly on Spotify: one heard only on a CD or a file
+         -- is not "rarely played", just not streamable. Certain means its
+         -- own Spotify track, or a play in the Spotify export.
+         AND (EXISTS (SELECT 1 FROM recording x WHERE x.id = s.recording_id AND x.spotify_id IS NOT NULL)
+              OR EXISTS (SELECT 1 FROM play p WHERE p.recording_id = s.recording_id AND p.user_id = ?1 AND p.source = 'spotify_export'))
      ),
      ranked AS (
        SELECT *, percent_rank() OVER (ORDER BY plays) AS play_rank,

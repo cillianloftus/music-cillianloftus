@@ -62,6 +62,32 @@ describe('rating queue', () => {
     expect(db.prepare("SELECT skip_count FROM queue_skip WHERE entity_id = 'a1'").get()!.skip_count).toBe(2);
   });
 
+  it('brings in a song played often and never rated, most played first', async () => {
+    // n2 and n3 are new and unrated (on album B); a1 is rated in the fixture.
+    insert(db, 'recording', ['n2', 'n3'].map((id) => ({ id, title: `New ${id}`, source: 'manual' })));
+    insert(db, 'track', ['n2', 'n3'].map((id, i) => ({ id: `t-${id}`, release_id: 'r-b', recording_id: id, position: 10 + i })));
+    insert(db, 'listen_track', ['a1', 'n2', 'n3'].map((id) => ({ key: `recording:${id}`, artist: 'X', title: id, artist_key: 'x', title_key: id, recording_id: id })));
+    const plays = (id: string, n: number, counted = 1) =>
+      Array.from({ length: n }, (_, i) => ({
+        id: `p-${id}-${i}-${counted}`,
+        user_id: 'u-owner',
+        track_key: `recording:${id}`,
+        recording_id: id,
+        played_at: `2026-0${counted ? 1 : 2}-01T00:${String(i).padStart(2, '0')}:00.000Z`,
+        source: 'lastfm',
+        counted,
+      }));
+    insert(db, 'play', [...plays('n2', 12), ...plays('n3', 9), ...plays('n3', 5, 0), ...plays('a1', 20)]);
+
+    const queue = await ratingQueue('u-owner');
+    const songs = queue.filter((e) => e.reason.kind === 'plays' && e.entity_type === 'recording');
+    // n3 has 9 counted plays (the five under 30 seconds do not count); a1 is rated.
+    expect(songs).toEqual([{ entity_type: 'recording', entity_id: 'n2', reason: { tier: 2, kind: 'plays', plays: 12 }, skipped: false }]);
+    // Below the highly rated artist's album, above the tracks to examine.
+    expect(queue.findIndex((e) => e.entity_id === 'n2')).toBeLessThan(queue.findIndex((e) => e.reason.kind === 'examine'));
+    expect(queue[0]?.entity_id).toBe('rg-c');
+  });
+
   it('is per user', async () => {
     // The friend has rated only b2 (10): an "examine" item for them, not the owner.
     const friend = await ratingQueue('u-friend');

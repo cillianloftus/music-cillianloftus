@@ -113,6 +113,10 @@ const quiet = { autocomplete: 'off', spellcheck: false, 'data-1p-ignore': '', 'd
               </div>
             </form>
 
+            {s.id === 'lastfm' && s.complete && !s.have.username && (
+              <p class="muted small">Add your username to bring in your scrobbles. Without it only artist details come from Last.fm.</p>
+            )}
+
             {(s.id === 'lastfm' || s.id === 'listenbrainz') && (s.plays > 0 || s.state?.synced_at) && (
               <p class="muted small">
                 {s.plays.toLocaleString('en-GB')} plays of library tracks so far

@@ -4,7 +4,7 @@
  *
  *   0. opened in Spotify from the queue and not rated since (the loop)
  *   1. albums by artists already rated highly
- *   2. high play count with no rating
+ *   2. high play count with no rating (albums, and songs on their own)
  *   3. gut-rated 8 or above with no detailed breakdown
  *   4. recently added
  *   5. albums with some tracks rated but no album rating
@@ -17,6 +17,7 @@
 import { env } from 'cloudflare:workers';
 import { splitVersion } from './versions';
 import { albumScores } from './album-scores';
+import { byLibrary } from './library-cache';
 
 export const QUEUE_RULES = {
   highlyRatedArtist: 80,
@@ -119,6 +120,10 @@ items AS (
   FROM v_latest_rating_axes l
   WHERE l.user_id = ?1 AND l.depth = 'gut' AND l.gut_score >= ?4
     AND NOT EXISTS (SELECT 1 FROM recording_kind k WHERE k.recording_id = l.entity_id AND k.kind = 'skit')
+  UNION ALL
+  -- Songs played often and never rated, counted apart and passed in (?8).
+  SELECT 'recording', j.key, NULL, NULL, j.value, NULL, NULL, NULL, NULL, NULL, 2
+  FROM json_each(?8) j
 )
 SELECT
   i.entity_type, i.entity_id, i.tier, i.artist_name, i.artist_score, i.plays, i.gut, i.rated_track_count, i.title, i.type,
@@ -161,9 +166,35 @@ function reasonFor(row: Row): QueueReason {
   }
 }
 
+/**
+ * Songs this listener has played at least highPlayCount times and never
+ * rated, with their plays: id → plays, most played first, at most 200.
+ * Every counted play is read, so it is worked out once per library state
+ * (plays and ratings are both in the stamp), not on each visit.
+ */
+export function playedUnrated(userId: string): Promise<Record<string, number>> {
+  return byLibrary('queue-played-unrated', userId, async () => {
+    const { results } = await env.DB.prepare(
+      `SELECT p.recording_id AS id, count(*) AS plays
+       FROM play p
+       WHERE p.user_id = ?1 AND p.counted = 1 AND p.recording_id IS NOT NULL
+       GROUP BY p.recording_id
+       HAVING count(*) >= ?2
+          AND NOT EXISTS (SELECT 1 FROM rating x
+                          WHERE x.entity_type = 'recording' AND x.entity_id = p.recording_id AND x.user_id = ?1)
+          AND NOT EXISTS (SELECT 1 FROM recording_kind k WHERE k.recording_id = p.recording_id AND k.kind = 'skit')
+       ORDER BY plays DESC, id
+       LIMIT 200`,
+    )
+      .bind(userId, QUEUE_RULES.highPlayCount)
+      .all<{ id: string; plays: number }>();
+    return Object.fromEntries(results.map((r) => [r.id, r.plays]));
+  });
+}
+
 export async function ratingQueue(userId: string): Promise<QueueEntry[]> {
   // From the album scores (kept per library state), not the view again.
-  const scores = await albumScores(userId);
+  const [scores, played] = await Promise.all([albumScores(userId), playedUnrated(userId)]);
   const ratedCounts = JSON.stringify(
     Object.fromEntries(Object.entries(scores).filter(([, s]) => s.rated > 0).map(([id, s]) => [id, s.rated])),
   );
@@ -176,6 +207,7 @@ export async function ratingQueue(userId: string): Promise<QueueEntry[]> {
       QUEUE_RULES.recentDays,
       QUEUE_RULES.handoffHours,
       ratedCounts,
+      JSON.stringify(played),
     )
     .all<Row>();
   // A remix single or EP is a version of a song rated elsewhere, not a record to rate.
