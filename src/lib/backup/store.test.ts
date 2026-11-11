@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BACKUP_FORMAT, BACKUP_VERSION, type Backup } from './format';
-import { backupsToPrune, formatForGit } from './store';
+import { backupsToPrune, gzipPieces } from './store';
 
 const key = (date: string) => `backups/${date}.json.gz`;
 
@@ -27,22 +26,14 @@ describe('backupsToPrune', () => {
   });
 });
 
-describe('formatForGit', () => {
-  const backup: Backup = {
-    format: BACKUP_FORMAT,
-    version: BACKUP_VERSION,
-    created_at: '2026-11-04T04:00:00.000Z',
-    migrations: ['0001_initial_schema.sql'],
-    restore_order: ['artist'],
-    tables: { artist: { columns: ['id', 'name'], rows: [['a', 'One'], ['b', 'Two "quoted"']] } },
-  };
-
-  it('is valid JSON that parses back to the same backup', () => {
-    expect(JSON.parse(formatForGit(backup))).toEqual(backup);
-  });
-
-  it('puts each row on its own line', () => {
-    const lines = formatForGit(backup).split('\n');
-    expect(lines.filter((l) => l.trim().startsWith('["'))).toHaveLength(2);
+describe('gzipPieces', () => {
+  it('compresses text made a piece at a time into one gzip file', async () => {
+    async function* pieces() {
+      for (let i = 0; i < 2000; i++) yield `["row ${i}", ${i}],`;
+    }
+    const gz = await gzipPieces(pieces());
+    const text = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    expect(text).toBe(Array.from({ length: 2000 }, (_, i) => `["row ${i}", ${i}],`).join(''));
+    expect(gz.byteLength).toBeLessThan(text.length / 2);
   });
 });

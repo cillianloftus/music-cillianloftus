@@ -5,8 +5,8 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { dumpDatabase } from './dump';
-import { summarise, type Backup, type BackupSummary } from './format';
+import { backupText } from './dump';
+import type { BackupSummary } from './format';
 
 export const BACKUP_PREFIX = 'backups/';
 const KEEP_DAILY = 30;
@@ -17,32 +17,22 @@ export interface BackupReport {
   bytes: number;
   summary: BackupSummary;
   pruned: string[];
-  github: 'committed' | 'not configured';
+  github: 'committed' | 'not configured' | 'not this week';
 }
 
-/**
- * JSON with one row per line, so successive commits diff row by row
- * instead of as one enormous changed line.
- */
-export function formatForGit(backup: Backup): string {
-  const tables = Object.entries(backup.tables)
-    .map(([name, dump]) => {
-      const rows = dump.rows.map((row) => `      ${JSON.stringify(row)}`).join(',\n');
-      return `    ${JSON.stringify(name)}: {\n      "columns": ${JSON.stringify(dump.columns)},\n      "rows": [\n${rows}\n      ]\n    }`;
-    })
-    .join(',\n');
-  const { tables: _tables, ...header } = backup;
-  const head = JSON.stringify(header, null, 2).replace(/\n}$/, '');
-  return `${head},\n  "tables": {\n${tables}\n  }\n}\n`;
+/** Gzips text as it is made, holding only the compressed bytes. */
+export async function gzipPieces(pieces: AsyncIterable<string>): Promise<ArrayBuffer> {
+  const gzip = new CompressionStream('gzip');
+  // Read while writing, or the stream fills and the writes wait for ever.
+  const compressed = new Response(gzip.readable).arrayBuffer();
+  const writer = gzip.writable.getWriter();
+  const encoder = new TextEncoder();
+  for await (const piece of pieces) await writer.write(encoder.encode(piece));
+  await writer.close();
+  return compressed;
 }
 
-async function gzip(text: string): Promise<ArrayBuffer> {
-  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
-  return new Response(stream).arrayBuffer();
-}
-
-function base64(text: string): string {
-  const bytes = new TextEncoder().encode(text);
+function base64(bytes: Uint8Array): string {
   let binary = '';
   for (let i = 0; i < bytes.length; i += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
@@ -50,12 +40,19 @@ function base64(text: string): string {
   return btoa(binary);
 }
 
-async function commitToGitHub(content: string, date: string): Promise<'committed' | 'not configured'> {
+/**
+ * The copy outside Cloudflare: the gzipped backup, committed once a week
+ * (Sundays) as backup.json.gz, so the repo's history holds a weekly
+ * series. Uncompressed, row-per-line JSON would diff more neatly, but at
+ * this size it is past what one request to GitHub's contents API can
+ * carry, and past a Worker's memory to build.
+ */
+async function commitToGitHub(gz: ArrayBuffer, date: string): Promise<'committed' | 'not configured'> {
   const token = env.GITHUB_BACKUP_TOKEN;
   const repo = env.GITHUB_BACKUP_REPO;
   if (!token || !repo) return 'not configured';
 
-  const url = `https://api.github.com/repos/${repo}/contents/backup.json`;
+  const url = `https://api.github.com/repos/${repo}/contents/backup.json.gz`;
   const headers = {
     Authorization: `Bearer ${token}`,
     Accept: 'application/vnd.github+json',
@@ -72,7 +69,7 @@ async function commitToGitHub(content: string, date: string): Promise<'committed
   const response = await fetch(url, {
     method: 'PUT',
     headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: `Backup ${date}`, content: base64(content), sha }),
+    body: JSON.stringify({ message: `Backup ${date}`, content: base64(new Uint8Array(gz)), sha }),
   });
   if (!response.ok) throw new Error(`GitHub backup: commit failed (${response.status}).`);
   return 'committed';
@@ -104,26 +101,24 @@ export async function listBackups(): Promise<R2Object[]> {
   return objects.sort((a, b) => b.key.localeCompare(a.key));
 }
 
-export async function runBackup(): Promise<BackupReport> {
-  const backup = await dumpDatabase();
-  const summary = summarise(backup);
-  const date = backup.created_at.slice(0, 10);
+export async function runBackup(now = new Date()): Promise<BackupReport> {
+  const { created_at, migrations, summary, pieces } = await backupText();
+  const body = await gzipPieces(pieces);
+  const date = created_at.slice(0, 10);
   const key = `${BACKUP_PREFIX}${date}.json.gz`;
-
-  const body = await gzip(JSON.stringify(backup));
   await env.ASSET_STORE.put(key, body, {
     httpMetadata: { contentType: 'application/gzip' },
     customMetadata: {
-      created_at: backup.created_at,
+      created_at,
       rows: String(summary.rows),
       ratings: String(summary.ratings),
-      migration: backup.migrations.at(-1) ?? '',
+      migration: migrations.at(-1) ?? '',
     },
   });
 
-  const pruned = backupsToPrune((await listBackups()).map((o) => o.key), new Date());
+  const pruned = backupsToPrune((await listBackups()).map((o) => o.key), now);
   if (pruned.length > 0) await env.ASSET_STORE.delete(pruned);
 
-  const github = await commitToGitHub(formatForGit(backup), date);
+  const github = now.getUTCDay() === 0 ? await commitToGitHub(body, date) : 'not this week';
   return { key, bytes: body.byteLength, summary, pruned, github };
 }

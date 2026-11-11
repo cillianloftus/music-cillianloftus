@@ -51,10 +51,13 @@ export interface JobRow {
   started_at: string | null;
   finished_at: string | null;
   error: string | null;
+  attempts: number;
 }
 
 /** A job left 'running' this long belongs to an invocation that died. */
 const STALE_AFTER_MINUTES = 15;
+/** Starts a job gets before, cut off on each, it is failed (0064). */
+const MAX_ATTEMPTS = 3;
 
 const NOW = `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
 
@@ -85,9 +88,17 @@ export async function enqueueMany<K extends keyof JobPayloads>(kind: K, payloads
  * on-demand run overlap: the UPDATE only succeeds for one of them.
  */
 export async function claimNext(): Promise<JobRow | null> {
-  return env.DB.prepare(
+  const stuck = `status = 'running' AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${STALE_AFTER_MINUTES} minutes')`;
+  const [, claimed] = await env.DB.batch<JobRow>([
+    // Cut off on each of its tries: it would only be cut off again.
+    env.DB.prepare(
+      `UPDATE job SET status = 'failed', finished_at = ${NOW},
+              error = 'Stopped after ${MAX_ATTEMPTS} tries: each time, the Worker running it was cut off before it finished (out of memory or time).'
+       WHERE ${stuck} AND attempts >= ${MAX_ATTEMPTS}`,
+    ),
+    env.DB.prepare(
     `UPDATE job
-     SET status = 'running', started_at = ${NOW}, error = NULL
+     SET status = 'running', started_at = ${NOW}, error = NULL, attempts = attempts + 1
      WHERE id = (
        -- The oldest queued job and the oldest stuck one, each one seek of
        -- job_queue (status, created_at); an OR of the two read every job.
@@ -106,7 +117,9 @@ export async function claimNext(): Promise<JobRow | null> {
        LIMIT 1
      )
      RETURNING *`,
-  ).first<JobRow>();
+    ),
+  ]);
+  return claimed?.results[0] ?? null;
 }
 
 export async function complete(id: string, payload: unknown, progress = 1): Promise<void> {
@@ -133,14 +146,14 @@ export async function fail(id: string, error: unknown): Promise<void> {
  * that was running when it had to stop is the next one claimed.
  */
 export async function requeue(id: string): Promise<void> {
-  await env.DB.prepare(`UPDATE job SET status = 'queued', started_at = NULL, error = NULL WHERE id = ?`).bind(id).run();
+  await env.DB.prepare(`UPDATE job SET status = 'queued', started_at = NULL, error = NULL, attempts = 0 WHERE id = ?`).bind(id).run();
 }
 
 /** Puts a failed job back in the queue. Partial work is kept: imports are idempotent. */
 /** Every failed job back in the queue. Returns how many. */
 export async function retryAllFailed(): Promise<number> {
   const result = await env.DB.prepare(
-    `UPDATE job SET status = 'queued', error = NULL, started_at = NULL, finished_at = NULL WHERE status = 'failed'`,
+    `UPDATE job SET status = 'queued', error = NULL, started_at = NULL, finished_at = NULL, attempts = 0 WHERE status = 'failed'`,
   ).run();
   return result.meta.changes ?? 0;
 }
