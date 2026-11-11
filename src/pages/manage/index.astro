@@ -7,6 +7,7 @@ import { env } from 'cloudflare:workers';
 import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import DisplaySettings from '../../components/DisplaySettings.astro';
+import NotificationSettings from '../../components/NotificationSettings.astro';
 import { THEME_COOKIE, themeFrom } from '../../lib/theme';
 import { connection } from '../../lib/spotify/client';
 import { waitingCount } from '../../lib/connections';
@@ -175,6 +176,11 @@ const groups: { heading: string; items: Item[] }[] = [
         </section>
       ))
     }
+
+    <section aria-labelledby="group-notifications">
+      <h2 id="group-notifications">Notifications</h2>
+      <NotificationSettings />
+    </section>
 
     <section aria-labelledby="group-display">
       <h2 id="group-display">Display</h2>

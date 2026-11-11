@@ -20,6 +20,7 @@ import { catalogueIndex } from './lib/listens/match';
 import { rematchListens } from './lib/listens/store';
 import { fillAlbumsFromDiscogs } from './lib/sources/discogs';
 import { checkOfficialReleases } from './lib/official';
+import { nudgeRatings } from './lib/nudge';
 
 /**
  * Checks the library against MusicBrainz's official releases a little at a
@@ -102,6 +103,8 @@ export default {
             }
           }
         }
+        // First, and quick: a nudge for an unrated song playing now (src/lib/nudge.ts).
+        await nudgeRatings().catch((error) => console.error('Rating nudges failed', error));
         await runJobs({ budgetMs: 50_000 });
         await checkOfficial().catch((error) => console.error('Official release check failed', error));
       })(),

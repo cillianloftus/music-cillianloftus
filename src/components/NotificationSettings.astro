@@ -1,0 +1,157 @@
+---
+/**
+ * Notifications on this device: "rate what's playing" (src/lib/nudge.ts).
+ * Turning them on asks the browser's permission, subscribes this device
+ * with the site's VAPID key and stores it; off forgets it. Everything is
+ * per device, so a phone can have them while a laptop does not.
+ */
+import { env } from 'cloudflare:workers';
+
+const publicKey = env.VAPID_PUBLIC_KEY ?? '';
+---
+
+<div class="notify" data-notify data-key={publicKey}>
+  <div class="text">
+    <p class="title">Rate what’s playing</p>
+    <p class="muted small">When Spotify plays a song from your library you haven’t rated, a notification opens its rating page. Checked once a minute.</p>
+  </div>
+  <div class="controls">
+    <button type="button" class="button button--primary" data-on>Turn on</button>
+    <button type="button" class="button" data-test hidden>Send a test</button>
+    <button type="button" class="button button--quiet" data-off hidden>Turn off</button>
+  </div>
+  <p class="status small" role="status" data-status></p>
+</div>
+
+<script>
+  const box = document.querySelector<HTMLElement>('[data-notify]');
+  if (box) {
+    const on = box.querySelector<HTMLButtonElement>('[data-on]')!;
+    const off = box.querySelector<HTMLButtonElement>('[data-off]')!;
+    const test = box.querySelector<HTMLButtonElement>('[data-test]')!;
+    const status = box.querySelector<HTMLElement>('[data-status]')!;
+    const key = box.dataset.key ?? '';
+
+    const say = (message: string) => (status.textContent = message);
+    const show = (subscribed: boolean) => {
+      on.hidden = subscribed;
+      off.hidden = !subscribed;
+      test.hidden = !subscribed;
+    };
+    const post = async (body: object) => {
+      const response = await fetch('/api/write/push', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const reply = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(reply?.error ?? 'That did not work. Try again.');
+      }
+    };
+    const registration = async () =>
+      (await navigator.serviceWorker.getRegistration()) ?? (await navigator.serviceWorker.register('/sw.js'), navigator.serviceWorker.ready);
+    const keyBytes = () => {
+      const s = atob(key.replace(/-/g, '+').replace(/_/g, '/'));
+      return Uint8Array.from(s, (c) => c.charCodeAt(0));
+    };
+
+    const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && key;
+    if (!supported) {
+      on.disabled = true;
+      say('This browser cannot show notifications from the site. On a phone, install the app first.');
+    } else {
+      registration()
+        .then((r) => r.pushManager.getSubscription())
+        .then((s) => {
+          show(Boolean(s) && Notification.permission === 'granted');
+          if (Notification.permission === 'denied') say('Notifications are blocked for this site. Allow them in the browser’s site settings.');
+        })
+        .catch(() => {});
+
+      on.addEventListener('click', async () => {
+        on.disabled = true;
+        try {
+          if ((await Notification.requestPermission()) !== 'granted') {
+            say('Notifications are blocked for this site. Allow them in the browser’s site settings.');
+            return;
+          }
+          const r = await registration();
+          const subscription = (await r.pushManager.getSubscription()) ?? (await r.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes() }));
+          await post({ action: 'subscribe', subscription: subscription.toJSON() });
+          show(true);
+          say('On for this device.');
+        } catch (error) {
+          say(error instanceof Error ? error.message : 'That did not work. Try again.');
+        } finally {
+          on.disabled = false;
+        }
+      });
+
+      off.addEventListener('click', async () => {
+        off.disabled = true;
+        try {
+          const subscription = await (await registration()).pushManager.getSubscription();
+          if (subscription) {
+            await post({ action: 'unsubscribe', endpoint: subscription.endpoint });
+            await subscription.unsubscribe();
+          }
+          show(false);
+          say('Off for this device.');
+        } catch (error) {
+          say(error instanceof Error ? error.message : 'That did not work. Try again.');
+        } finally {
+          off.disabled = false;
+        }
+      });
+
+      test.addEventListener('click', async () => {
+        test.disabled = true;
+        try {
+          const subscription = await (await registration()).pushManager.getSubscription();
+          if (!subscription) throw new Error('This device is not subscribed. Turn notifications on again.');
+          await post({ action: 'test', endpoint: subscription.endpoint });
+          say('Sent. It should arrive in a few seconds.');
+        } catch (error) {
+          say(error instanceof Error ? error.message : 'That did not work. Try again.');
+        } finally {
+          test.disabled = false;
+        }
+      });
+    }
+  }
+</script>
+
+<style>
+  .notify {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .title {
+    font-weight: 700;
+  }
+
+  .text {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .status:empty {
+    display: none;
+  }
+
+  .status {
+    color: var(--text-muted);
+  }
+</style>
