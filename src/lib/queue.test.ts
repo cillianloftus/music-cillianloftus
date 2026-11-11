@@ -22,7 +22,7 @@ const ids = async () => (await ratingQueue('u-owner')).map((entry) => entry.enti
 describe('rating queue', () => {
   it('orders by tier: highly rated artist, then gut 8+ to examine, then recently added', async () => {
     const queue = await ratingQueue('u-owner');
-    expect(queue.map((e) => e.reason.tier)).toEqual([1, 3, 3, 3, 3, 4, 4]);
+    expect(queue.map((e) => e.reason.tier)).toEqual([2, 3, 3, 3, 3, 4, 4]);
     expect(queue[0]).toMatchObject({ entity_id: 'rg-c', reason: { kind: 'artist', artist: 'Yolanda', score: 95 } });
     expect(queue.slice(1, 5).map((e) => e.entity_id).sort()).toEqual(['a1', 'a4', 'b1', 'c1']);
     expect(queue.slice(5).map((e) => e.entity_id).sort()).toEqual(['rg-a', 'rg-b']);
@@ -82,10 +82,14 @@ describe('rating queue', () => {
     const queue = await ratingQueue('u-owner');
     const songs = queue.filter((e) => e.reason.kind === 'plays' && e.entity_type === 'recording');
     // n3 has 9 counted plays (the five under 30 seconds do not count); a1 is rated.
-    expect(songs).toEqual([{ entity_type: 'recording', entity_id: 'n2', reason: { tier: 2, kind: 'plays', plays: 12 }, skipped: false }]);
-    // Below the highly rated artist's album, above the tracks to examine.
-    expect(queue.findIndex((e) => e.entity_id === 'n2')).toBeLessThan(queue.findIndex((e) => e.reason.kind === 'examine'));
-    expect(queue[0]?.entity_id).toBe('rg-c');
+    expect(songs).toEqual([{ entity_type: 'recording', entity_id: 'n2', reason: { tier: 1, kind: 'plays', plays: 12 }, skipped: false }]);
+    // Listened to and never rated comes first (albums and songs alike), most
+    // played first, all above the highly rated artist's album.
+    const top = queue.filter((e) => e.reason.kind === 'plays');
+    expect(queue.slice(0, top.length)).toEqual(top);
+    expect(top.map((e) => (e.reason as { plays: number }).plays)).toEqual([...top.map((e) => (e.reason as { plays: number }).plays)].sort((a, b) => b - a));
+    expect(top.map((e) => e.entity_id)).toContain('n2');
+    expect(queue.findIndex((e) => e.entity_id === 'rg-c')).toBe(top.length);
   });
 
   it('is per user', async () => {

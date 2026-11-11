@@ -3,8 +3,9 @@
  * Ordering is the feature. Current preference, highest first:
  *
  *   0. opened in Spotify from the queue and not rated since (the loop)
- *   1. albums by artists already rated highly
- *   2. high play count with no rating (albums, and songs on their own)
+ *   1. high play count with no rating (albums, and songs on their own):
+ *      what has been listened to most and never rated comes first
+ *   2. albums by artists already rated highly
  *   3. gut-rated 8 or above with no detailed breakdown
  *   4. recently added
  *   5. albums with some tracks rated but no album rating
@@ -32,8 +33,8 @@ export type QueueEntity = 'release_group' | 'recording';
 
 export type QueueReason =
   | { tier: 0; kind: 'handoff' }
-  | { tier: 1; kind: 'artist'; artist: string; score: number }
-  | { tier: 2; kind: 'plays'; plays: number }
+  | { tier: 1; kind: 'plays'; plays: number }
+  | { tier: 2; kind: 'artist'; artist: string; score: number }
   | { tier: 3; kind: 'examine'; gut: number }
   | { tier: 4; kind: 'recent' }
   | { tier: 5; kind: 'partial'; rated: number }
@@ -106,8 +107,8 @@ items AS (
     'release_group' AS entity_type, entity_id, artist_name, artist_score, plays,
     NULL AS gut, rated_track_count, created_at, title, type,
     CASE
-      WHEN artist_score >= ?2 THEN 1
-      WHEN plays >= ?3 THEN 2
+      WHEN plays >= ?3 THEN 1
+      WHEN artist_score >= ?2 THEN 2
       WHEN created_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || ?5 || ' days') THEN 4
       WHEN rated_track_count > 0 THEN 5
       ELSE 6
@@ -122,7 +123,7 @@ items AS (
     AND NOT EXISTS (SELECT 1 FROM recording_kind k WHERE k.recording_id = l.entity_id AND k.kind = 'skit')
   UNION ALL
   -- Songs played often and never rated, counted apart and passed in (?8).
-  SELECT 'recording', j.key, NULL, NULL, j.value, NULL, NULL, NULL, NULL, NULL, 2
+  SELECT 'recording', j.key, NULL, NULL, j.value, NULL, NULL, NULL, NULL, NULL, 1
   FROM json_each(?8) j
 )
 SELECT
@@ -143,6 +144,8 @@ ORDER BY
   skipped ASC,
   k.skipped_at ASC,
   i.tier ASC,
+  -- Most played first among the much played.
+  CASE i.tier WHEN 1 THEN i.plays END DESC,
   i.artist_score DESC,
   i.plays DESC,
   i.created_at DESC,
@@ -152,9 +155,9 @@ function reasonFor(row: Row): QueueReason {
   if (row.handed_off) return { tier: 0, kind: 'handoff' };
   switch (row.tier) {
     case 1:
-      return { tier: 1, kind: 'artist', artist: row.artist_name ?? 'this artist', score: Math.round(row.artist_score ?? 0) };
+      return { tier: 1, kind: 'plays', plays: row.plays };
     case 2:
-      return { tier: 2, kind: 'plays', plays: row.plays };
+      return { tier: 2, kind: 'artist', artist: row.artist_name ?? 'this artist', score: Math.round(row.artist_score ?? 0) };
     case 3:
       return { tier: 3, kind: 'examine', gut: row.gut ?? 0 };
     case 4:
