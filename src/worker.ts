@@ -20,7 +20,8 @@ import { catalogueIndex } from './lib/listens/match';
 import { rematchListens } from './lib/listens/store';
 import { fillAlbumsFromDiscogs } from './lib/sources/discogs';
 import { checkOfficialReleases } from './lib/official';
-import { nudgeRatings } from './lib/nudge';
+import { nudgeRatings, pushToUser, vapid } from './lib/nudge';
+import { latestBackup, recordNightly, type TaskRun } from './lib/health';
 
 /**
  * Checks the library against MusicBrainz's official releases a little at a
@@ -34,6 +35,21 @@ async function checkOfficial(): Promise<void> {
   const busy = await env.DB.prepare(`SELECT 1 FROM job WHERE status IN ('queued', 'running') LIMIT 1`).first();
   const lookups = await checkOfficialReleases({ budgetMs: busy ? 6_000 : 20_000 });
   if (lookups === 0) await env.CACHE.put(REST, '1', { expirationTtl: 6 * 3600 });
+}
+
+/**
+ * A push to the owner's devices when the newest backup is over a day old:
+ * the backup once failed for two days with nothing to show for it.
+ */
+async function warnIfBackupOverdue(): Promise<void> {
+  const [backup, owner, keys] = [await latestBackup(), await ownerId(), vapid()];
+  if (!owner || !keys || (backup && !backup.overdue)) return;
+  await pushToUser(owner, {
+    title: 'Backup overdue',
+    body: backup ? `The newest is from ${backup.at.slice(0, 10)}. See Manage › Health.` : 'There is no backup at all. See Manage › Health.',
+    tag: 'health',
+    url: '/manage/health',
+  }, keys);
 }
 
 /** Must match the daily entry in wrangler.jsonc triggers.crons. */
@@ -70,7 +86,10 @@ export default {
     ctx.waitUntil(
       (async () => {
         if (controller.cron === DAILY_BACKUP) {
+          // Before tonight's: if last night's never landed, say so on the phone.
+          await warnIfBackupOverdue().catch((error) => console.error('Backup check failed', error));
           await enqueue('backup', {});
+          const runs: TaskRun[] = [];
           // Both are housekeeping; neither failing may hold up the jobs.
           for (const [name, task] of [
             ['Album genre derivation', deriveAlbumGenres],
@@ -96,12 +115,18 @@ export default {
             // statistics have drifted are looked at again.
             ['Planner statistics', async () => void (await env.DB.exec('PRAGMA optimize'))],
           ] as const) {
+            const started = Date.now();
             try {
               await task();
+              runs.push({ name, at: new Date(started).toISOString(), ok: true, ms: Date.now() - started });
             } catch (error) {
               console.error(`${name} failed`, error);
+              const message = error instanceof Error ? error.message : String(error);
+              runs.push({ name, at: new Date(started).toISOString(), ok: false, ms: Date.now() - started, error: message.slice(0, 500) });
             }
           }
+          // What /manage/health shows of the night.
+          await recordNightly(runs).catch((error) => console.error('Recording the night failed', error));
         }
         // First, and quick: a nudge for an unrated song playing now (src/lib/nudge.ts).
         await nudgeRatings().catch((error) => console.error('Rating nudges failed', error));

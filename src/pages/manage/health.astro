@@ -1,0 +1,289 @@
+---
+/**
+ * How the site is doing: the newest backup, the day's D1 reads against the
+ * budget, the job queue, and last night's tasks (src/lib/health.ts). Each
+ * section says plainly whether all is well, so a glance is enough.
+ */
+import Base from '../../layouts/Base.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import Disclosure from '../../components/Disclosure.astro';
+import { formatRelative } from '../../lib/format';
+import { BACKUP_DUE_HOURS, READ_BUDGET, latestBackup, nightlyRuns, queueState, readsToday, type ReadsToday } from '../../lib/health';
+
+let readsError: string | null = null;
+const [backup, queue, nightly, reads] = await Promise.all([
+  latestBackup().catch(() => null),
+  queueState(),
+  nightlyRuns(),
+  readsToday().catch((error: unknown): ReadsToday | null => {
+    readsError = error instanceof Error ? error.message : String(error);
+    return null;
+  }),
+]);
+
+const when = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Dublin' });
+const count = (n: number) => n.toLocaleString('en-GB');
+const millions = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : count(n));
+const size = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+const seconds = (ms: number) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
+
+const share = reads ? reads.rowsRead / READ_BUDGET : 0;
+const failedTasks = nightly.filter((t) => !t.ok);
+
+type Tone = 'good' | 'warn' | 'bad';
+const backupTone: Tone = !backup || backup.overdue ? 'bad' : 'good';
+const readsTone: Tone = !reads ? 'warn' : share > 1 ? 'bad' : share > 0.6 ? 'warn' : 'good';
+const queueTone: Tone = queue.stuck || queue.failed ? 'bad' : 'good';
+const nightTone: Tone = nightly.length === 0 ? 'warn' : failedTasks.length ? 'bad' : 'good';
+const WORD: Record<Tone, string> = { good: 'Fine', warn: 'Check', bad: 'Needs a look' };
+---
+
+<Base title="Health">
+  <div class="wrap page">
+    <PageHeader title="Health" />
+
+    <section class="form-card" aria-labelledby="backup-heading">
+      <div class="head">
+        <h2 id="backup-heading">Backup</h2>
+        <span class="tone" data-tone={backupTone}>{WORD[backupTone]}</span>
+      </div>
+      {
+        backup ? (
+          <p>
+            Newest {when.format(new Date(backup.at))} ({formatRelative(backup.at)})
+            {backup.rows !== null && <>, {count(backup.rows)} rows</>}, {size(backup.bytes)}.
+            {backup.overdue && <strong class="bad"> Over {BACKUP_DUE_HOURS} hours old: last night's did not land.</strong>}
+          </p>
+        ) : (
+          <p class="bad">There is no backup at all.</p>
+        )
+      }
+      <a class="more" href="/manage/backups">Backups</a>
+    </section>
+
+    <section class="form-card" aria-labelledby="reads-heading">
+      <div class="head">
+        <h2 id="reads-heading">Database reads today</h2>
+        <span class="tone" data-tone={readsTone}>{reads ? WORD[readsTone] : 'Not set up'}</span>
+      </div>
+      {
+        reads ? (
+          <>
+            <p class="big tabular">
+              {millions(reads.rowsRead)} <span class="muted">of {millions(READ_BUDGET)} rows</span>
+            </p>
+            <div class="meter" data-tone={readsTone} aria-hidden="true">
+              <span style={`inline-size: ${Math.min(100, share * 100).toFixed(1)}%`} />
+            </div>
+            <p class="muted small tabular">
+              Since midnight UTC: {count(reads.queries)} statements, {count(reads.rowsWritten)} rows written.
+            </p>
+            {reads.heaviest.length > 0 && (
+              <Disclosure heading="Heaviest statements" ruled={false}>
+                <ol class="statements" role="list">
+                  {reads.heaviest.map((s) => (
+                    <li>
+                      <span class="tabular">
+                        <strong>{millions(s.rowsRead)}</strong> rows, {count(s.runs)} {s.runs === 1 ? 'run' : 'runs'}
+                      </span>
+                      <code>{s.query}</code>
+                    </li>
+                  ))}
+                </ol>
+              </Disclosure>
+            )}
+          </>
+        ) : readsError ? (
+          <p class="bad">Cloudflare's analytics did not answer: {readsError}</p>
+        ) : (
+          <p class="muted">
+            Needs a Cloudflare API token with <em>Account Analytics: Read</em>, made at dash.cloudflare.com/profile/api-tokens and
+            saved with <code>npx wrangler secret put CF_ANALYTICS_TOKEN</code>.
+          </p>
+        )
+      }
+    </section>
+
+    <section class="form-card" aria-labelledby="jobs-heading">
+      <div class="head">
+        <h2 id="jobs-heading">Jobs</h2>
+        <span class="tone" data-tone={queueTone}>{WORD[queueTone]}</span>
+      </div>
+      <p class="tabular">
+        {count(queue.failed)} failed, {count(queue.waiting)} waiting{queue.stuck > 0 && <>, <strong class="bad">{count(queue.stuck)} stuck</strong></>}.
+      </p>
+      {queue.stuck > 0 && <p class="muted small">Stuck means its Worker was cut off. It is tried three times, then marked failed.</p>}
+      <a class="more" href="/manage/jobs">Jobs</a>
+    </section>
+
+    <section class="form-card" aria-labelledby="night-heading">
+      <div class="head">
+        <h2 id="night-heading">Last night</h2>
+        <span class="tone" data-tone={nightTone}>{nightly.length ? WORD[nightTone] : 'No record yet'}</span>
+      </div>
+      {
+        nightly.length === 0 ? (
+          <p class="muted">The tasks that run at 04:00 UTC record how they went from tonight on.</p>
+        ) : (
+          <ul class="tasks" role="list">
+            {nightly.map((task) => (
+              <li data-ok={task.ok ? 'yes' : 'no'}>
+                <span class="mark" aria-hidden="true">{task.ok ? '✓' : '✕'}</span>
+                <span class="name">
+                  {task.name}
+                  <span class="visually-hidden">{task.ok ? ': done' : ': failed'}</span>
+                </span>
+                <span class="time muted small tabular">{seconds(task.ms)}</span>
+                {task.error && <span class="error small">{task.error}</span>}
+              </li>
+            ))}
+          </ul>
+        )
+      }
+    </section>
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-4);
+    --content-max: 48rem;
+  }
+
+  .head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  h2 {
+    font-size: var(--step-1);
+  }
+
+  .tone {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    font-size: var(--step--1);
+    font-weight: 700;
+  }
+
+  .tone::before {
+    content: '';
+    inline-size: 0.6em;
+    block-size: 0.6em;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  [data-tone='good'] {
+    --h: 145;
+    color: oklch(var(--score-l) var(--score-c) var(--h));
+  }
+
+  [data-tone='warn'] {
+    color: var(--accent);
+  }
+
+  [data-tone='bad'] {
+    color: var(--danger);
+  }
+
+  .bad,
+  .error {
+    color: var(--danger);
+  }
+
+  .more {
+    justify-self: start;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .big {
+    font-size: var(--step-2);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+
+  .big .muted {
+    font-size: var(--step-0);
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+
+  .meter {
+    block-size: 0.5rem;
+    border-radius: 999px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  .meter span {
+    display: block;
+    block-size: 100%;
+    border-radius: inherit;
+    background: currentColor;
+  }
+
+  .statements {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .statements li {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .statements code {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--step--1);
+    overflow-wrap: anywhere;
+  }
+
+  .tasks {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .tasks li {
+    display: grid;
+    grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+    column-gap: var(--space-2);
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .tasks li:first-child {
+    border-top: 0;
+  }
+
+  .mark {
+    --h: 145;
+    color: oklch(var(--score-l) var(--score-c) var(--h));
+    font-weight: 700;
+  }
+
+  [data-ok='no'] .mark {
+    color: var(--danger);
+  }
+
+  .tasks .error {
+    grid-column: 2 / -1;
+    overflow-wrap: anywhere;
+  }
+</style>

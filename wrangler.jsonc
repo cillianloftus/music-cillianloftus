@@ -20,7 +20,10 @@
 		"ACCESS_AUD": "783c29ec68d2f0ca1f137dca9ee90dcf6aabde40a7b39680569224e74c54a57b",
 		// Web push (src/lib/push/): the VAPID public key, which browsers are
 		// given when they subscribe. The private half is the secret VAPID_PRIVATE_KEY.
-		"VAPID_PUBLIC_KEY": "BLbF0sKxHDjWVeN3pDwehMAZcNdYfT5Wkt9sOZHxRG_ghgCkwJPkbHvk46OLjs8vJjO7j8y_IoquX9oaDzdoTfg"
+		"VAPID_PUBLIC_KEY": "BLbF0sKxHDjWVeN3pDwehMAZcNdYfT5Wkt9sOZHxRG_ghgCkwJPkbHvk46OLjs8vJjO7j8y_IoquX9oaDzdoTfg",
+		// The Cloudflare account, for its D1 analytics on /manage/health (with the
+		// secret CF_ANALYTICS_TOKEN: an API token with Account Analytics: Read).
+		"CF_ACCOUNT_ID": "3af9d242f2e574092682f85694f989b7"
 	},
 	"assets": {
 		"directory": "./dist",

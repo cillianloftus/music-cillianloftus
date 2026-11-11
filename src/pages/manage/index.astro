@@ -11,6 +11,7 @@ import NotificationSettings from '../../components/NotificationSettings.astro';
 import { THEME_COOKIE, themeFrom } from '../../lib/theme';
 import { connection } from '../../lib/spotify/client';
 import { waitingCount } from '../../lib/connections';
+import { latestBackup, nightlyRuns } from '../../lib/health';
 
 const user = Astro.locals.user!;
 const [counts, spotify] = await Promise.all([
@@ -26,7 +27,18 @@ const [counts, spotify] = await Promise.all([
     .first<{ review: number; failed: number; running: number; files: number; plays: number; unofficial: number }>(),
   connection(user.id).catch(() => null),
 ]);
-const waiting = await waitingCount().catch(() => 0);
+const [waiting, backup, nightly] = await Promise.all([
+  waitingCount().catch(() => 0),
+  latestBackup().catch(() => null),
+  nightlyRuns().catch(() => []),
+]);
+const nightFailed = nightly.filter((t) => !t.ok).length;
+const health =
+  !backup || backup.overdue
+    ? { text: 'Backup overdue', tone: 'attention' as const }
+    : nightFailed
+      ? { text: `${nightFailed} nightly ${nightFailed === 1 ? 'task' : 'tasks'} failed`, tone: 'attention' as const }
+      : { text: 'All well', tone: 'quiet' as const };
 
 type Tone = 'attention' | 'quiet';
 interface Item {
@@ -55,6 +67,7 @@ const ICONS = {
   connections: 'M9 15l6-6M10 6l1.5-1.5a4.2 4.2 0 0 1 6 6L16 12M8 12l-1.5 1.5a4.2 4.2 0 0 0 6 6L14 18',
   roles: 'M12 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM5 20c1.2-3.6 3.8-5.5 7-5.5s5.8 1.9 7 5.5',
   refresh: 'M20 12a8 8 0 1 1-2.4-5.7M20 4v5h-5',
+  health: 'M3 12h4l2-5 4 10 2-5h6',
   backups: 'M5 7c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3zm0 0v10c0 1.7 3.1 3 7 3s7-1.3 7-3V7M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3',
 };
 
@@ -118,6 +131,7 @@ const groups: { heading: string; items: Item[] }[] = [
   {
     heading: 'System',
     items: [
+      { href: '/manage/health', title: 'Health', text: 'Backups, database reads, last night.', icon: ICONS.health, status: health },
       { href: '/manage/refresh', title: 'Refresh everything', text: 'Look the whole library up again.', icon: ICONS.refresh },
       {
         href: '/manage/jobs',

@@ -33,7 +33,7 @@ const size = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024
           <p class="muted">
             Last backup {job?.finished_at && when.format(new Date(job.finished_at))}: {report.summary.rows} rows,{' '}
             {report.summary.ratings} ratings, {size(report.bytes)} compressed.
-            {report.github === 'committed' ? ' Committed to GitHub.' : ' GitHub copy not configured.'}
+            {report.github === 'committed' ? ' Committed to GitHub.' : report.github === 'not this week' ? ' The GitHub copy is made on Sundays.' : ' GitHub copy not configured.'}
           </p>
         )
       }

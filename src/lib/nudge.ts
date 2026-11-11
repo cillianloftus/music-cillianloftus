@@ -68,7 +68,7 @@ export async function inLibrary(track: Pick<Playing, 'spotifyId' | 'isrc'>, user
 }
 
 /** What the device shows. */
-export function nudgeMessage(track: Playing, recordingId: string) {
+export function nudgeMessage(track: Playing, recordingId: string): PushMessage {
   return {
     title: track.title,
     body: `${track.artists.join(', ')} · not rated yet`,
@@ -102,7 +102,17 @@ export async function pauseNudges(userId: string): Promise<void> {
 }
 
 /** Sends one message to every device of a listener; forgets devices the push service no longer knows. */
-export async function pushToUser(userId: string, message: unknown, keys: Vapid, only?: string): Promise<number> {
+/** What a push carries: what the service worker shows (public/sw.js). */
+export interface PushMessage {
+  title: string;
+  body: string;
+  /** One notification per tag on the device; also the push topic, so a newer one replaces one not yet delivered. */
+  tag: string;
+  url: string;
+  icon?: string | null;
+}
+
+export async function pushToUser(userId: string, message: PushMessage, keys: Vapid, only?: string): Promise<number> {
   const { results } = await env.DB.prepare(
     `SELECT endpoint, p256dh, auth FROM push_subscription WHERE user_id = ?1 AND (?2 IS NULL OR endpoint = ?2)`,
   )
@@ -111,7 +121,12 @@ export async function pushToUser(userId: string, message: unknown, keys: Vapid, 
   let sent = 0;
   for (const target of results) {
     try {
-      const status = await sendPush(target, message, keys, { ttl: 600, urgency: 'normal', topic: NUDGE_TAG });
+      const status = await sendPush(target, message, keys, {
+        // A rating nudge is stale in minutes; anything else may wait a day for the phone.
+        ttl: message.tag === NUDGE_TAG ? 600 : 86_400,
+        urgency: 'normal',
+        topic: message.tag,
+      });
       if (status === 404 || status === 410) {
         await env.DB.prepare('DELETE FROM push_subscription WHERE endpoint = ?').bind(target.endpoint).run();
       } else if (status < 300) sent++;
