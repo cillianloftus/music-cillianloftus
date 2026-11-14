@@ -16,6 +16,9 @@ import {
   type Weights,
 } from './scoring';
 
+/** How far from the rest makes a song an album's odd one out: 10–40 points in fives. */
+export const OUTLIER_GAP_RANGE = { min: 10, max: 40, step: 5 } as const;
+
 /** Axis weights run 0–3 in quarter steps; 0 leaves an axis out. */
 export const AXIS_WEIGHT = { min: 0, max: 3, step: 0.25 } as const;
 
@@ -36,6 +39,8 @@ export const weightsForm = z
     interlude_share: z.coerce.number().int().min(0).max(100).multipleOf(5).default(Math.round(DEFAULT_WEIGHTS.release.interlude * 100)),
     length_share: z.coerce.number().int().min(0).max(100).multipleOf(5).default(Math.round(DEFAULT_WEIGHTS.release.length * 100)),
     trim_lowest: z.preprocess((value) => value === 'on' || value === 'true' || value === true, z.boolean()),
+    // Points from an album's middle song that make an odd one out (0066).
+    outlier_gap: z.coerce.number().int().min(OUTLIER_GAP_RANGE.min).max(OUTLIER_GAP_RANGE.max).multipleOf(OUTLIER_GAP_RANGE.step).default(DEFAULT_WEIGHTS.release.outlier_gap),
   })
   .transform((form, ctx): Weights => {
     const value = (key: string) => (form as unknown as Record<string, number>)[key]!;
@@ -46,6 +51,7 @@ export const weightsForm = z
         tracks: form.tracks_share / 100,
         album_axes: (100 - form.tracks_share) / 100,
         trim_lowest: form.trim_lowest,
+        outlier_gap: form.outlier_gap,
         interlude: form.interlude_share / 100,
         length: form.length_share / 100,
       },
@@ -78,6 +84,7 @@ export function withDefaults(payload: unknown): Weights {
       tracks: p.release?.tracks ?? DEFAULT_WEIGHTS.release.tracks,
       album_axes: p.release?.album_axes ?? DEFAULT_WEIGHTS.release.album_axes,
       trim_lowest: trim === undefined ? DEFAULT_WEIGHTS.release.trim_lowest : Boolean(trim),
+      outlier_gap: p.release?.outlier_gap ?? DEFAULT_WEIGHTS.release.outlier_gap,
       interlude: p.release?.interlude ?? DEFAULT_WEIGHTS.release.interlude,
       length: p.release?.length ?? DEFAULT_WEIGHTS.release.length,
     },

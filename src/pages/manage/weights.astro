@@ -15,7 +15,7 @@ import CreditLine from '../../components/CreditLine.astro';
 import { releaseGroupsByIds, type CreditPart } from '../../lib/catalogue';
 import { hydrateTracks } from '../../lib/query/run';
 import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, computeScores, rank, type Weights } from '../../lib/scoring';
-import { AXIS_WEIGHT, scoreInputs, weightsForm, weightsVersions } from '../../lib/weights';
+import { AXIS_WEIGHT, OUTLIER_GAP_RANGE, scoreInputs, weightsForm, weightsVersions } from '../../lib/weights';
 
 const user = Astro.locals.user!;
 const params = Astro.url.searchParams;
@@ -110,7 +110,7 @@ function describe(w: Weights): string {
     w.release.length > 0 && `length ${Math.round(w.release.length * 100)}%`,
     w.release.interlude !== 0.5 && `interludes ${Math.round(w.release.interlude * 100)}%`,
   ].filter(Boolean);
-  return [...axes, blend, w.release.trim_lowest ? 'odd songs out left out' : 'every track counted', ...extra].join(', ');
+  return [...axes, blend, w.release.trim_lowest ? `odd songs out left out (${w.release.outlier_gap} points)` : 'every track counted', ...extra].join(', ');
 }
 
 const date = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -185,6 +185,23 @@ const clientData = {
             <input type="checkbox" name="trim_lowest" checked={preview.release.trim_lowest} />
             Leave out an album’s odd songs out (a lone song far above or below the rest)
           </label>
+          <div class="slider slider--stacked">
+            <label for="outlier_gap">How far out is odd</label>
+            <output for="outlier_gap" id="outlier_gap-value" class="tabular">{preview.release.outlier_gap} points</output>
+            <input
+              type="range"
+              id="outlier_gap"
+              name="outlier_gap"
+              min={OUTLIER_GAP_RANGE.min}
+              max={OUTLIER_GAP_RANGE.max}
+              step={OUTLIER_GAP_RANGE.step}
+              value={preview.release.outlier_gap}
+              aria-describedby="gap-hint"
+            />
+            <span class="hint" id="gap-hint">
+              Points above or below the album’s middle song. Such songs are left out only while they are under 15% of the songs rated.
+            </span>
+          </div>
         </fieldset>
 
         <fieldset>
@@ -351,6 +368,7 @@ const clientData = {
         tracks: share / 100,
         album_axes: (100 - share) / 100,
         trim_lowest: field('trim_lowest').checked,
+        outlier_gap: number('outlier_gap'),
         interlude: number('interlude_share') / 100,
         length: number('length_share') / 100,
       },
@@ -373,7 +391,9 @@ const clientData = {
             ? n === 0 ? 'none' : n === 100 ? 'full' : `${n}%`
             : input.name === 'interlude_share'
               ? n === 100 ? 'as a song' : n === 0 ? 'not at all' : `${n}% of a song`
-              : `×${input.value}`;
+              : input.name === 'outlier_gap'
+                ? `${n} points`
+                : `×${input.value}`;
     }
 
     const weights = read();

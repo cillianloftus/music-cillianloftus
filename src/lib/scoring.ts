@@ -24,15 +24,17 @@ export interface Weights {
   /**
    * interlude: how much an interlude counts beside a song (0–1).
    * length: how much a track's length sets its weight in its album (0–1).
+   * trim_lowest: whether an album's odd songs out are left out (the name is from when it was the lowest track).
+   * outlier_gap: how many points from the album's middle song make a song an odd one out.
    */
-  release: { tracks: number; album_axes: number; trim_lowest: boolean; interlude: number; length: number };
+  release: { tracks: number; album_axes: number; trim_lowest: boolean; outlier_gap: number; interlude: number; length: number };
 }
 
 /** The defaults the views fall back to for any missing key. */
 export const DEFAULT_WEIGHTS: Weights = {
   craft: { arrangement: 0.5, sound: 0.5, songwriting: 1, lyrics: 1, performance: 1, originality: 1 },
   album: { sequencing: 1, cohesion: 1, ambition: 1 },
-  release: { tracks: 0.7, album_axes: 0.3, trim_lowest: true, interlude: 0.5, length: 0 },
+  release: { tracks: 0.7, album_axes: 0.3, trim_lowest: true, outlier_gap: 20, interlude: 0.5, length: 0 },
 };
 
 /** Song is the default and is never stored unless chosen. */
@@ -64,8 +66,9 @@ export interface ScoreInputs {
 }
 
 /**
- * An album's odd songs out are left out of its score (migration 0065): a
- * song OUTLIER_GAP points or more from the album's middle song (the median),
+ * An album's odd songs out are left out of its score (migrations 0065, 0066):
+ * a song the gap (release.outlier_gap, OUTLIER_GAP unless set) or more
+ * points from the album's middle song (the median),
  * high or low, when the songs that far out on its side are less than
  * TRIM_MAX_SHARE of the songs rated (of their running time, or, a length
  * unknown, of their number). More than that, and they are what the album
@@ -93,7 +96,7 @@ const medianOf = (sorted: number[]): number => {
  * The songs left out of an album's score as outliers: ids. Each side (low,
  * high) is judged on its own. Pure.
  */
-export function outliers(rated: { id: string; q: number; length?: number }[]): Set<string> {
+export function outliers(rated: { id: string; q: number; length?: number }[], gap = OUTLIER_GAP): Set<string> {
   const left = new Set<string>();
   if (rated.length === 0) return left;
   // The songs rated are the whole the share is of.
@@ -102,8 +105,8 @@ export function outliers(rated: { id: string; q: number; length?: number }[]): S
     tracks: rated.length,
   };
   const median = medianOf(rated.map((r) => r.q).sort((a, b) => a - b));
-  const low = rated.filter((r) => r.q <= median - OUTLIER_GAP);
-  const high = rated.filter((r) => r.q >= median + OUTLIER_GAP);
+  const low = rated.filter((r) => r.q <= median - gap);
+  const high = rated.filter((r) => r.q >= median + gap);
   for (const side of [low, high]) {
     if (side.length > 0 && smallPart(side.map((r) => r.length), runtime)) for (const r of side) left.add(r.id);
   }
@@ -194,7 +197,7 @@ export function computeScores(inputs: ScoreInputs, w: Weights): Scores {
     if (rated.length > 0) {
       const known = rated.filter((r) => r.length !== undefined);
       const mean = known.length > 0 ? known.reduce((a, r) => a + r.length!, 0) / known.length : null;
-      const left = w.release.trim_lowest ? outliers(rated) : new Set<string>();
+      const left = w.release.trim_lowest ? outliers(rated, w.release.outlier_gap) : new Set<string>();
       const kept = rated.filter((r) => !left.has(r.id));
       let total = 0;
       let weight = 0;

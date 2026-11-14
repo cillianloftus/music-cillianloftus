@@ -76,6 +76,7 @@ function randomWeights(random: () => number): Weights {
       tracks,
       album_axes: 1 - tracks,
       trim_lowest: random() < 0.5,
+      outlier_gap: 10 + 5 * Math.floor(random() * 7),
       interlude: Math.round(random() * 20) / 20,
       length: random() < 0.3 ? 0 : Math.round(random() * 20) / 20,
     },
@@ -242,7 +243,7 @@ describe('weights versions', () => {
   it('parses the form, deriving the album share from the tracks share', () => {
     const parsed = weightsForm.parse(form({ lyrics: '2.5', tracks_share: '60', trim_lowest: '' }));
     expect(parsed.craft.lyrics).toBe(2.5);
-    expect(parsed.release).toEqual({ tracks: 0.6, album_axes: 0.4, trim_lowest: false, interlude: 0.5, length: 0 });
+    expect(parsed.release).toEqual({ tracks: 0.6, album_axes: 0.4, trim_lowest: false, outlier_gap: 20, interlude: 0.5, length: 0 });
     expect(weightsForm.parse(form({ length_share: '40', interlude_share: '25' })).release).toMatchObject({ length: 0.4, interlude: 0.25 });
   });
 
