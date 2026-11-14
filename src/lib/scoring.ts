@@ -56,22 +56,12 @@ export interface RatingSample extends AxisValues {
   impact: number | null;
 }
 
-/** A recording rating with a gut score, and which recording it is. */
-export interface CalibrationSample extends RatingSample {
-  recording: string;
-}
-
 export interface ScoreInputs {
-  /**
-   * Recording ratings with a gut score and track axes, oldest first (ties by
-   * id): each song's latest such row is its pair of gut and detailed score.
-   */
-  calibration: CalibrationSample[];
   /** Each rated recording's first primary artist. */
   artists?: Record<string, string>;
   /** Each rated recording's genres, as v_recording_genre has them. */
   genres?: Record<string, string[]>;
-  /** Latest rating per recording. */
+  /** Latest rating per recording (ties by id): its score, and its pair for the gut calibration. */
   recordings: Record<string, RatingSample>;
   /** Latest album rating per release group. */
   albums: Record<string, RatingSample>;
@@ -157,21 +147,32 @@ export const albumComposite = (r: AxisValues, w: Weights) => weightedMean(r, ALB
 
 const clamp = (n: number) => Math.max(0, Math.min(100, n));
 
-/** Each song's latest pair of gut and detailed score, under these weights. */
+/**
+ * A gut and a detailed score further apart than this are a slip, not a
+ * habit: a slider touched on the way past and caught by the autosave
+ * (Bread Song, 14 Nov: gut 10, detailed 0, which took two points off every
+ * Black Country, New Road gut 10). Left out of the calibration.
+ */
+export const MAX_PAIR_GAP = 3;
+
+/**
+ * Each song's pair of gut and detailed score: its current rating, when that
+ * has both and they are within MAX_PAIR_GAP. An older row is never used: a
+ * rating given again by gut alone has taken its detail back.
+ */
 function pairsOf(inputs: ScoreInputs, w: Weights): Map<string, { gut: number; craft: number }> {
   const pairs = new Map<string, { gut: number; craft: number }>();
-  for (const r of inputs.calibration) {
+  for (const [id, r] of Object.entries(inputs.recordings)) {
     const craft = craftComposite(r, w);
-    if (r.gut == null || craft == null) continue;
-    pairs.set(r.recording, { gut: r.gut, craft }); // Oldest first: the last one stands.
+    if (r.gut == null || craft == null || Math.abs(craft - r.gut) > MAX_PAIR_GAP) continue;
+    pairs.set(id, { gut: r.gut, craft });
   }
   return pairs;
 }
 
 /**
- * v_gut_calibration: the mean of (detailed − gut) over songs rated both
- * ways, each song once (its latest row with both), so a song re-rated
- * five times does not count five times.
+ * v_gut_calibration: the mean of (detailed − gut) over songs whose current
+ * rating has both (pairsOf), each song once.
  */
 export function gutOffset(inputs: ScoreInputs, w: Weights): { offset: number; samples: number } {
   const pairs = [...pairsOf(inputs, w).values()];

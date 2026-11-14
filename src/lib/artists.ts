@@ -389,7 +389,11 @@ export async function artistAbout(artistId: string): Promise<ArtistAbout> {
     area: base.area ?? null,
     aliases: aliases!.results as { name: string; kind: string }[],
     memberOf: pick('member_of', 'out'),
-    members: pick('member_of', 'in'),
+    // A band's members: years only for those who have left. Still in the
+    // band, there is nothing to say (Isaac Wood 2014–2022; the rest, none).
+    members: linkRows
+      .filter((l) => l.kind === 'member_of' && l.dir === 'in')
+      .map(({ id, name, begin_year, end_year }) => ({ id, name, years: end_year === null ? null : spanOf(begin_year, end_year) })),
     sameAs: pick('same_person'),
     bio: base.bio ?? null,
     bio_url: base.bio_url ?? null,

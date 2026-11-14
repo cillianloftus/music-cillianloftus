@@ -18,6 +18,7 @@ import { spotifyFor } from '../lib/spotify/client';
 import { nowPlaying, PlayerError, type NowState } from '../lib/spotify/player';
 import { activeWeights } from '../lib/weights';
 import { findRecording } from '../lib/recording-match';
+import { scorePreview } from '../lib/score-preview';
 
 const user = Astro.locals.user;
 if (!user) return Astro.redirect('/manage');
@@ -61,11 +62,10 @@ const here = hereId
       .first<Here>()
   : null;
 
-const [history, weights, calibration, creditRows] = here
+const [history, weights, creditRows] = here
   ? await Promise.all([
       ratingHistory(user.id, 'recording', here.id),
       activeWeights(user.id),
-      env.DB.prepare('SELECT gut_offset FROM v_gut_calibration WHERE user_id = ?').bind(user.id).first<number>('gut_offset'),
       env.DB.prepare(
         `SELECT cr.label, a.id, a.name
          FROM artist_credit ac JOIN artist a ON a.id = ac.artist_id JOIN credit_role cr ON cr.id = ac.role
@@ -75,7 +75,8 @@ const [history, weights, calibration, creditRows] = here
         .bind(here.id)
         .all<{ label: string; id: string; name: string }>(),
     ])
-  : [[], null, null, null];
+  : [[], null, null];
+const preview = here && weights ? await scorePreview(user.id, 'recording', here.id, history[0], weights) : null;
 const credits = new Map<string, { id: string; name: string }[]>();
 for (const c of creditRows?.results ?? []) credits.set(c.label, [...(credits.get(c.label) ?? []), c]);
 
@@ -193,7 +194,7 @@ const ICON = {
                         <Score quality={here.quality} personal={here.personal} size="m" />
                       </span>
                     </div>
-                    <RatingSheet entityType="recording" entityId={here.id} current={history[0]} returnTo="/now" preview={{ weights: weights!, offset: calibration ?? 0 }} />
+                    <RatingSheet entityType="recording" entityId={here.id} current={history[0]} returnTo="/now" preview={preview!} />
                   </section>
                   {credits.size > 0 && (
                     <section aria-labelledby="credits-heading" class="credits">

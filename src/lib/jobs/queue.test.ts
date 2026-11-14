@@ -34,15 +34,17 @@ describe('the job queue', () => {
     expect(job(id).error).toMatch(/Stopped after 3 tries/);
   });
 
-  it('moves on to the next job once a stuck one has failed', async () => {
+  it('sends a job whose Worker was cut off to the back of the queue', async () => {
     const stuck = await enqueue('backup', {});
     const next = await enqueue('backup', {});
     db.prepare(`UPDATE job SET created_at = '2025-01-01T00:00:00.000Z' WHERE id = ?`).run(stuck);
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      await claimNext();
-      cutOff(stuck);
-    }
+    // Queued well before now, so "the back" is plainly behind it.
+    db.prepare(`UPDATE job SET created_at = '2025-06-01T00:00:00.000Z' WHERE id = ?`).run(next);
+    expect((await claimNext())?.id).toBe(stuck);
+    cutOff(stuck);
+    // The one behind it goes first; the cut-off one waits its turn again.
     expect((await claimNext())?.id).toBe(next);
-    expect(job(stuck).status).toBe('failed');
+    expect(job(stuck)).toMatchObject({ status: 'queued', attempts: 1 });
+    expect((await claimNext())?.id).toBe(stuck);
   });
 });

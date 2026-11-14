@@ -138,30 +138,35 @@ describe('preview scoring matches the SQL views', () => {
 
 describe('gut calibration in layers', () => {
   // Pairs: each song rated by gut 8 and in detail. Artist X runs 1 higher than the rest.
-  const pair = (recording: string, gut: number, craft: number) => ({ recording, gut, impact: null, songwriting: craft });
+  const pair = (gut: number | null, craft: number | null) => ({ gut, impact: null, songwriting: craft });
   const w = (evidence: number): Weights => ({
     ...DEFAULT_WEIGHTS,
     craft: { arrangement: 0, sound: 0, songwriting: 1, lyrics: 0, performance: 0, originality: 0 },
     calibration: { evidence },
   });
   const inputs = {
-    calibration: [pair('x1', 8, 9), pair('x2', 8, 9), pair('x3', 8, 9), pair('y1', 8, 8), pair('y2', 8, 8), pair('y3', 8, 8)],
-    artists: { x1: 'X', x2: 'X', x3: 'X', y1: 'Y', y2: 'Y', y3: 'Y' },
-    genres: { x1: ['rap'], x2: ['rap'], x3: ['rap'], y1: ['rap'], y2: ['rap'], y3: ['rap'] },
-    recordings: {},
+    recordings: { x1: pair(8, 9), x2: pair(8, 9), x3: pair(8, 9), y1: pair(8, 8), y2: pair(8, 8), y3: pair(8, 8) },
+    artists: { x1: 'X', x2: 'X', x3: 'X', y1: 'Y', y2: 'Y', y3: 'Y' } as Record<string, string>,
+    genres: { x1: ['rap'], x2: ['rap'], x3: ['rap'], y1: ['rap'], y2: ['rap'], y3: ['rap'] } as Record<string, string[]>,
     albums: {},
     canonical: {},
   };
 
-  it('counts each song once, by its latest row with both', () => {
-    const twice = { ...inputs, calibration: [pair('y1', 8, 2), ...inputs.calibration] };
-    expect(calibrate(twice, w(5)).samples).toBe(6);
-    expect(calibrate(twice, w(5)).general).toBeCloseTo(0.5);
+  it('learns from each song’s current rating only, and not from a slip', () => {
+    // Rated again by gut alone: its earlier detail no longer counts.
+    const regut = { ...inputs, recordings: { ...inputs.recordings, y1: pair(8, null) } };
+    expect(calibrate(regut, w(5)).samples).toBe(5);
+    // Bread Song: gut 10, detailed 0, autosaved mid-change. Ignored.
+    const slip = { ...inputs, recordings: { ...inputs.recordings, b: pair(10, 0) }, artists: { ...inputs.artists, b: 'X' } };
+    expect(calibrate(slip, w(5)).samples).toBe(6);
+    expect(calibrate(slip, w(5)).artists.X!.gap).toBeCloseTo(calibrate(inputs, w(5)).artists.X!.gap);
   });
+
 
   it('gives the artist its own gap, by how much evidence it has', () => {
     const cal = calibrate(inputs, w(3));
     // Overall +0.5; X is +0.5 beyond it on three songs, kept at 3 / (3 + 3).
+    // (Evidence 3 also pulls gut 8's level toward the overall +0.5, which it is.)
     expect(cal.artists.X!.gap).toBeCloseTo(0.25);
     expect(cal.artists.Y!.gap).toBeCloseTo(-0.25);
     expect(convert(cal, 8, 'X', ['rap']).offset).toBeGreaterThan(convert(cal, 8, 'Y', ['rap']).offset);

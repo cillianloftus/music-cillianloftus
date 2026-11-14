@@ -234,7 +234,7 @@ export async function scoreInputs(userId: string, { albums = true }: { albums?: 
     ).bind(userId),
   ]);
 
-  const inputs: ScoreInputs = { calibration: [], recordings: {}, albums: {}, canonical: {}, kinds: {}, lengths: {}, artists: {}, genres: {} };
+  const inputs: ScoreInputs = { recordings: {}, albums: {}, canonical: {}, kinds: {}, lengths: {}, artists: {}, genres: {} };
   for (const a of (artists!.results ?? []) as { id: string; artist: string | null }[]) if (a.artist) inputs.artists![a.id] = a.artist;
   for (const g of (genres!.results ?? []) as { recording_id: string; genre_id: string }[]) (inputs.genres![g.recording_id] ??= []).push(g.genre_id);
   for (const t of (tracks!.results ?? []) as { id: string; length_ms: number | null; kind: TrackKind | null }[]) {
@@ -244,10 +244,7 @@ export async function scoreInputs(userId: string, { albums = true }: { albums?: 
   // Oldest first, so later rows overwrite: the last one standing is the latest.
   for (const r of (ratings!.results ?? []) as SampleRow[]) {
     if (r.entity_type === 'recording') {
-      const s = sample(r, CRAFT_KEYS);
-      // Only rows with both can ever calibrate, whatever the weights.
-      if (r.gut_score != null && CRAFT_KEYS.some((k) => r[k] != null)) inputs.calibration.push({ ...s, recording: r.entity_id });
-      inputs.recordings[r.entity_id] = s;
+      inputs.recordings[r.entity_id] = sample(r, CRAFT_KEYS);
     } else {
       inputs.albums[r.entity_id] = sample(r, ALBUM_KEYS);
     }

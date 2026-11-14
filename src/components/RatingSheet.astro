@@ -7,15 +7,15 @@
  */
 import AxisSlider from './AxisSlider.astro';
 import { ALBUM_AXES, CRAFT_AXES, type RatableEntity, type RatingRow } from '../lib/ratings';
-import type { Weights } from '../lib/scoring';
+import type { ScorePreview } from '../lib/score-preview';
 
 interface Props {
   entityType: RatableEntity;
   entityId: string;
   current: RatingRow | undefined;
   returnTo: string;
-  /** For the live score preview: the same formula as the views. */
-  preview: { weights: Weights; offset: number };
+  /** For the live score: the same rules as the views (src/lib/score-preview.ts). */
+  preview: ScorePreview;
 }
 
 const { entityType, entityId, current, returnTo, preview } = Astro.props;
@@ -35,10 +35,20 @@ const HINTS: Record<string, string> = {
 const capitalise = (s: string) => s[0]!.toUpperCase() + s.slice(1);
 ---
 
-<form method="post" action="/api/write/rating" class="sheet" data-rating-sheet data-preview={JSON.stringify({ entityType, ...preview })}>
+<form method="post" action="/api/write/rating" class="sheet" data-rating-sheet data-preview={JSON.stringify(preview)}>
   <input type="hidden" name="entity_type" value={entityType} />
   <input type="hidden" name="entity_id" value={entityId} />
   <input type="hidden" name="return_to" value={returnTo} />
+
+  {/* What this rating makes it, as it is moved (rating-preview.ts). Hidden until there is one. */}
+  <div class="preview" data-preview hidden>
+    <span class="preview-label">{entityType === 'recording' ? 'Track score' : 'Album score'}</span>
+    <span class="preview-value">
+      <span class="score-number tabular" data-preview-score></span>
+      <span class="preview-word" data-preview-word></span>
+    </span>
+    <span class="preview-how" data-preview-how></span>
+  </div>
 
   <div class="gut">
     <AxisSlider name="gut_score" label="Gut" hint="First instinct." value={current?.gut_score} />
@@ -73,7 +83,6 @@ const capitalise = (s: string) => s[0]!.toUpperCase() + s.slice(1);
   <div class="save-row">
     {/* Only without JavaScript: otherwise it saves itself (rating-autosave.ts). */}
     <button class="button button--primary save" type="submit">Save rating</button>
-    <p class="preview" data-preview aria-live="polite"></p>
     <p class="save-status" data-save-status role="status"></p>
   </div>
 </form>
@@ -147,13 +156,51 @@ const capitalise = (s: string) => s[0]!.toUpperCase() + s.slice(1);
     gap: var(--space-2) var(--space-4);
   }
 
+  /* The score this rating gives, at the head of the sheet: in view while any slider moves. */
   .preview {
-    color: var(--accent);
-    font-weight: 700;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    column-gap: var(--space-3);
+    padding: var(--space-3) 0;
+    border-bottom: 2px solid var(--border);
   }
 
-  .preview:empty {
+  .preview[hidden] {
     display: none;
+  }
+
+  .preview-label {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .preview-value {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    grid-row: span 2;
+    align-self: center;
+  }
+
+  .preview .score-number {
+    font-size: var(--step-3);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .preview-word {
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
+  .preview-how {
+    color: var(--text-muted);
+    font-size: var(--step--1);
   }
 
   .sheet[data-autosave] .save {

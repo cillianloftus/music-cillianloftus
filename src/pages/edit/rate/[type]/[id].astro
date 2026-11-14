@@ -10,6 +10,7 @@ import RatingSheet from '../../../../components/RatingSheet.astro';
 import { artistLines } from '../../../../lib/catalogue';
 import { ALBUM_AXES, CRAFT_AXES, ratingHistory, safeReturnPath, type RatableEntity, type RatingRow } from '../../../../lib/ratings';
 import { activeWeights } from '../../../../lib/weights';
+import { scorePreview } from '../../../../lib/score-preview';
 
 const { type, id } = Astro.params as { type: string; id: string };
 if (type !== 'recording' && type !== 'release_group') return Astro.rewrite('/404');
@@ -54,14 +55,10 @@ const subject =
         .first<Subject>();
 if (!subject) return Astro.rewrite('/404');
 
-const [lines, history, weights, calibration] = await Promise.all([
-  artistLines(entityType, [id]),
-  ratingHistory(user.id, entityType, id),
-  activeWeights(user.id),
-  env.DB.prepare('SELECT gut_offset FROM v_gut_calibration WHERE user_id = ?').bind(user.id).first<number>('gut_offset'),
-]);
+const [lines, history, weights] = await Promise.all([artistLines(entityType, [id]), ratingHistory(user.id, entityType, id), activeWeights(user.id)]);
 const credits = lines.get(id) ?? [];
 const current = history[0];
+const preview = await scorePreview(user.id, entityType, id, current, weights);
 
 const fallbackReturn = subject.album_id ? `/album/${subject.album_id}` : '/';
 const returnTo = safeReturnPath(Astro.url.searchParams.get('return_to'), fallbackReturn);
@@ -97,7 +94,7 @@ const ratedAt = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyl
 
     {error && <p class="error" role="alert">{error}</p>}
 
-    <RatingSheet entityType={entityType} entityId={id} current={current} returnTo={returnTo} preview={{ weights, offset: calibration ?? 0 }} />
+    <RatingSheet entityType={entityType} entityId={id} current={current} returnTo={returnTo} preview={preview} />
 
     {
       entityType === 'recording' && (

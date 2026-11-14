@@ -98,6 +98,21 @@ describe('applyEnrichment', () => {
     await applyEnrichment('art-x', read);
     expect((await artistAbout('art-x')).members).toEqual([{ id: 'art-y', name: 'Yolanda', years: '1985–2001' }]);
   });
+
+  it('gives a band’s current members no years: only those who left have them', async () => {
+    const member = '22222222-2222-4222-8222-222222222222';
+    db.prepare(`UPDATE artist SET mbid = ? WHERE id = 'art-y'`).run(member);
+    const read = readArtist({
+      id: 'g',
+      name: 'Group',
+      type: 'Group',
+      relations: [{ type: 'member of band', 'target-type': 'artist', direction: 'backward', artist: { id: member, name: 'Y' }, begin: '2018' }],
+    });
+    await applyEnrichment('art-x', read);
+    expect((await artistAbout('art-x')).members).toEqual([{ id: 'art-y', name: 'Yolanda', years: null }]);
+    // On the member's own page, the band keeps its years.
+    expect((await artistAbout('art-y')).memberOf).toEqual([{ id: 'art-x', name: 'Xavier', years: '2018–' }]);
+  });
 });
 
 describe('membership years', () => {
