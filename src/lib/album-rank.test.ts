@@ -25,7 +25,8 @@ describe('album ranking', () => {
 describe('the rating scale', () => {
   it('names each band as scores are meant', async () => {
     const { scoreWord, scoreHue } = await import('./format');
-    expect([45, 50, 65, 70, 85, 90].map(scoreWord)).toEqual(['don’t like', 'okay', 'like', 'enjoy', 'great', 'amazing']);
+    expect([45, 50, 65, 70, 85, 90].map(scoreWord)).toEqual(['meh', 'okay', 'like', 'enjoy', 'great', 'amazing']);
+    expect([0, 9, 10, 25, 30, 39].map(scoreWord)).toEqual(['can’t stand', 'can’t stand', 'awful', 'bad', 'dislike', 'dislike']);
     // Red to orange below 50, a neutral yellow at 50 to 60, green from 70.
     expect(scoreHue(30)).toBeLessThan(45);
     expect(scoreHue(55)).toBeGreaterThan(80);

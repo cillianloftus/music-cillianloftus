@@ -95,8 +95,9 @@ const HUE_STOPS: [number, number][] = [
 
 /**
  * What a score means, in a word or two, on the scale it is given by
- * (0 to 100; an axis's 7.5 is 75): under 50 not liked, 50 okay, above it
- * liked, 70 genuinely enjoyed, 80 great, 90 amazing.
+ * (0 to 100; an axis's 7.5 is 75): a word for each step, as strong below
+ * the middle as above it. 50 okay; above it liked, enjoyed, great,
+ * amazing; below it meh, disliked, bad, awful, can't stand.
  */
 export const SCORE_BANDS: [number, string][] = [
   [90, 'amazing'],
@@ -104,7 +105,11 @@ export const SCORE_BANDS: [number, string][] = [
   [70, 'enjoy'],
   [60, 'like'],
   [50, 'okay'],
-  [0, 'don’t like'],
+  [40, 'meh'],
+  [30, 'dislike'],
+  [20, 'bad'],
+  [10, 'awful'],
+  [0, 'can’t stand'],
 ];
 
 export function scoreWord(score: number): string {
