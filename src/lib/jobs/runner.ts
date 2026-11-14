@@ -19,7 +19,11 @@ import { planFromMusicBrainz } from '../import/musicbrainz';
 import { writePlan } from '../import/write';
 import { pushDefinition } from '../spotify/push';
 import { runBackup } from '../backup/store';
-import { claimNext, complete, fail, requeue, type JobPayloads, type JobRow } from './queue';
+import { claimNext, complete, defer, fail, requeue, type JobPayloads, type JobRow } from './queue';
+import { MusicBrainzError } from '../musicbrainz/client';
+
+/** Runs a job may be put off by MusicBrainz's "not now" before it fails. */
+const MAX_DEFERS = 6;
 
 /**
  * The album's own artists, looked up straight away (who they are, other
@@ -189,6 +193,14 @@ export async function runJobs({ budgetMs }: { budgetMs: number }): Promise<numbe
       if (processed > 0 && isSubrequestLimit(error)) {
         console.warn(`Job ${job.id} ran out of requests after ${processed} others; it goes first next run`);
         await requeue(job.id);
+        break;
+      }
+      // MusicBrainz said "not now" through all its own retries: it is
+      // throttling (Workers share addresses with others' apps). Not the
+      // job's fault: back in its place, and this run stops to give it a rest.
+      if (error instanceof MusicBrainzError && error.status === 503 && job.attempts < MAX_DEFERS) {
+        console.warn(`Job ${job.id}: MusicBrainz is throttling; it waits for the next run`);
+        await defer(job.id);
         break;
       }
       console.error(`Job ${job.id} (${job.kind}) failed`, error);

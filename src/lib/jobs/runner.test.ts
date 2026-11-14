@@ -7,13 +7,18 @@ import { enqueue } from './queue';
 import { runJobs } from './runner';
 
 // Each backup job does whatever the next queued outcome says.
-const outcomes: Array<'ok' | 'limit'> = [];
-vi.mock('../backup/store', () => ({
-  runBackup: async () => {
-    if (outcomes.shift() === 'limit') throw new Error('Too many subrequests by single Worker invocation.');
-    return { summary: { rows: 1 } };
-  },
-}));
+const outcomes: Array<'ok' | 'limit' | 'throttled'> = [];
+vi.mock('../backup/store', async () => {
+  const { MusicBrainzError } = await import('../musicbrainz/client');
+  return {
+    runBackup: async () => {
+      const next = outcomes.shift();
+      if (next === 'limit') throw new Error('Too many subrequests by single Worker invocation.');
+      if (next === 'throttled') throw new MusicBrainzError('MusicBrainz returned 503 for release/x', 503);
+      return { summary: { rows: 1 } };
+    },
+  };
+});
 
 let db: DatabaseSync;
 const statuses = () => (db.prepare('SELECT id, status FROM job ORDER BY created_at, rowid').all() as Array<{ id: string; status: string }>).map((j) => j.status);
@@ -66,6 +71,23 @@ describe('running out of requests', () => {
     outcomes.push('ok', 'ok');
     expect(await runJobs({ budgetMs: 10_000 })).toBe(2);
     expect(statuses()).toEqual(['done', 'done', 'done']);
+  });
+
+  it('puts a job back when MusicBrainz is throttling, until it has been refused six times', async () => {
+    await enqueue('backup', {});
+    await enqueue('backup', {});
+    outcomes.push('throttled');
+    // Refused: back in its place, and the run stops.
+    expect(await runJobs({ budgetMs: 10_000 })).toBe(0);
+    expect(statuses()).toEqual(['queued', 'queued']);
+    // Refused every time: in the end it fails, and the queue moves on.
+    for (let i = 0; i < 5; i++) {
+      outcomes.push('throttled');
+      await runJobs({ budgetMs: 10_000 });
+    }
+    outcomes.push('throttled', 'ok');
+    await runJobs({ budgetMs: 10_000 });
+    expect(statuses()).toEqual(['failed', 'done']);
   });
 
   it('fails a job that runs out on a fresh allowance: it is too big on its own', async () => {
