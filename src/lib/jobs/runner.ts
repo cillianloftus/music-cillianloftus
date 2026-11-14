@@ -41,11 +41,16 @@ const STALLED = Symbol('stalled');
  * names, pictures) so a new artist's page is complete from the start.
  * Best effort: the import has already succeeded.
  */
-async function enrichImportedArtists(releaseGroupId: string): Promise<void> {
+async function enrichImportedArtists(releaseGroupId: string, timing?: Record<string, number>): Promise<void> {
   // Two lanes at once. MusicBrainz allows one request a second, so its
   // lookups go one after another; the other sources do not share that
   // limit, and waited behind it for nothing: an import took about 22 s.
-  await Promise.all([musicBrainzLane(releaseGroupId), otherSourcesLane(releaseGroupId)]);
+  const timed = async (name: string, lane: Promise<void>) => {
+    const start = Date.now();
+    await lane;
+    if (timing) timing[name] = Date.now() - start;
+  };
+  await Promise.all([timed('musicbrainz', musicBrainzLane(releaseGroupId)), timed('others', otherSourcesLane(releaseGroupId))]);
   await markSettleDue();
 }
 
@@ -139,8 +144,17 @@ async function importRelease(job: JobRow): Promise<void> {
     await complete(job.id, { ...payload, result: { releaseGroupId: result.releaseGroupId, via: result.via } }, 1);
     return;
   }
+  // Where an import's time goes, in the log (wrangler tail): plan, write, art, then the two lanes.
+  const timing: Record<string, number> = {};
+  let mark = Date.now();
+  const lap = (stage: string) => {
+    timing[stage] = Date.now() - mark;
+    mark = Date.now();
+  };
   const plan = await planFromMusicBrainz(payload.target);
+  lap('plan');
   const result = await writePlan(plan);
+  lap('write');
 
   // Art is best-effort: an album without a cover is still an album, and the
   // review queue reports releases with no art.
@@ -159,8 +173,10 @@ async function importRelease(job: JobRow): Promise<void> {
     }
   }
 
+  lap('art');
   const filesAttached = payload.files?.length ? await attachFiles(result.releaseId, payload.files) : undefined;
-  await enrichImportedArtists(result.releaseGroupId);
+  await enrichImportedArtists(result.releaseGroupId, timing);
+  console.log('Import timing (ms)', JSON.stringify(timing));
 
   // The file list has done its job; keep the payload small.
   const { files: _files, ...rest } = payload;

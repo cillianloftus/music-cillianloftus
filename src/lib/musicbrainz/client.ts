@@ -33,13 +33,21 @@ export interface MbArtistDetails {
 const BASE = 'https://musicbrainz.org/ws/2';
 const USER_AGENT = 'music-cillianloftus/0.1 ( https://music.cillianloftus.com )';
 const MIN_INTERVAL_MS = 1100;
+const MAX_INTERVAL_MS = 5000;
 const MAX_ATTEMPTS = 4;
 
 /** The earliest time the next request may start. */
 let nextSlot = 0;
+/**
+ * The gap between requests: 1.1 s, stretched after a 503 and eased back as
+ * requests succeed. MusicBrainz limits by address, and a Worker's address is
+ * shared with other people's apps, so even one request a second from here
+ * is sometimes too many; on 14 Nov most imports were refused for a while.
+ */
+let interval = MIN_INTERVAL_MS;
 
 /**
- * Runs `task` at least MIN_INTERVAL_MS after the last one started. Each
+ * Runs `task` at least `interval` after the last one started. Each
  * caller reserves the next free slot and waits for it on its own timer:
  * nothing is shared between requests but a number. (Chaining every call
  * onto one shared promise made a request wait on another's promise, which
@@ -48,7 +56,7 @@ let nextSlot = 0;
 async function throttle<T>(task: () => Promise<T>): Promise<T> {
   const now = Date.now();
   const slot = Math.max(now, nextSlot);
-  nextSlot = slot + MIN_INTERVAL_MS;
+  nextSlot = slot + interval;
   if (slot > now) await new Promise((resolve) => setTimeout(resolve, slot - now));
   return task();
 }
@@ -71,8 +79,12 @@ async function get<T>(path: string, inc: string[]): Promise<T> {
     const response = await throttle(() =>
       fetch(url, { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } }),
     );
-    if (response.ok) return (await response.json()) as T;
+    if (response.ok) {
+      interval = Math.max(MIN_INTERVAL_MS, interval - 250);
+      return (await response.json()) as T;
+    }
 
+    if (response.status === 503) interval = Math.min(MAX_INTERVAL_MS, interval * 2);
     if (response.status === 503 && attempt < MAX_ATTEMPTS) {
       await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt));
       continue;
