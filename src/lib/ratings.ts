@@ -83,6 +83,16 @@ export async function addRating(userId: string, input: RatingInput): Promise<str
   const id = crypto.randomUUID();
   // Depth describes the row truthfully, so it is derived, not submitted.
   const depth = [...CRAFT_AXES, ...ALBUM_AXES].some((axis) => input[axis] !== null) ? 'detailed' : 'gut';
+  // A song rated by gut in place of a detailed rating leaves the gut
+  // calibration (gut-calibration.ts): known before the new row lands.
+  const wasDetailed =
+    input.entity_type === 'recording' && depth === 'gut'
+      ? (await env.DB.prepare(
+          `SELECT depth FROM rating WHERE entity_type = 'recording' AND entity_id = ? AND user_id = ? ORDER BY rated_at DESC LIMIT 1`,
+        )
+          .bind(input.entity_id, userId)
+          .first<string>('depth')) === 'detailed'
+      : false;
 
   await env.DB.prepare(
     `INSERT INTO rating (id, user_id, entity_type, entity_id, depth, gut_score,
@@ -128,10 +138,10 @@ export async function addRating(userId: string, input: RatingInput): Promise<str
   // Never the save's failure: a song without one uses the general gap.
   if (input.entity_type === 'recording') {
     const calibration = await import('./gut-calibration');
-    await (depth === 'gut' && input.gut_score !== null
-      ? calibration.convertOne(userId, input.entity_id, input.gut_score)
-      : calibration.markStale(userId)
-    ).catch((error) => console.warn('Gut conversion failed', error));
+    await Promise.all([
+      depth === 'gut' && input.gut_score !== null ? calibration.convertOne(userId, input.entity_id, input.gut_score) : Promise.resolve(),
+      depth === 'detailed' || wasDetailed ? calibration.markStale(userId) : Promise.resolve(),
+    ]).catch((error) => console.warn('Gut conversion failed', error));
   }
   return id;
 }

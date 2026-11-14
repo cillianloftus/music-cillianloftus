@@ -7,9 +7,10 @@
  * - A gut-only rating: that one song, at once, from the calibration last
  *   worked out (kept in KV). Rating by gut never changes the calibration
  *   itself: only songs rated both ways feed it.
- * - A detailed rating: the calibration may move, so the whole table is
- *   worked out again on the next cron minute (markStale), not inside the
- *   save, which the autosave makes often.
+ * - A detailed rating, or a gut one in place of a detailed one: the
+ *   calibration may move, so the whole table (and the general gap in
+ *   gut_calibration, migration 0069) is worked out again on the next cron
+ *   minute (markStale), not inside the save, which the autosave makes often.
  * - New weights, and each night (an artist credited or a genre added since).
  *
  * Only rows that changed are written, and the scores' cache version moves
@@ -68,6 +69,18 @@ export async function rebuildGutConversions(userId: string): Promise<number> {
   }
   for (const id of had.keys()) {
     if (!want.has(id)) statements.push(env.DB.prepare('DELETE FROM gut_conversion WHERE user_id = ? AND recording_id = ?').bind(userId, id));
+  }
+  // The general gap, which v_gut_calibration reads (migration 0069).
+  const general = await env.DB.prepare('SELECT gut_offset, sample_size FROM gut_calibration WHERE user_id = ?')
+    .bind(userId)
+    .first<{ gut_offset: number; sample_size: number }>();
+  if (general?.gut_offset !== cal.general || general?.sample_size !== cal.samples) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO gut_calibration (user_id, gut_offset, sample_size) VALUES (?, ?, ?)
+         ON CONFLICT (user_id) DO UPDATE SET gut_offset = excluded.gut_offset, sample_size = excluded.sample_size`,
+      ).bind(userId, cal.general, cal.samples),
+    );
   }
   if (statements.length > 0) {
     statements.push(env.DB.prepare(BUMP_SCORES));

@@ -6,6 +6,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { insert, migratedDb, seedLibrary } from './db';
+import { env } from 'cloudflare:workers';
+import { d1 } from './d1';
 
 let db: DatabaseSync;
 
@@ -73,7 +75,7 @@ describe('polymorphic references', () => {
 });
 
 describe('score views', () => {
-  it('calibrates gut scores against considered ones', () => {
+  it('calibrates gut scores against considered ones', async () => {
     // Craft mean 6 against a gut of 8: the gut runs 2 high.
     insert(db, 'rating', [
       {
@@ -90,6 +92,10 @@ describe('score views', () => {
         rated_at: '2026-02-01T00:00:00.000Z',
       },
     ]);
+    // Kept, not worked out on each read (0069): as the cron does after a detailed rating.
+    (env as { DB: D1Database }).DB = d1(db);
+    const { rebuildGutConversions } = await import('../lib/gut-calibration');
+    await rebuildGutConversions('u-owner');
     expect(one("SELECT gut_offset FROM v_gut_calibration WHERE user_id = 'u-owner'").gut_offset).toBe(-2);
     // A gut-only 9 now reads as 7.
     expect(one("SELECT quality_score FROM v_recording_score WHERE recording_id = 'a1' AND user_id = 'u-owner'").quality_score).toBe(70);
