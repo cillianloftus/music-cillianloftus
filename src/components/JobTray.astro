@@ -20,11 +20,13 @@
     <div class="summary item" data-summary hidden>
       <span class="icon" aria-hidden="true"></span>
       <div class="text">
-        <span class="title" data-summary-title></span>
+        <a class="title" href="/manage/jobs" data-summary-title></a>
         <span class="line" data-summary-line></span>
+        <span class="line now" data-summary-now hidden></span>
         <span class="bar" aria-hidden="true"><span data-summary-bar></span></span>
       </div>
       <button type="button" class="toggle" data-summary-toggle aria-expanded="false">Show all</button>
+      <button type="button" class="close" data-summary-hide aria-label="Hide import progress" hidden>×</button>
     </div>
     <ol role="list" class="list"></ol>
   </section>
@@ -33,7 +35,46 @@
 
 <script>
   type Item = { id: string; label: string; status: string; error?: string | null; albumId?: string | null; albumTitle?: string | null; doneAt?: number };
+  /** The whole queue, from the server (queueProgress in src/lib/jobs/queue.ts). */
+  type Queue = { counts: { queued: number; running: number; done: number; failed: number }; perHour: number | null; current: string | null };
+  /** Where the queue stood when this device first saw the current batch, for the bar. */
+  type Batch = { done: number; at: number };
   const KEY = 'job-tray';
+  const QUEUE_KEY = 'job-tray-queue';
+  const BATCH_KEY = 'job-tray-batch';
+  const QUIET_KEY = 'job-tray-quiet';
+  /** A page load looks at the queue only if the last look is older than this. */
+  const FRESH_MS = 45_000;
+  /** Watching only the queue (nothing of this session's waiting), look this often. */
+  const QUEUE_WAIT_MS = 15_000;
+
+  function read<T>(storage: () => Storage, key: string): T | null {
+    try {
+      return JSON.parse(storage().getItem(key) ?? 'null') as T | null;
+    } catch {
+      return null;
+    }
+  }
+  function write(storage: () => Storage, key: string, value: unknown) {
+    try {
+      if (value === null) storage().removeItem(key);
+      else storage().setItem(key, JSON.stringify(value));
+    } catch {
+      /* Storage unavailable: kept in memory for this page. */
+    }
+  }
+  const session = () => sessionStorage;
+  const local = () => localStorage;
+
+  /** "about 40 min", "about 5 h", "about 1 day 12 h". */
+  function timeLeft(hours: number): string {
+    if (hours < 1) return `about ${Math.max(1, Math.round(hours * 60))} min`;
+    if (hours < 24) return `about ${Math.round(hours)} h`;
+    const days = Math.floor(hours / 24);
+    const rest = Math.round(hours - days * 24);
+    return `about ${days} ${days === 1 ? 'day' : 'days'}${rest ? ` ${rest} h` : ''}`;
+  }
+  const number = new Intl.NumberFormat('en-GB');
   /** How long a finished import stays; longer while the pointer or focus is on the tray. */
   const LINGER_MS = 12000;
   /** Beyond this many at once, one summary card stands for them. */
@@ -71,6 +112,12 @@
       // time here rather than vanishing on the page change.
       this.items = this.items.filter((i) => i.status !== 'done' || (i.doneAt && Date.now() - i.doneAt < LINGER_MS));
       for (const i of this.items) if (i.status === 'done') this.leaveLater(i.id, LINGER_MS - (Date.now() - i.doneAt!));
+      // The queue as last seen (this tab), drawn at once; looked at again
+      // straight away unless that look was just now and found nothing.
+      const seen = read<{ queue: Queue; at: number }>(session, QUEUE_KEY);
+      this.queue = seen?.queue ?? null;
+      this.batch = read<Batch>(local, BATCH_KEY);
+      this.firstLook = !seen || Date.now() - seen.at > FRESH_MS || this.queueBusy();
       window.addEventListener('job:watch', (event) => {
         const detail = (event as CustomEvent<{ id?: string; label?: string; jobs?: { id: string; label: string }[] }>).detail;
         const jobs = detail.jobs ?? (detail.id ? [{ id: detail.id, label: detail.label ?? 'Import' }] : []);
@@ -85,6 +132,14 @@
         // Many events in a row (a page that sends one per job) still cost one render.
         this.update();
       });
+      // Hidden for the rest of this visit; the Jobs page still has it all.
+      this.querySelector('[data-summary-hide]')?.addEventListener('click', () => {
+        this.quiet = true;
+        write(session, QUIET_KEY, true);
+        this.render();
+        this.measure();
+      });
+      this.quiet = read<boolean>(session, QUIET_KEY) === true;
       this.querySelector('[data-summary-toggle]')?.addEventListener('click', () => {
         this.expanded = !this.expanded;
         this.render();
@@ -98,9 +153,50 @@
       this.poll();
     }
 
-    /** Cards are folded into the summary (a phone, or more than a few). */
+    /** Cards are folded into the summary (a phone, more than a few, or a queue bigger than this visit's). */
     grouped() {
+      if (this.queueBusy()) return true;
       return PHONE.matches ? this.items.length > 0 : this.items.length > MAX_CARDS;
+    }
+
+    queue: Queue | null = null;
+    batch: Batch | null = null;
+    firstLook = true;
+
+    /** Set by the summary's ×: the queue is not shown for the rest of the visit. */
+    quiet = false;
+
+    /** Jobs waiting or running anywhere, whoever queued them (unless hidden). */
+    queueBusy(): boolean {
+      return !this.quiet && this.queueWorking();
+    }
+
+    queueWorking(): boolean {
+      return Boolean(this.queue && this.queue.counts.queued + this.queue.counts.running > 0);
+    }
+
+    /** A new reading of the whole queue: kept for the next page, and the batch's start noted. */
+    setQueue(queue: Queue | undefined) {
+      if (!queue) return;
+      this.queue = queue;
+      write(session, QUEUE_KEY, { queue, at: Date.now() });
+      if (this.queueWorking()) {
+        // First sight of this batch on this device: the bar counts from here.
+        if (!this.batch || this.batch.done > queue.counts.done) {
+          this.batch = { done: queue.counts.done, at: Date.now() };
+          write(local, BATCH_KEY, this.batch);
+        }
+      } else {
+        if (this.batch) {
+          this.batch = null;
+          write(local, BATCH_KEY, null);
+        }
+        // The batch is over: the next one shows again.
+        if (this.quiet) {
+          this.quiet = false;
+          write(session, QUIET_KEY, null);
+        }
+      }
     }
 
     expanded = false;
@@ -164,7 +260,8 @@
     poll() {
       window.clearTimeout(this.timer);
       const pending = this.items.filter((i) => i.status === 'queued' || i.status === 'running');
-      if (pending.length === 0) return;
+      const watchingQueue = this.firstLook || this.queueBusy();
+      if (pending.length === 0 && !watchingQueue) return;
       // Not while the page is out of sight: it looks again when it comes back.
       if (!this.watchingVisibility) {
         this.watchingVisibility = true;
@@ -176,7 +273,10 @@
         });
       }
       if (document.visibilityState === 'hidden') return;
+      // Only the queue to follow: it moves an import every half minute or so.
+      const wait = this.firstLook ? 0 : pending.length ? this.wait : Math.max(this.wait, QUEUE_WAIT_MS);
       this.timer = window.setTimeout(async () => {
+        this.firstLook = false;
         try {
           // The queue runs oldest first, so the oldest hundred are where news will be.
           const res = await fetch('/api/write/jobs/status', {
@@ -184,10 +284,14 @@
             headers: { accept: 'application/json', 'content-type': 'application/json' },
             body: JSON.stringify({ ids: pending.slice(0, 100).map((i) => i.id) }),
           });
-          const { jobs, paused } = (await res.json()) as {
+          const { jobs, paused, queue } = (await res.json()) as {
             jobs: { id: string; status: string; error: string | null; album_id: string | null; album_title: string | null }[];
             paused?: boolean;
+            queue?: Queue;
           };
+          const before = this.queue ? `${this.queue.counts.done}|${this.queue.current}` : '';
+          this.setQueue(queue);
+          const queueMoved = Boolean(queue) && before !== `${queue!.counts.done}|${queue!.current}`;
           if (Boolean(paused) !== this.paused) {
             this.paused = Boolean(paused);
             this.nodes.forEach((node) => delete node.dataset.key);
@@ -217,13 +321,14 @@
           if (finished) this.setDone(this.doneCount() + finished);
           this.wait = changed ? 1500 : Math.min(20_000, this.wait * 1.5);
           this.save();
-          this.render();
+          if (changed || queueMoved || !before) this.render();
+          this.measure();
         } catch {
           /* Offline for a moment: try again on the next tick. */
           this.wait = Math.min(20_000, this.wait * 1.5);
         }
         this.poll();
-      }, this.wait);
+      }, wait);
     }
 
     dismiss(id: string) {
@@ -248,7 +353,7 @@
     render() {
       const tray = this.querySelector<HTMLElement>('.tray')!;
       const list = this.querySelector<HTMLElement>('.list')!;
-      tray.hidden = this.items.length === 0;
+      tray.hidden = this.items.length === 0 && !this.queueBusy();
       if (this.items.length === 0) this.expanded = false;
 
       // On a phone the cards cover the page, so even one is folded into the
@@ -314,6 +419,17 @@
       const card = this.querySelector<HTMLElement>('[data-summary]')!;
       card.hidden = !grouped;
       if (!grouped) return;
+      const toggle = this.querySelector<HTMLButtonElement>('[data-summary-toggle]')!;
+      toggle.hidden = this.items.length === 0;
+      this.querySelector<HTMLElement>('[data-summary-hide]')!.hidden = !this.queueBusy() || this.items.some((i) => i.status !== 'done');
+      toggle.textContent = this.expanded ? 'Hide' : 'Show all';
+      toggle.setAttribute('aria-expanded', String(this.expanded));
+      const now = this.querySelector<HTMLElement>('[data-summary-now]')!;
+      if (this.queueBusy()) {
+        this.renderQueue(card, now);
+        return;
+      }
+      now.hidden = true;
       const working = this.items.filter((i) => i.status === 'queued' || i.status === 'running').length;
       const failed = this.items.filter((i) => i.status === 'failed').length;
       const done = this.doneCount();
@@ -341,9 +457,29 @@
         .filter(Boolean)
         .join(' · ');
       this.querySelector<HTMLElement>('[data-summary-bar]')!.style.inlineSize = `${total ? Math.round((done / total) * 100) : 0}%`;
-      const toggle = this.querySelector<HTMLButtonElement>('[data-summary-toggle]')!;
-      toggle.textContent = this.expanded ? 'Hide' : 'Show all';
-      toggle.setAttribute('aria-expanded', String(this.expanded));
+    }
+
+    /**
+     * The whole queue: how many to go, the pace and the time left, what is
+     * importing now, and a bar from when this device first saw the batch.
+     */
+    renderQueue(card: HTMLElement, now: HTMLElement) {
+      const { counts, perHour, current } = this.queue!;
+      const toGo = counts.queued + counts.running;
+      const failed = Math.max(counts.failed, this.items.filter((i) => i.status === 'failed').length);
+      card.dataset.status = 'running';
+      this.querySelector('[data-summary-title]')!.textContent = `${this.paused ? 'Paused' : 'Importing'} · ${number.format(toGo)} to go`;
+      const pace = !this.paused && perHour ? `${number.format(Math.round(perHour))} an hour, ${timeLeft(toGo / perHour)} left` : null;
+      this.querySelector('[data-summary-line]')!.textContent = [
+        pace ?? (this.paused ? 'Resume on the Jobs page' : 'Working out the pace'),
+        failed ? `${failed} failed` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      now.hidden = !current || this.paused;
+      now.textContent = current ? `Now: ${current}` : '';
+      const doneHere = this.batch ? Math.max(0, counts.done - this.batch.done) : 0;
+      this.querySelector<HTMLElement>('[data-summary-bar]')!.style.inlineSize = `${Math.round((doneHere / Math.max(1, doneHere + toGo)) * 100)}%`;
     }
 
     fill(li: HTMLLIElement, item: Item) {
@@ -429,8 +565,24 @@
     margin: calc(var(--space-1) * -1);
   }
 
-  .summary[hidden] {
+  .summary[hidden],
+  .summary [hidden] {
     display: none !important;
+  }
+
+  .summary .title {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .summary .title:hover {
+    text-decoration: underline;
+  }
+
+  .summary .now {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .tray :global(.bar) {

@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../../test/d1';
 import { migratedDb } from '../../test/db';
-import { claimNext, enqueue } from './queue';
+import { claimNext, complete, enqueue, enqueueMany, fail, jobCounts, pace, queueProgress, recountJobs, removeQueued, retry } from './queue';
 
 let db: DatabaseSync;
 
@@ -46,5 +46,52 @@ describe('the job queue', () => {
     expect((await claimNext())?.id).toBe(next);
     expect(job(stuck)).toMatchObject({ status: 'queued', attempts: 1 });
     expect((await claimNext())?.id).toBe(stuck);
+  });
+});
+
+describe('kept job counts (0070)', () => {
+  const counted = async () => {
+    const kept = await jobCounts();
+    await recountJobs();
+    expect(await jobCounts()).toEqual(kept);
+    return kept;
+  };
+
+  it('follow every move without counting the table', async () => {
+    const [a, b, c] = await enqueueMany('import_release', [1, 2, 3].map((n) => ({ label: `Album ${n}` }) as never));
+    expect(await counted()).toEqual({ queued: 3, running: 0, done: 0, failed: 0 });
+    await claimNext();
+    expect(await counted()).toMatchObject({ queued: 2, running: 1 });
+    await complete(a!, {});
+    await claimNext();
+    await fail(b!, new Error('no'));
+    expect(await counted()).toEqual({ queued: 1, running: 0, done: 1, failed: 1 });
+    await retry(b!);
+    await removeQueued(c!);
+    expect(await counted()).toEqual({ queued: 1, running: 0, done: 1, failed: 0 });
+  });
+
+  it('give the whole queue with what is running now', async () => {
+    await enqueueMany('import_release', [{ label: 'Ours' }, { label: 'Pon de Replay' }] as never);
+    await claimNext();
+    const progress = await queueProgress();
+    expect(progress.counts).toMatchObject({ queued: 1, running: 1 });
+    expect(progress.current).toBe('Ours');
+    expect(progress.perHour).toBeNull();
+  });
+});
+
+describe('pace', () => {
+  const at = (minutesAgo: number) => new Date(Date.UTC(2026, 10, 14, 20) - minutesAgo * 60_000).toISOString();
+  const now = Date.UTC(2026, 10, 14, 20);
+
+  it('is jobs an hour over the recent finishes', () => {
+    // Five finishes two minutes apart: 30 an hour.
+    expect(pace([0, 2, 4, 6, 8].map(at), now)).toBeCloseTo(30);
+  });
+
+  it('is unknown with too few finishes or when work stopped long ago', () => {
+    expect(pace([at(0), at(1)], now)).toBeNull();
+    expect(pace([20, 22, 24].map(at), now)).toBeNull();
   });
 });

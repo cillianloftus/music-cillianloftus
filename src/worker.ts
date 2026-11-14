@@ -1,6 +1,6 @@
 import { handle } from '@astrojs/cloudflare/handler';
 import { env } from 'cloudflare:workers';
-import { enqueue } from './lib/jobs/queue';
+import { enqueue, recountJobs } from './lib/jobs/queue';
 import { runJobs } from './lib/jobs/runner';
 import { fetchArtistImages } from './lib/artist-images';
 import { enrichArtists } from './lib/artists';
@@ -98,6 +98,8 @@ export default {
             // After the genres: a song's conversion follows its artist and genres.
             ['Gut score conversions', rebuildAllGutConversions],
             ['Review rules', detectAnomalies],
+            // The kept job counts (0070) set from a real count, once a day.
+            ['Job counts', recountJobs],
             ['Artist details', () => enrichArtists({ budgetMs: 20_000 })],
             ['Awards, labels and influences from Wikidata', () => fillArtistsFromWiki({ budgetMs: 15_000 })],
             ['Artist pictures', picturesForArtistsWithout],

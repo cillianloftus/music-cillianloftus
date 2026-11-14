@@ -9,11 +9,22 @@ import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import { formatRelative } from '../../lib/format';
-import { jobCounts, queuePaused, recentJobs, type JobRow } from '../../lib/jobs/queue';
+import { queuePaused, queueProgress, recentJobs, type JobRow } from '../../lib/jobs/queue';
 import { runJobs } from '../../lib/jobs/runner';
 
 // The list shows the latest 80; the totals count everything.
-const [jobs, totals] = await Promise.all([recentJobs(80), jobCounts()]);
+const [jobs, progressNow] = await Promise.all([recentJobs(80), queueProgress()]);
+const totals = progressNow.counts;
+// At the recent pace, how long the queue has left.
+const left = progressNow.perHour ? (totals.queued + totals.running) / progressNow.perHour : null;
+const leftText =
+  left === null
+    ? null
+    : left < 1
+      ? `about ${Math.max(1, Math.round(left * 60))} min`
+      : left < 24
+        ? `about ${Math.round(left)} h`
+        : `about ${Math.floor(left / 24)} d ${Math.round(left % 24)} h`;
 const byStatus = (s: string) => jobs.filter((j) => j.status === s);
 const failedJobs = byStatus('failed');
 const moving = jobs.filter((j) => j.status === 'queued' || j.status === 'running');
@@ -141,6 +152,12 @@ const groups = [
               <dd class="tabular">{totals.failed}</dd>
             </div>
           </dl>
+          {queued + running > 0 && !paused && leftText && (
+            <p class="pace muted">
+              {Math.round(progressNow.perHour!)} an hour, {leftText} left
+              {progressNow.current && <> · now {progressNow.current}</>}
+            </p>
+          )}
           {moving.length > 0 && (
             <span class:list={['bar', { paused }]} aria-hidden="true">
               <span style={`inline-size: ${Math.round(progress * 100)}%`} />
@@ -330,6 +347,11 @@ const groups = [
 
   .summary .alert dd {
     color: var(--danger);
+  }
+
+  .pace {
+    margin: 0;
+    font-size: var(--step--1);
   }
 
   .bar {

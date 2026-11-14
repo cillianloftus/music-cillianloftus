@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { kickJobs } from '../../../../lib/jobs/runner';
+import { queuePaused, queueProgress } from '../../../../lib/jobs/queue';
 
 /**
  * Where some jobs have got to, for the import tray: status, the error if
@@ -16,7 +17,14 @@ export const POST: APIRoute = async ({ request, locals }) => {
 
 async function answer(all: string[], locals: App.Locals): Promise<Response> {
   const ids = all.slice(0, 100);
-  if (ids.length === 0) return Response.json({ jobs: [] });
+  // The whole queue too, so the tray shows a batch queued on another
+  // device or in an earlier visit (a few dozen rows: queueProgress).
+  const queue = await queueProgress();
+  if (ids.length === 0) {
+    const paused = await queuePaused();
+    if (!paused && queue.counts.queued > 0 && queue.counts.running === 0) kickJobs(locals.cfContext);
+    return Response.json({ jobs: [], paused, queue }, { headers: { 'cache-control': 'no-store' } });
+  }
   const { results } = await env.DB.prepare(
     `SELECT j.id, j.status, j.error, g.id AS album_id, g.title AS album_title
      FROM job j
@@ -37,5 +45,5 @@ async function answer(all: string[], locals: App.Locals): Promise<Response> {
     ).first();
     if (!running) kickJobs(locals.cfContext);
   }
-  return Response.json({ jobs: results, paused }, { headers: { 'cache-control': 'no-store' } });
+  return Response.json({ jobs: results, paused, queue }, { headers: { 'cache-control': 'no-store' } });
 }

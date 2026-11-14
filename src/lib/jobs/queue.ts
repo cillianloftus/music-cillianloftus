@@ -191,12 +191,81 @@ export async function recentJobs(limit = 50): Promise<JobRow[]> {
   return results;
 }
 
-/** How many jobs are in each state, across the whole queue (not just the recent page). */
+/**
+ * How many jobs are in each state, across the whole queue (not just the
+ * recent page): kept in app_setting by triggers (0070), four rows a read.
+ */
 export async function jobCounts(): Promise<Record<JobStatus, number>> {
-  const { results } = await env.DB.prepare('SELECT status, count(*) AS n FROM job GROUP BY status').all<{ status: JobStatus; n: number }>();
+  const { results } = await env.DB.prepare(
+    `SELECT substr(key, 8) AS status, CAST(value AS INTEGER) AS n FROM app_setting
+     WHERE key IN ('jobs_n_queued', 'jobs_n_running', 'jobs_n_done', 'jobs_n_failed')`,
+  ).all<{ status: JobStatus; n: number }>();
   const counts: Record<JobStatus, number> = { queued: 0, running: 0, done: 0, failed: 0 };
-  for (const r of results) counts[r.status] = r.n;
+  for (const r of results) counts[r.status] = Math.max(0, r.n);
   return counts;
+}
+
+/** Sets the kept counts from a real count: nightly, in case a restore moved the table under them. */
+export async function recountJobs(): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO app_setting (key, value)
+     SELECT 'jobs_n_' || s.status, CAST((SELECT count(*) FROM job j WHERE j.status = s.status) AS TEXT)
+     FROM (SELECT 'queued' AS status UNION ALL SELECT 'running' UNION ALL SELECT 'done' UNION ALL SELECT 'failed') s
+     WHERE true
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+  ).run();
+}
+
+export interface QueueProgress {
+  counts: Record<JobStatus, number>;
+  /** Jobs finished an hour at the recent pace; null with too few to tell. */
+  perHour: number | null;
+  /** What is being worked on now, by its label. */
+  current: string | null;
+}
+
+/** How many finished jobs the pace is taken over. */
+const PACE_SAMPLE = 20;
+
+/**
+ * The whole queue in a glance, for the import tray on any device: a few
+ * dozen rows a read (kept counts, the last finished jobs by the
+ * finished_at index, the running job by the status index).
+ */
+export async function queueProgress(): Promise<QueueProgress> {
+  const [counts, recent, running] = await Promise.all([
+    jobCounts(),
+    env.DB.prepare(`SELECT finished_at FROM job WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT ?`)
+      .bind(PACE_SAMPLE)
+      .all<{ finished_at: string }>(),
+    env.DB.prepare(`SELECT payload_json FROM job WHERE status = 'running' ORDER BY created_at LIMIT 1`).first<{ payload_json: string }>(),
+  ]);
+  return { counts, perHour: pace(recent.results.map((r) => r.finished_at), Date.now()), current: labelOf(running?.payload_json) };
+}
+
+/**
+ * Jobs an hour from the newest finish times. Only a pace still going: if
+ * the last finish was long ago (paused, or a batch that ended), there is
+ * no pace to speak of.
+ */
+export function pace(finishedNewestFirst: string[], now: number): number | null {
+  const times = finishedNewestFirst.map((t) => Date.parse(t)).filter(Number.isFinite);
+  if (times.length < 3) return null;
+  const newest = times[0]!;
+  const oldest = times[times.length - 1]!;
+  const span = newest - oldest;
+  if (span <= 0 || now - newest > 15 * 60_000) return null;
+  return ((times.length - 1) / span) * 3_600_000;
+}
+
+function labelOf(payloadJson: string | undefined): string | null {
+  if (!payloadJson) return null;
+  try {
+    const label = (JSON.parse(payloadJson) as { label?: unknown }).label;
+    return typeof label === 'string' && label ? label : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Whether the queue is paused: waiting jobs stay waiting until resumed. */
