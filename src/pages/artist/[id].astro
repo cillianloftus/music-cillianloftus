@@ -145,6 +145,14 @@ const otherNames = about.aliases.filter(
     // nor the name written in another script, which reads as noise in a list.
     (latin(a.name) || !latin(artist.name)),
 );
+// One "Also known as": the same person's other artist pages first, as links,
+// then the other names, less any that is already one of those pages.
+const fold = (s: string) => s.toLocaleLowerCase('en');
+const linked = new Set(about.sameAs.map((m) => fold(m.name)));
+const knownAs: { name: string; id?: string }[] = [
+  ...about.sameAs.map((m) => ({ name: m.name, id: m.id })),
+  ...otherNames.filter((a) => !linked.has(fold(a.name))).map((a) => ({ name: a.name })),
+];
 const firstImage = images[0];
 // "Photo: Name, CC BY-SA 4.0 · Wikimedia Commons", without saying the source twice.
 const captionOf = (img: (typeof images)[number]) =>
@@ -329,7 +337,19 @@ import { splitVersion } from '../../lib/versions';
             <p class="identity">{[...identity, artist.disambiguation].filter(Boolean).join(' · ')}</p>
           )
         }
-        {otherNames.length > 0 && <p class="muted aka">Also known as {otherNames.map((a) => a.name).join(', ')}</p>}
+        {
+          knownAs.length > 0 && (
+            <p class="muted aka">
+              Also known as{' '}
+              {knownAs.map((k, i) => (
+                <>
+                  {i > 0 && ', '}
+                  {k.id ? <a href={`/artist/${k.id}`}>{k.name}</a> : k.name}
+                </>
+              ))}
+            </p>
+          )
+        }
         {
           about.members.length > 0 && (
             <p class="muted">
@@ -353,19 +373,6 @@ import { splitVersion } from '../../lib/versions';
                   {i > 0 && ', '}
                   <a href={`/artist/${m.id}`}>{m.name}</a>
                   {m.years && <span class="years"> ({m.years})</span>}
-                </>
-              ))}
-            </p>
-          )
-        }
-        {
-          about.sameAs.length > 0 && (
-            <p class="muted">
-              Same person as{' '}
-              {about.sameAs.map((m, i) => (
-                <>
-                  {i > 0 && ', '}
-                  <a href={`/artist/${m.id}`}>{m.name}</a>
                 </>
               ))}
             </p>
