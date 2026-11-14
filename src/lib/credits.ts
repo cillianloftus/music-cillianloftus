@@ -14,6 +14,7 @@
 import { env } from 'cloudflare:workers';
 import { EditError, override } from './edits';
 import { normaliseName } from './text';
+import { byDay } from './library-cache';
 
 /** A credit_role id: built in, or added from the app (migration 0018). */
 export type CreditRole = string;
@@ -57,15 +58,29 @@ export async function creditRoles({ withUses = false } = {}): Promise<Role[]> {
   return results;
 }
 
-/** How many credits use each of these roles (an index lookup each). */
+/**
+ * How many credits use each of these roles. Counting reads every credit in
+ * them (29,000 rows on each album and track edit page), so it is counted
+ * once a day; removeRole counts again before it removes anything.
+ */
 export async function roleUses(ids: string[]): Promise<Map<string, number>> {
   if (ids.length === 0) return new Map();
-  const { results } = await env.DB.prepare(
-    `SELECT role, count(*) AS uses FROM artist_credit WHERE role IN (SELECT value FROM json_each(?)) GROUP BY role`,
-  )
-    .bind(JSON.stringify(ids))
-    .all<{ role: string; uses: number }>();
-  return new Map(results.map((r) => [r.role, r.uses]));
+  const key = [...ids].sort().join(',');
+  const counted = await byDay(`role-uses:${await digest(key)}`, async () => {
+    const { results } = await env.DB.prepare(
+      `SELECT role, count(*) AS uses FROM artist_credit WHERE role IN (SELECT value FROM json_each(?)) GROUP BY role`,
+    )
+      .bind(JSON.stringify(ids))
+      .all<{ role: string; uses: number }>();
+    return results;
+  });
+  return new Map(counted.map((r) => [r.role, r.uses]));
+}
+
+/** A short stable name for a long key. */
+async function digest(text: string): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text));
+  return [...new Uint8Array(hash)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**

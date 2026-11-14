@@ -9,7 +9,7 @@ import { env } from 'cloudflare:workers';
 import { artistLines, releaseGroupsByIds, type CreditPart, type ReleaseGroupSummary } from './catalogue';
 import { genreEdges, genreIndex, membersOf, recordingsInGenres, subtreeOf, trackCountsByGenre } from './genres';
 import { albumScores } from './album-scores';
-import { byLibrary } from './library-cache';
+import { byDay, byLibrary } from './library-cache';
 import type { CreditRole } from './import/plan';
 
 export interface TrackDetail {
@@ -329,32 +329,56 @@ async function withImages<T extends { id: string }>(artists: T[]): Promise<(T & 
  * Albums in the library most like this one: shared genres (by weight),
  * and the same main artist counting for more. For "More like this".
  */
+interface AlbumProfiles {
+  /** album → genre → weight, as v_release_group_genre has them. */
+  genres: Record<string, Record<string, number>>;
+  /** album → its primary artists. */
+  artists: Record<string, string[]>;
+}
+
+/**
+ * Every album's genres and main artists, once a day. Joined per album page,
+ * v_release_group_genre was built whole each time: 14,000 rows a page.
+ */
+function albumProfiles(): Promise<AlbumProfiles> {
+  return byDay('album-profiles:v1', async () => {
+    const [genres, artists] = await env.DB.batch([
+      env.DB.prepare(`SELECT release_group_id AS id, genre_id AS g, weight AS w FROM v_release_group_genre`),
+      env.DB.prepare(`SELECT entity_id AS id, artist_id AS a FROM artist_credit WHERE entity_type = 'release_group' AND role = 'primary'`),
+    ]);
+    const profiles: AlbumProfiles = { genres: {}, artists: {} };
+    for (const r of genres!.results as { id: string; g: string; w: number }[]) (profiles.genres[r.id] ??= {})[r.g] = r.w;
+    for (const r of artists!.results as { id: string; a: string }[]) (profiles.artists[r.id] ??= []).push(r.a);
+    return profiles;
+  });
+}
+
+/**
+ * Albums most like this one, by the same rule as before: for each shared
+ * genre the smaller of the two weights, plus 1.5 for the same main artist.
+ * Pure, over the profiles.
+ */
+export function rankSimilar(id: string, profiles: AlbumProfiles, limit: number): string[] {
+  const mine = profiles.genres[id] ?? {};
+  const myArtists = new Set(profiles.artists[id] ?? []);
+  const scores = new Map<string, number>();
+  for (const [other, theirs] of Object.entries(profiles.genres)) {
+    if (other === id) continue;
+    let s = 0;
+    for (const [g, w] of Object.entries(theirs)) if (mine[g] !== undefined) s += Math.min(w, mine[g]!);
+    if (s > 0) scores.set(other, s);
+  }
+  for (const [other, artists] of Object.entries(profiles.artists)) {
+    if (other !== id && artists.some((a) => myArtists.has(a))) scores.set(other, (scores.get(other) ?? 0) + 1.5);
+  }
+  return [...scores]
+    .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0))
+    .slice(0, limit)
+    .map(([other]) => other);
+}
+
 export async function similarAlbums(id: string, viewerId: string | null, limit = 8): Promise<ReleaseGroupSummary[]> {
-  const { results } = await env.DB.prepare(
-    `WITH mine AS (SELECT genre_id, weight FROM v_release_group_genre WHERE release_group_id = ?1),
-     artists AS (SELECT artist_id FROM artist_credit WHERE entity_type = 'release_group' AND entity_id = ?1 AND role = 'primary'),
-     scored AS (
-       SELECT vg.release_group_id AS id, sum(min(vg.weight, m.weight)) AS genre_score
-       FROM v_release_group_genre vg JOIN mine m ON m.genre_id = vg.genre_id
-       WHERE vg.release_group_id <> ?1
-       GROUP BY vg.release_group_id
-       UNION ALL
-       SELECT c.entity_id, 0 FROM artist_credit c
-       WHERE c.entity_type = 'release_group' AND c.role = 'primary' AND c.entity_id <> ?1
-         AND c.artist_id IN (SELECT artist_id FROM artists)
-     )
-     SELECT s.id,
-            sum(s.genre_score) + 1.5 * EXISTS (
-              SELECT 1 FROM artist_credit c WHERE c.entity_type = 'release_group' AND c.entity_id = s.id
-                AND c.role = 'primary' AND c.artist_id IN (SELECT artist_id FROM artists)) AS score
-     FROM scored s
-     GROUP BY s.id
-     ORDER BY score DESC, s.id
-     LIMIT ?2`,
-  )
-    .bind(id, limit)
-    .all<{ id: string; score: number }>();
-  const ids = results.filter((r) => r.score > 0).map((r) => r.id);
+  const ids = rankSimilar(id, await albumProfiles(), limit);
   const byId = new Map((await releaseGroupsByIds(ids, viewerId)).map((a) => [a.id, a]));
   return ids.map((i) => byId.get(i)).filter((a): a is ReleaseGroupSummary => a !== undefined);
 }

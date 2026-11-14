@@ -111,6 +111,30 @@ export async function byLibrary<T>(name: string, userId: string | null, work: ()
 }
 
 /**
+ * A stamp that moves only with what scores depend on: a rating (append-only,
+ * so the highest rowid), the scores version (weights, track kinds, gut
+ * conversions bump it, 0051 and gut-calibration.ts), and a merge. Not with
+ * an import: an album just imported has no ratings, so no score. During a
+ * discography import the library stamp moved every few seconds and album
+ * scores, about 25,000 rows each time, were worked out 512 times in a day.
+ */
+function scoresStamp(): Promise<string> {
+  return perRequest('scores-stamp', async () => {
+    const row = await env.DB.prepare(
+      `SELECT (SELECT max(rowid) FROM rating) AS ratings,
+              (SELECT value FROM app_setting WHERE key = 'scores_version') AS version,
+              (SELECT max(rowid) FROM entity_redirect) AS merges`,
+    ).first<Record<string, string | number | null>>();
+    return Object.values(row ?? {}).join(':');
+  });
+}
+
+/** The value under name while scores stand (scoresStamp): album scores, rankings by score. */
+export async function byScores<T>(name: string, userId: string | null, work: () => Promise<T>): Promise<T> {
+  return keptOrWorkedOut(`scores:${BUILD}:${name}:${userId ?? '-'}:${await scoresStamp()}`, 7, work);
+}
+
+/**
  * The value under name for today (UTC), worked out at most once a day. For
  * readings that one import barely moves and that are dear to work out
  * (which artists are close to which: 90,000 rows for a big artist), where

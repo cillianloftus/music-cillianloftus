@@ -9,6 +9,7 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { byLibrary } from './library-cache';
 
 export interface Gap {
   id: string;
@@ -36,14 +37,28 @@ const RATED_FIRST = `g.id IN (SELECT entity_id FROM rating WHERE entity_type = '
                                   JOIN release rr ON rr.id = t.release_id
                                   WHERE x.entity_type = 'recording') DESC`;
 
+/** An album's artists, for the few rows shown (p.id), not every album counted. */
 const albumArtist = `(SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
-                      WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary')`;
+                      WHERE c.entity_type = 'release_group' AND c.entity_id = p.id AND c.role = 'primary')`;
 
-export async function missingInfo(): Promise<GapGroup[]> {
-  const page = (sql: string) => env.DB.prepare(`SELECT count(*) OVER () AS total, * FROM (${sql}) LIMIT ${SHOWN}`);
+/**
+ * Kept until the library changes: an edit that fills a gap moves the stamp.
+ * Worked out on every visit, the six lists read about 300,000 rows.
+ */
+export function missingInfo(): Promise<GapGroup[]> {
+  return byLibrary('missing-info', null, workOutMissingInfo);
+}
+
+async function workOutMissingInfo(): Promise<GapGroup[]> {
+  // The count over everything, the artist names only for the SHOWN rows.
+  const page = (sql: string, artists = true) =>
+    env.DB.prepare(
+      `SELECT p.*, ${artists ? albumArtist : 'NULL'} AS artist
+       FROM (SELECT count(*) OVER () AS total, * FROM (${sql}) LIMIT ${SHOWN}) p`,
+    );
   const [writers, dates, genres, spotify, births, kinds] = await env.DB.batch([
     page(
-      `SELECT g.id, g.title, ${albumArtist} AS artist, count(*) AS n, sum(count(*)) OVER () AS tracks
+      `SELECT g.id, g.title, count(*) AS n, sum(count(*)) OVER () AS tracks
        FROM release_group g
        JOIN v_release_group_canonical c ON c.release_group_id = g.id
        JOIN track t ON t.release_id = c.release_id
@@ -52,30 +67,32 @@ export async function missingInfo(): Promise<GapGroup[]> {
        ORDER BY ${RATED_FIRST}, n DESC, g.title`,
     ),
     page(
-      `SELECT g.id, g.title, ${albumArtist} AS artist FROM release_group g
+      `SELECT g.id, g.title FROM release_group g
        WHERE g.first_release_date IS NULL AND g.status = 'released'
        ORDER BY ${RATED_FIRST}, g.title`,
     ),
     page(
-      `SELECT g.id, g.title, ${albumArtist} AS artist FROM release_group g
+      `SELECT g.id, g.title FROM release_group g
        WHERE NOT EXISTS (SELECT 1 FROM genre_tag t WHERE t.entity_type = 'release_group' AND t.entity_id = g.id)
        ORDER BY ${RATED_FIRST}, g.title`,
     ),
     page(
-      `SELECT g.id, g.title, ${albumArtist} AS artist FROM release_group g
+      `SELECT g.id, g.title FROM release_group g
        WHERE g.spotify_id IS NULL AND g.status = 'released' AND coalesce(g.availability, '') <> 'unreleased'
        ORDER BY ${RATED_FIRST}, g.title`,
     ),
     page(
-      `SELECT a.id, a.name AS title, NULL AS artist FROM artist a
+      `SELECT a.id, a.name AS title FROM artist a
        WHERE a.kind = 'person' AND a.begin_date IS NULL
        ORDER BY (SELECT count(*) FROM artist_credit c WHERE c.artist_id = a.id AND c.role = 'primary') DESC, a.sort_name`,
+      false,
     ),
     page(
-      `SELECT a.id, a.name AS title, NULL AS artist FROM artist a
+      `SELECT a.id, a.name AS title FROM artist a
        WHERE a.kind IS NULL
          AND EXISTS (SELECT 1 FROM artist_credit c WHERE c.artist_id = a.id AND c.role = 'primary')
        ORDER BY (SELECT count(*) FROM artist_credit c WHERE c.artist_id = a.id AND c.role = 'primary') DESC, a.sort_name`,
+      false,
     ),
   ]);
 

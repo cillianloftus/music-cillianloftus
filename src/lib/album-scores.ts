@@ -9,7 +9,7 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { byLibrary } from './library-cache';
+import { byScores } from './library-cache';
 import { rankAnchor } from './rank-anchor';
 
 export interface ScoredAlbum {
@@ -44,7 +44,8 @@ export function rankScore(score: number, rated: number, tracks: number | null, a
 export async function albumScores(userId: string | null): Promise<AlbumScores> {
   if (!userId) return {};
   // (Not 'album-scores': standing.ts keeps its own list under that name.)
-  return byLibrary('album-score-map:v4', userId, async () => {
+  // By the scores stamp, not the library's: an import changes no score.
+  return byScores('album-score-map:v4', userId, async () => {
     const { results } = await env.DB.prepare(
       `SELECT s.release_group_id AS id, s.quality_score AS quality, s.personal_score AS personal,
               s.rated_track_count AS rated, s.track_count AS tracks, g.type, g.first_release_date AS released

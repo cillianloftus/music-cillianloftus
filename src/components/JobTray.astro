@@ -81,6 +81,7 @@
           if (jobs.length <= MAX_CARDS) this.fresh.add(id);
         }
         this.announce(jobs.length === 1 ? `Importing ${jobs[0]!.label}.` : `Importing ${jobs.length} releases.`);
+        this.wait = 1500;
         // Many events in a row (a page that sends one per job) still cost one render.
         this.update();
       });
@@ -152,10 +153,29 @@
       if (live) live.textContent = text;
     }
 
+    /**
+     * How long until the next look: 1.5 s while things are moving, half as
+     * fast again after each look that found nothing new, up to 20 s. A long
+     * queue polled every 1.5 s was 6,600 looks a day, most finding nothing.
+     */
+    wait = 1500;
+    watchingVisibility = false;
+
     poll() {
       window.clearTimeout(this.timer);
       const pending = this.items.filter((i) => i.status === 'queued' || i.status === 'running');
       if (pending.length === 0) return;
+      // Not while the page is out of sight: it looks again when it comes back.
+      if (!this.watchingVisibility) {
+        this.watchingVisibility = true;
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') {
+            this.wait = 1500;
+            this.poll();
+          }
+        });
+      }
+      if (document.visibilityState === 'hidden') return;
       this.timer = window.setTimeout(async () => {
         try {
           // The queue runs oldest first, so the oldest hundred are where news will be.
@@ -175,9 +195,11 @@
           }
           const byId = new Map(this.items.map((i) => [i.id, i]));
           let finished = 0;
+          let changed = false;
           for (const job of jobs) {
             const item = byId.get(job.id);
             if (!item || item.status === job.status) continue;
+            changed = true;
             item.status = job.status;
             item.error = job.error;
             item.albumId = job.album_id;
@@ -193,13 +215,15 @@
             }
           }
           if (finished) this.setDone(this.doneCount() + finished);
+          this.wait = changed ? 1500 : Math.min(20_000, this.wait * 1.5);
           this.save();
           this.render();
         } catch {
           /* Offline for a moment: try again on the next tick. */
+          this.wait = Math.min(20_000, this.wait * 1.5);
         }
         this.poll();
-      }, 1500);
+      }, this.wait);
     }
 
     dismiss(id: string) {

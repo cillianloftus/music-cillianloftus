@@ -190,6 +190,8 @@ export async function fillMoreFromMusicBrainz(
     if (precise.length > 0) {
       report.credits = precise.length;
       const notEdited = `NOT EXISTS (SELECT 1 FROM field_override o WHERE o.entity_type = 'recording' AND o.entity_id = j.value ->> '$.recording' AND o.field = 'credits')`;
+      // Recording, artist and role where the coarse role is itself one of their precise parts.
+      const keepCoarse = new Set(coarseKept(recordings, release.relations ?? [], idFor).map((k) => `${k.recording}|${k.artist}|${k.precise}`));
       statements.push(
         // New roles, as the import adds them.
         db
@@ -233,12 +235,12 @@ export async function fillMoreFromMusicBrainz(
                              AND p.artist_id = a.id AND p.role <> c.role
                              -- The precise role by id or by name: two seeks, where an OR of them read every role.
                              AND (p.role = j.value ->> '$.role'
-                                  OR p.role = (SELECT r.id FROM credit_role r WHERE r.label = j.value ->> '$.label' COLLATE NOCASE)))
-                 AND NOT EXISTS (SELECT 1 FROM json_each(?2) k
-                                 WHERE k.value ->> '$.recording' = c.entity_id AND k.value ->> '$.artist' = j.value ->> '$.artist'
-                                   AND k.value ->> '$.precise' = c.role))`,
+                                  OR p.role = (SELECT r.id FROM credit_role r WHERE r.label = j.value ->> '$.label' COLLATE NOCASE))))`,
           )
-          .bind(JSON.stringify(precise), JSON.stringify(coarseKept(recordings, release.relations ?? [], idFor))),
+          // Not where the coarse role is itself one of their parts on the track:
+          // left out here, where a correlated scan of that list for every credit
+          // read about 11,000 rows an album.
+          .bind(JSON.stringify(precise.filter((p) => !keepCoarse.has(`${p.recording}|${p.artist}|${p.coarse}`)))),
       );
     }
     if (tags.length > 0) {

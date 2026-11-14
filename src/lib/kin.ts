@@ -41,30 +41,44 @@ export async function kinOf(artistId: string, limit = 6): Promise<Kin[]> {
  * with this one (anyone sharing neither scores nothing). Reading every
  * artist's genres and every collaboration was 150,000 rows per artist.
  */
-async function findKin(artistId: string, limit: number): Promise<Kin[]> {
-  // Each artist's genres, by how many of their releases carry each.
-  const VECTOR = `SELECT c.artist_id, g.id AS genre_id, g.name, count(*) AS n
+interface GenreVectors {
+  /** artist → genre → how many of their releases carry it. */
+  vectors: Record<string, Record<string, number>>;
+  names: Record<string, string>;
+}
+
+/**
+ * Every artist's genres, by how many of their releases carry each: one pass
+ * a day for all artists. Worked out per artist (everyone sharing a genre,
+ * with their whole profile) it was 186,000 rows for each artist page.
+ */
+function genreVectors(): Promise<GenreVectors> {
+  return byDay('artist-genre-vectors:v1', async () => {
+    const { results } = await env.DB.prepare(
+      `SELECT c.artist_id, gt.genre_id, count(*) AS n
        FROM artist_credit c
        JOIN genre_tag gt ON gt.entity_type = 'release_group' AND gt.entity_id = c.entity_id
-       JOIN genre g ON g.id = gt.genre_id
-       WHERE c.entity_type = 'release_group' AND c.role = 'primary'`;
+       WHERE c.entity_type = 'release_group' AND c.role = 'primary'
+       GROUP BY c.artist_id, gt.genre_id`,
+    ).all<{ artist_id: string; genre_id: string; n: number }>();
+    const vectors: GenreVectors['vectors'] = {};
+    for (const r of results) (vectors[r.artist_id] ??= {})[r.genre_id] = r.n;
+    const ids = [...new Set(results.map((r) => r.genre_id))];
+    const names = Object.fromEntries(
+      (await env.DB.prepare(`SELECT id, name FROM genre WHERE id IN (SELECT value FROM json_each(?1))`).bind(JSON.stringify(ids)).all<{ id: string; name: string }>()).results.map(
+        (g) => [g.id, g.name],
+      ),
+    );
+    return { vectors, names };
+  });
+}
+
+async function findKin(artistId: string, limit: number): Promise<Kin[]> {
   // Who works on this artist's recordings, other than the artist.
   const MY_PEOPLE = `SELECT DISTINCT o.artist_id FROM artist_credit p
        JOIN artist_credit o ON o.entity_type = 'recording' AND o.entity_id = p.entity_id AND o.artist_id <> p.artist_id
        WHERE p.artist_id = ?1 AND p.entity_type = 'recording' AND p.role = 'primary'`;
-  const [genres, myPeopleRows, sharing, workedFor] = await env.DB.batch([
-    // Every artist with a genre in common, with their whole genre count.
-    env.DB.prepare(
-      `${VECTOR}
-         AND c.artist_id IN (
-           SELECT c2.artist_id FROM genre_tag gt2
-           JOIN artist_credit c2 ON c2.entity_type = 'release_group' AND c2.entity_id = gt2.entity_id AND c2.role = 'primary'
-           WHERE gt2.entity_type = 'release_group'
-             AND gt2.genre_id IN (SELECT gt3.genre_id FROM artist_credit c3
-                                  JOIN genre_tag gt3 ON gt3.entity_type = 'release_group' AND gt3.entity_id = c3.entity_id
-                                  WHERE c3.artist_id = ?1 AND c3.entity_type = 'release_group' AND c3.role = 'primary'))
-       GROUP BY c.artist_id, g.id`,
-    ).bind(artistId),
+  const [all, [myPeopleRows, sharing, workedFor]] = await Promise.all([genreVectors(), env.DB.batch([
     env.DB.prepare(MY_PEOPLE).bind(artistId),
     // Other artists whose recordings have someone from this artist's circle.
     env.DB.prepare(
@@ -80,14 +94,13 @@ async function findKin(artistId: string, limit: number): Promise<Kin[]> {
        JOIN artist_credit p ON p.entity_type = 'recording' AND p.entity_id = o.entity_id AND p.role = 'primary' AND p.artist_id <> o.artist_id
        WHERE o.artist_id = ?1 AND o.entity_type = 'recording'`,
     ).bind(artistId),
-  ]);
-  const genreName = new Map<string, string>();
+  ])]);
+  const genreName = new Map(Object.entries(all.names));
+  // Only artists sharing a genre with this one can score on genres.
+  const myGenres = new Set(Object.keys(all.vectors[artistId] ?? {}));
   const vectors = new Map<string, Map<string, number>>();
-  for (const r of genres!.results as { artist_id: string; genre_id: string; name: string; n: number }[]) {
-    genreName.set(r.genre_id, r.name);
-    const v = vectors.get(r.artist_id) ?? new Map<string, number>();
-    v.set(r.genre_id, r.n);
-    vectors.set(r.artist_id, v);
+  for (const [artist, v] of Object.entries(all.vectors)) {
+    if (artist === artistId || Object.keys(v).some((g) => myGenres.has(g))) vectors.set(artist, new Map(Object.entries(v)));
   }
   const myPeople = new Set((myPeopleRows!.results as { artist_id: string }[]).map((r) => r.artist_id));
   const personName = new Map<string, string>();
