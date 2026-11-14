@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { DiscographyError, KINDS, queueDiscography, queueSpotifyDiscography, resolveArtist, type Kind } from '../../../../lib/import/discography';
-import { runJobs } from '../../../../lib/jobs/runner';
+import { kickJobs } from '../../../../lib/jobs/runner';
 
 /**
  * Queues an artist's discography. With fetch (the import and artist pages)
@@ -28,7 +28,7 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
     } else {
       result = await queueDiscography(artist.id, kinds);
     }
-    if (result.queued.length) locals.cfContext.waitUntil(runJobs({ budgetMs: 25_000 }));
+    if (result.queued.length) kickJobs(locals.cfContext);
     if (json) return Response.json({ artist, ...result }, { status: 202 });
     return redirect('/manage/jobs', 303);
   } catch (error) {

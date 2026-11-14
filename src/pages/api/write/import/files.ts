@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { describeIssues } from '../../../../lib/query/schema';
 import { filesPayload, importFiles } from '../../../../lib/import/files';
-import { runJobs } from '../../../../lib/jobs/runner';
+import { kickJobs } from '../../../../lib/jobs/runner';
 
 /**
  * Adds albums from local audio tags. JSON in (tags, paths and checksums,
@@ -22,7 +22,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
   try {
     const albums = await importFiles(parsed.data);
     // Albums tagged by MusicBrainz were queued; start on them now.
-    if (albums.some((a) => a.status === 'queued')) locals.cfContext.waitUntil(runJobs({ budgetMs: 25_000 }));
+    if (albums.some((a) => a.status === 'queued')) kickJobs(locals.cfContext);
     return Response.json({ albums });
   } catch (error) {
     console.error('Import from files failed', error);

@@ -191,22 +191,73 @@ export function isSubrequestLimit(error: unknown): boolean {
 export async function runJobs({ budgetMs }: { budgetMs: number }): Promise<number> {
   const deadline = Date.now() + budgetMs;
   let processed = 0;
-  let refusals = 0;
+  // One run at a time across every Worker: see lease().
+  const token = crypto.randomUUID();
+  if (!(await lease(token, STALL_MS + 15_000))) return 0;
 
+  try {
+    processed = await work(deadline, token);
+  } finally {
+    await release(token).catch(() => {});
+  }
+  await settleIfIdle().catch((error) => console.warn('Settling after imports failed', error));
+  return processed;
+}
+
+/**
+ * The runner's lease, in app_setting as "<until>|<token>". Two runs at once
+ * (the cron's next minute while the last still ran, a run started by a page
+ * beside it) each kept MusicBrainz's one request a second on their own, and
+ * together went faster: 503s, and imports to the back of the queue. Taken
+ * only when free or expired; renewed before each job, for as long as it may
+ * take; given up at the end.
+ */
+async function lease(token: string, forMs: number): Promise<boolean> {
+  const now = new Date().toISOString();
+  const value = `${new Date(Date.now() + forMs).toISOString()}|${token}`;
+  const result = await env.DB.prepare(
+    `INSERT INTO app_setting (key, value) VALUES ('jobs_lease', ?1)
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value
+     WHERE app_setting.value < ?2 OR app_setting.value LIKE '%|' || ?3`,
+  )
+    .bind(value, now, token)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/**
+ * A run started by a page (an import queued, a status poll): only when no
+ * run holds the lease, and only starting jobs in its first 10 s, so it ends
+ * inside the 30 s a page's background work is given. A 25 s budget started
+ * jobs at 24 s that were cut off mid-way. The cron does the bulk.
+ */
+export function kickJobs(ctx: { waitUntil(promise: Promise<unknown>): void }): void {
+  ctx.waitUntil(runJobs({ budgetMs: 10_000 }).catch((error) => console.warn('Job run from a page failed', error)));
+}
+
+async function release(token: string): Promise<void> {
+  await env.DB.prepare(`UPDATE app_setting SET value = '' WHERE key = 'jobs_lease' AND value LIKE '%|' || ?1`).bind(token).run();
+}
+
+async function work(deadline: number, token: string): Promise<number> {
+  let processed = 0;
+  let refusals = 0;
   while (Date.now() < deadline) {
     const job = await claimNext();
     if (!job) break;
+    // Held for as long as this job may run before it counts as stalled.
+    await lease(token, STALL_MS * Math.max(1, job.attempts) + 15_000);
 
     const handler = handlers[job.kind];
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       if (!handler) throw new Error(`No handler for job kind "${job.kind}" yet.`);
-      const work = handler(job);
+      const running = handler(job);
       // Left running if it stalls: imports are idempotent, and one that
       // finishes late still marks itself done.
-      work.catch((error) => console.warn(`Job ${job.id} ended after it was moved on from`, error));
+      running.catch((error) => console.warn(`Job ${job.id} ended after it was moved on from`, error));
       const outcome = await Promise.race([
-        work,
+        running,
         new Promise<typeof STALLED>((resolve) => (timer = setTimeout(() => resolve(STALLED), STALL_MS * Math.max(1, job.attempts)))),
       ]);
       if (outcome === STALLED) {
@@ -241,7 +292,5 @@ export async function runJobs({ budgetMs }: { budgetMs: number }): Promise<numbe
     }
     processed++;
   }
-
-  await settleIfIdle().catch((error) => console.warn('Settling after imports failed', error));
   return processed;
 }

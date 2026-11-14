@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { enqueue } from '../../../lib/jobs/queue';
-import { runJobs } from '../../../lib/jobs/runner';
+import { kickJobs } from '../../../lib/jobs/runner';
 import { parseMbInput } from '../../../lib/musicbrainz/input';
 import { parseSpotifyInput } from '../../../lib/spotify/album';
 
@@ -26,7 +26,7 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
     if (wantsJson) return Response.json({ error: 'That is not a MusicBrainz or Spotify album link.' }, { status: 422 });
     return redirect(`/manage/import?error=unrecognised&source=${encodeURIComponent(input)}`, 303);
   }
-  locals.cfContext.waitUntil(runJobs({ budgetMs: 25_000 }));
+  kickJobs(locals.cfContext);
 
   if (wantsJson) return Response.json({ jobId, label: target ? 'MusicBrainz release' : 'Spotify album' }, { status: 202 });
   return redirect('/manage/jobs', 303);

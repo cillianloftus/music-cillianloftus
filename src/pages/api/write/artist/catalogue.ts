@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { runJobs } from '../../../../lib/jobs/runner';
+import { kickJobs } from '../../../../lib/jobs/runner';
 import { refreshArtist } from '../../../../lib/refresh';
 
 /**
@@ -10,7 +10,7 @@ import { refreshArtist } from '../../../../lib/refresh';
 export const POST: APIRoute = async ({ request, redirect, locals }) => {
   const id = (await request.formData()).get('id')?.toString() ?? '';
   const albums = await refreshArtist(id);
-  if (albums.length) locals.cfContext.waitUntil(runJobs({ budgetMs: 25_000 }));
+  if (albums.length) kickJobs(locals.cfContext);
   if (request.headers.get('accept')?.includes('application/json')) {
     return Response.json({ albums: albums.map((a) => ({ title: a.title, jobs: a.jobs })) }, { status: 202 });
   }

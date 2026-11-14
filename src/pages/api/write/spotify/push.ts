@@ -2,7 +2,7 @@ import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { getDefinition } from '../../../../lib/definitions';
 import { enqueue } from '../../../../lib/jobs/queue';
-import { runJobs } from '../../../../lib/jobs/runner';
+import { kickJobs } from '../../../../lib/jobs/runner';
 import { isSmallJpeg } from '../../../../lib/spotify/push';
 
 /** Queues a push of a saved playlist to Spotify. Owner only. */
@@ -25,7 +25,7 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
   }
 
   await enqueue('spotify_push', { definitionId: saved.id });
-  locals.cfContext.waitUntil(runJobs({ budgetMs: 25_000 }));
+  kickJobs(locals.cfContext);
   return redirect(`/playlist/${saved.id}#spotify`, 303);
 };
 

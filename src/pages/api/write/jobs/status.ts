@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
-import { runJobs } from '../../../../lib/jobs/runner';
+import { kickJobs } from '../../../../lib/jobs/runner';
 
 /**
  * Where some jobs have got to, for the import tray: status, the error if
@@ -35,7 +35,7 @@ async function answer(all: string[], locals: App.Locals): Promise<Response> {
     const running = await env.DB.prepare(
       `SELECT 1 AS yes FROM job WHERE status = 'running' AND started_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 minutes')`,
     ).first();
-    if (!running) locals.cfContext.waitUntil(runJobs({ budgetMs: 25_000 }));
+    if (!running) kickJobs(locals.cfContext);
   }
   return Response.json({ jobs: results, paused }, { headers: { 'cache-control': 'no-store' } });
 }

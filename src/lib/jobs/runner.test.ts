@@ -83,6 +83,20 @@ describe('running out of requests', () => {
     expect(row).toEqual({ status: 'done', attempts: 2 });
   });
 
+  it('runs one at a time: a run finding the lease held does nothing, one finding it expired runs', async () => {
+    await enqueue('backup', {});
+    const until = (ms: number) => `${new Date(Date.now() + ms).toISOString()}|another-run`;
+    db.prepare(`INSERT INTO app_setting (key, value) VALUES ('jobs_lease', ?)`).run(until(60_000));
+    outcomes.push('ok');
+    expect(await runJobs({ budgetMs: 10_000 })).toBe(0);
+    expect(statuses()).toEqual(['queued']);
+    // The other run died without giving it up: once expired, the lease is free.
+    db.prepare(`UPDATE app_setting SET value = ? WHERE key = 'jobs_lease'`).run(until(-1_000));
+    expect(await runJobs({ budgetMs: 10_000 })).toBe(1);
+    // Given up at the end, so the next run need not wait.
+    expect(db.prepare(`SELECT value FROM app_setting WHERE key = 'jobs_lease'`).get()).toEqual({ value: '' });
+  });
+
   it('stops the run when MusicBrainz refuses three in a row: it is down', async () => {
     for (let i = 0; i < 4; i++) await enqueue('backup', {});
     outcomes.push('throttled', 'throttled', 'throttled');
