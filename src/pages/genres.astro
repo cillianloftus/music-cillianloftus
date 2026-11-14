@@ -45,14 +45,19 @@ const n = (x: number) => x.toLocaleString('en-GB');
               {tree.map((node) =>
                 node.children.length > 0 ? (
                   <li data-name={node.name}>
-                    <details>
-                      <summary>
-                        <a class="name" href={`/genre/${node.id}`}>{node.name}</a>
-                        <span class="count">{n(node.total)}</span>
+                    {/* The name is a link and the chevron a button beside it: a
+                        link inside a <summary> was one control inside another. */}
+                    <div class="row">
+                      <a class="name" href={`/genre/${node.id}`}>{node.name}</a>
+                      <span class="count">{n(node.total)}</span>
+                      <button type="button" class="toggle" aria-expanded="true" aria-controls={`sub-${node.id}`} data-toggle hidden>
+                        <span class="visually-hidden">Genres within {node.name}</span>
                         <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
-                      </summary>
+                      </button>
+                    </div>
+                    <div class="sub" id={`sub-${node.id}`}>
                       <GenreList nodes={node.children} />
-                    </details>
+                    </div>
                   </li>
                 ) : (
                   <li data-name={node.name} class="single">
@@ -75,6 +80,18 @@ const n = (x: number) => x.toLocaleString('en-GB');
   const box = document.querySelector<HTMLInputElement>('[data-genre-filter]');
   const tree = document.querySelector<HTMLElement>('[data-genre-tree]');
   const none = document.querySelector<HTMLElement>('[data-genre-none]');
+  // A family's genres fold away behind its chevron; without this script they stay open.
+  const setOpen = (button: HTMLButtonElement, open: boolean) => {
+    button.setAttribute('aria-expanded', String(open));
+    const sub = document.getElementById(button.getAttribute('aria-controls')!);
+    if (sub) sub.hidden = !open;
+  };
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-toggle]')) {
+    button.hidden = false;
+    setOpen(button, false);
+    button.addEventListener('click', () => setOpen(button, button.getAttribute('aria-expanded') !== 'true'));
+  }
+
   if (box && tree && none) {
     const items = [...tree.querySelectorAll<HTMLLIElement>('li[data-name]')].reverse();
     box.addEventListener('input', () => {
@@ -82,10 +99,10 @@ const n = (x: number) => x.toLocaleString('en-GB');
       // Deepest first, so a parent knows whether anything beneath it matched.
       for (const li of items) {
         const self = !q || li.dataset.name!.toLowerCase().includes(q);
-        const below = q !== '' && [...li.querySelectorAll<HTMLLIElement>(':scope > ul > li, :scope > details > ul > li')].some((c) => !c.hidden);
+        const below = q !== '' && [...li.querySelectorAll<HTMLLIElement>(':scope > ul > li, :scope > .sub > ul > li')].some((c) => !c.hidden);
         li.hidden = !(self || below);
-        const details = li.querySelector<HTMLDetailsElement>(':scope > details');
-        if (details) details.open = below;
+        const toggle = li.querySelector<HTMLButtonElement>(':scope > .row [data-toggle]');
+        if (toggle) setOpen(toggle, below);
       }
       none.hidden = !q || items.some((li) => !li.hidden);
     });
@@ -137,7 +154,7 @@ const n = (x: number) => x.toLocaleString('en-GB');
     border-bottom: 1px solid var(--border);
   }
 
-  summary,
+  .row,
   .single {
     display: flex;
     align-items: center;
@@ -145,23 +162,47 @@ const n = (x: number) => x.toLocaleString('en-GB');
     min-height: var(--target);
   }
 
-  summary {
-    cursor: pointer;
-    list-style: none;
+  .name {
+    font-weight: 650;
   }
 
-  summary::-webkit-details-marker {
+  /* In a family's row the count sits on the name's line: the caption rule
+     above gave it a bottom margin, which lifted it. */
+  .row .count,
+  .single .count {
+    display: inline;
+    margin-bottom: 0;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  /* The chevron's button: the row's height, at the end of it. */
+  .toggle {
+    display: grid;
+    place-items: center;
+    min-width: var(--target);
+    min-height: var(--target);
+    margin-left: auto;
+    margin-right: calc(var(--space-2) * -1);
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-s);
+    background: none;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .toggle[hidden] {
     display: none;
   }
 
-  .name {
-    font-weight: 650;
+  .toggle:hover {
+    background: var(--surface-2);
   }
 
   .chevron {
     width: 1.1rem;
     height: 1.1rem;
-    margin-left: auto;
     fill: none;
     stroke: var(--text-muted);
     stroke-width: 2;
@@ -170,11 +211,17 @@ const n = (x: number) => x.toLocaleString('en-GB');
     transition: transform 0.15s ease;
   }
 
-  details[open] .chevron {
+  .toggle[aria-expanded='true'] .chevron {
     transform: rotate(90deg);
   }
 
-  details > :global(ul) {
+  .sub > :global(ul) {
     margin: 0 0 var(--space-3) var(--space-2);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chevron {
+      transition: none;
+    }
   }
 </style>

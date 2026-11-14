@@ -15,12 +15,13 @@ const marks: Record<string, { bg: string; fg: string; text: string }> = {
   discogs: { bg: '#333', fg: '#fff', text: 'D' },
   lastfm: { bg: '#d51007', fg: '#fff', text: 'fm' },
   instagram: { bg: '#c13584', fg: '#fff', text: 'IG' },
-  youtube: { bg: '#ff0033', fg: '#fff', text: '▶' },
+  // Each pair at least 4.5:1: white on SoundCloud's orange was 3.2.
+  youtube: { bg: '#d6002b', fg: '#fff', text: '▶' },
   x: { bg: '#111', fg: '#fff', text: 'X' },
-  bandcamp: { bg: '#1da0c3', fg: '#fff', text: 'B' },
-  soundcloud: { bg: '#ff5500', fg: '#fff', text: 'SC' },
+  bandcamp: { bg: '#1da0c3', fg: '#04161c', text: 'B' },
+  soundcloud: { bg: '#ff5500', fg: '#1a0a00', text: 'SC' },
   tiktok: { bg: '#111', fg: '#fff', text: 'TT' },
-  facebook: { bg: '#1877f2', fg: '#fff', text: 'f' },
+  facebook: { bg: '#0f63d6', fg: '#fff', text: 'f' },
   website: { bg: 'var(--surface-2)', fg: 'var(--text)', text: '' },
 };
 const m = marks[name] ?? { bg: 'var(--surface-2)', fg: 'var(--text)', text: name.slice(0, 1).toUpperCase() };

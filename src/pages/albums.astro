@@ -68,7 +68,7 @@ const heading = KINDS.find(([k]) => k === kind)![1];
           <CardGrid data-shelf-grid>
             {shown.map((album) => (
               <li>
-                <AlbumCard album={album} />
+                <AlbumCard album={album} level={2} />
               </li>
             ))}
           </CardGrid>

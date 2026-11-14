@@ -46,7 +46,12 @@ const summary = `${albumTitle}, track by track: ${shape.thirds.map((t, i) => `${
 
 <figure class="shape">
   {shape.words && <figcaption>{shape.words}</figcaption>}
-  <svg viewBox={`0 0 ${W} ${H + (highlight ? 11 : 2)}`} width={W} role="img" aria-label={summary}>
+  {/* The drawing is for the eye and the mouse (each bar opens its track; the
+      track list does that for the keyboard): hidden from assistive tech,
+      which gets the summary in words. As role="img" it held links, which
+      screen readers could still reach. */}
+  <p class="visually-hidden">{summary}</p>
+  <svg viewBox={`0 0 ${W} ${H + (highlight ? 11 : 2)}`} width={W} aria-hidden="true" focusable="false">
     {
       tracks.map((t, i) => (
         <a href={`/track/${t.id}`} tabindex="-1" class:list={['track', { picked: t.id === highlight, faded: highlight && t.id !== highlight }]}>
