@@ -312,7 +312,7 @@ import { splitVersion } from '../../lib/versions';
                   </button>
                 )}
                 {artist.mbid && (
-                  <a href={`/manage/import?${new URLSearchParams({ artist: `https://musicbrainz.org/artist/${artist.mbid}` })}#disco-heading`}>
+                  <a href={`/manage/import?${new URLSearchParams({ artist: `https://musicbrainz.org/artist/${artist.mbid}` })}`}>
                     Import their discography
                   </a>
                 )}

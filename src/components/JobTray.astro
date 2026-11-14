@@ -46,13 +46,22 @@
     timer: number | undefined;
 
     connectedCallback() {
-      // The page keeps clear of the tray, so whatever sits at its foot (the
-      // text-size slider on Manage, say) can still be scrolled into reach.
+      // The page keeps clear of the tray. Wide screens: at its foot, so what
+      // sits there (the text-size slider on Manage, say) can still be scrolled
+      // into reach. Phones, where the tray is in the top corner: at its head,
+      // so nothing at the top of a page (an artist's Manage button, with no
+      // picture above it) is ever under it. Only the folded tray is made room
+      // for; the list opened with Show all lies over the page.
       const tray = this.querySelector<HTMLElement>('.tray')!;
-      new ResizeObserver(() => {
-        const space = tray.hidden ? 0 : tray.offsetHeight;
-        document.documentElement.style.setProperty('--tray-clearance', `${space}px`);
-      }).observe(tray);
+      const summary = this.querySelector<HTMLElement>('[data-summary]')!;
+      const root = document.documentElement.style;
+      this.measure = () => {
+        const shown = !tray.hidden && this.items.length > 0;
+        root.setProperty('--tray-clearance', `${shown && !PHONE.matches ? tray.offsetHeight : 0}px`);
+        const folded = this.expanded && !summary.hidden ? summary : tray;
+        root.setProperty('--tray-top-clearance', `${shown && PHONE.matches ? Math.ceil(folded.getBoundingClientRect().bottom) : 0}px`);
+      };
+      new ResizeObserver(() => this.measure()).observe(tray);
       try {
         this.items = JSON.parse(sessionStorage.getItem(KEY) ?? '[]') as Item[];
       } catch {
@@ -80,7 +89,10 @@
         this.render();
       });
       // Turning a tablet, or a window crossing the phone width, regroups the cards.
-      PHONE.addEventListener('change', () => this.render());
+      PHONE.addEventListener('change', () => {
+        this.render();
+        this.measure();
+      });
       this.render();
       this.poll();
     }
@@ -92,6 +104,8 @@
 
     expanded = false;
     paused = false;
+    /** Sets how much room the page leaves the tray (connectedCallback). */
+    measure: () => void = () => {};
     frame = 0;
 
     /** Saves, draws and polls once per frame, however many changes asked for it. */

@@ -251,7 +251,9 @@
     const offer = () => {
       const a = document.createElement('a');
       a.className = 'import-offer';
-      a.href = `/manage/import?${new URLSearchParams({ artist: found.q })}#disco-heading`;
+      // No #disco-heading: scrolled there, Import all sat at the top of a
+      // phone, out of a thumb's reach; unscrolled it is mid-screen.
+      a.href = `/manage/import?${new URLSearchParams({ artist: found.q })}`;
       a.textContent = `Import “${found.q}” from MusicBrainz →`;
       return a;
     };
