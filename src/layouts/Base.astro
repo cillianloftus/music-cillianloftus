@@ -151,22 +151,9 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     position: relative;
     isolation: isolate;
     padding-block: var(--space-5) var(--space-7);
-    /* Room for the job tray while it shows (set by JobTray): at the foot on
-       wide screens; at the head on phones, where it sits in the top corner. */
+    /* Room to scroll the end of the page out from under the job tray while
+       it shows (set by JobTray); nothing above it moves. */
     margin-bottom: var(--tray-clearance, 0px);
-  }
-
-  @media (max-width: 39.99rem) {
-    main {
-      padding-top: max(var(--space-5), calc(var(--tray-top-clearance, 0px) + var(--space-3)));
-      transition: padding-top 0.2s ease;
-    }
-  }
-
-  @media (max-width: 39.99rem) and (prefers-reduced-motion: reduce) {
-    main {
-      transition: none;
-    }
   }
 
   main:focus {

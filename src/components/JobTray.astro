@@ -87,22 +87,30 @@
     timer: number | undefined;
 
     connectedCallback() {
-      // The page keeps clear of the tray. Wide screens: at its foot, so what
-      // sits there (the text-size slider on Manage, say) can still be scrolled
-      // into reach. Phones, where the tray is in the top corner: at its head,
-      // so nothing at the top of a page (an artist's Manage button, with no
-      // picture above it) is ever under it. Only the folded tray is made room
-      // for; the list opened with Show all lies over the page.
+      // The tray floats over the foot of the page, and the page gets that much
+      // more room to scroll at its end, as for the mini player: nothing on
+      // the page is pushed down or left under it. On phones it sits just
+      // above the tab bar, and above the mini player while that shows. (In
+      // the top corner it pushed every page down, 14 Nov.) Only the folded
+      // tray is made room for; the list opened with Show all lies over the page.
       const tray = this.querySelector<HTMLElement>('.tray')!;
       const summary = this.querySelector<HTMLElement>('[data-summary]')!;
       const root = document.documentElement.style;
       this.measure = () => {
-        const shown = !tray.hidden && this.items.length > 0;
-        root.setProperty('--tray-clearance', `${shown && !PHONE.matches ? tray.offsetHeight : 0}px`);
+        const player = document.querySelector<HTMLElement>('now-bar');
+        const playerTop = PHONE.matches && player && !player.hidden && player.offsetHeight ? player.getBoundingClientRect().top : null;
+        tray.style.bottom = playerTop === null ? '' : `${Math.ceil(window.innerHeight - playerTop) + 6}px`;
         const folded = this.expanded && !summary.hidden ? summary : tray;
-        root.setProperty('--tray-top-clearance', `${shown && PHONE.matches ? Math.ceil(folded.getBoundingClientRect().bottom) : 0}px`);
+        root.setProperty('--tray-clearance', `${tray.hidden ? 0 : Math.ceil(folded.offsetHeight) + 8}px`);
       };
-      new ResizeObserver(() => this.measure()).observe(tray);
+      const watch = new ResizeObserver(() => this.measure());
+      watch.observe(tray);
+      // The mini player coming and going (it is drawn after the tray).
+      requestAnimationFrame(() => {
+        const player = document.querySelector('now-bar');
+        if (player) watch.observe(player);
+      });
+      window.addEventListener('resize', () => this.measure());
       try {
         this.items = JSON.parse(sessionStorage.getItem(KEY) ?? '[]') as Item[];
       } catch {
@@ -156,6 +164,8 @@
     /** Cards are folded into the summary (a phone, more than a few, or a queue bigger than this visit's). */
     grouped() {
       if (this.queueBusy()) return true;
+      // Hidden with the ×: only failures, each on its own card.
+      if (this.quiet) return false;
       return PHONE.matches ? this.items.length > 0 : this.items.length > MAX_CARDS;
     }
 
@@ -353,7 +363,8 @@
     render() {
       const tray = this.querySelector<HTMLElement>('.tray')!;
       const list = this.querySelector<HTMLElement>('.list')!;
-      tray.hidden = this.items.length === 0 && !this.queueBusy();
+      const failures = this.items.filter((i) => i.status === 'failed');
+      tray.hidden = this.quiet ? failures.length === 0 : this.items.length === 0 && !this.queueBusy();
       if (this.items.length === 0) this.expanded = false;
 
       // On a phone the cards cover the page, so even one is folded into the
@@ -362,7 +373,7 @@
       // Expanded, a catalogue shows its first two hundred at most: enough to
       // scroll, never so many the page stalls drawing them.
       const folded = PHONE.matches ? [] : this.items.filter((i) => i.status === 'failed');
-      const shown = (grouped && !this.expanded ? folded : this.items).slice(0, 200);
+      const shown = (this.quiet && !this.queueBusy() ? failures : grouped && !this.expanded ? folded : this.items).slice(0, 200);
       // Measuring every card forces layout; only worth it for a handful.
       const glide = this.nodes.size <= MAX_CARDS * 2 && !matchMedia('(prefers-reduced-motion: reduce)').matches;
       // Where each card is now, to slide the survivors into place after.
@@ -421,7 +432,7 @@
       if (!grouped) return;
       const toggle = this.querySelector<HTMLButtonElement>('[data-summary-toggle]')!;
       toggle.hidden = this.items.length === 0;
-      this.querySelector<HTMLElement>('[data-summary-hide]')!.hidden = !this.queueBusy() || this.items.some((i) => i.status !== 'done');
+      this.querySelector<HTMLElement>('[data-summary-hide]')!.hidden = !this.queueBusy();
       toggle.textContent = this.expanded ? 'Hide' : 'Show all';
       toggle.setAttribute('aria-expanded', String(this.expanded));
       const now = this.querySelector<HTMLElement>('[data-summary-now]')!;
@@ -436,7 +447,7 @@
       const total = done + working + failed;
       card.dataset.status = working > 0 ? 'running' : failed > 0 ? 'failed' : 'done';
       this.querySelector('[data-summary-title]')!.textContent =
-        working > 0 ? `${this.paused ? 'Paused' : 'Importing'} ${total}` : `Imported ${done} of ${total}`;
+        working > 0 ? `${this.paused ? 'Paused' : 'Importing'}: ${number.format(working)} to go` : `Imported ${done} of ${total}`;
       // All done: the summary goes after a while, as a single card would.
       if (working === 0 && failed === 0 && !this.clearing) {
         this.clearing = true;
@@ -468,9 +479,12 @@
       const toGo = counts.queued + counts.running;
       const failed = Math.max(counts.failed, this.items.filter((i) => i.status === 'failed').length);
       card.dataset.status = 'running';
-      this.querySelector('[data-summary-title]')!.textContent = `${this.paused ? 'Paused' : 'Importing'} · ${number.format(toGo)} to go`;
+      // The exact number waiting, from the server: the same on every device.
+      this.querySelector('[data-summary-title]')!.textContent =
+        `${number.format(counts.queued)} ${counts.queued === 1 ? 'import' : 'imports'} queued${this.paused ? ', paused' : ''}`;
       const pace = !this.paused && perHour ? `${number.format(Math.round(perHour))} an hour, ${timeLeft(toGo / perHour)} left` : null;
       this.querySelector('[data-summary-line]')!.textContent = [
+        counts.running ? `${counts.running} importing` : null,
         pace ?? (this.paused ? 'Resume on the Jobs page' : 'Working out the pace'),
         failed ? `${failed} failed` : null,
       ]
@@ -743,19 +757,24 @@
     }
   }
 
-  /* Phones: small, in the top corner, clear of the tab bar and the thumb.
-     Drawn downwards from there: the summary first, then the cards. */
+  /* Phones: a slim card just above the tab bar (above the mini player while
+     it shows: JobTray sets bottom then), as wide as the bar, drawn upwards:
+     the summary nearest the bar, the list above it when opened. */
   @media (max-width: 39.99rem) {
     .tray {
-      top: calc(env(safe-area-inset-top) + var(--space-2));
-      bottom: auto;
-      flex-direction: column;
-      width: min(15.5rem, calc(100vw - 2 * var(--gutter)));
+      left: var(--tabbar-inset, 0.6rem);
+      right: var(--tabbar-inset, 0.6rem);
+      bottom: calc(var(--tabbar-space, 0px) + 0.4rem);
+      width: auto;
       font-size: var(--step--1);
     }
 
-    .list {
-      flex-direction: column;
+    :global(:root[data-keyboard]) .tray {
+      visibility: hidden;
+    }
+
+    .summary .now {
+      display: none;
     }
 
     .list.scroll {

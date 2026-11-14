@@ -122,16 +122,44 @@ export type PlayerCommand =
   /** A track (in its album, so the album plays on after it) or a whole album. */
   | { action: 'start'; track?: string; album?: string };
 
-/** The device to wake when none is active: a phone first, else whatever Spotify lists first. */
-async function someDevice(client: SpotifyClient): Promise<string> {
-  const { devices } = await client.get<{ devices: { id: string | null; type: string; is_active: boolean; is_restricted: boolean }[] }>('/me/player/devices');
+/** What kind of device the command was sent from, so the music starts there. */
+export type Origin = 'phone' | 'computer';
+
+const KIND: Record<Origin, string> = { phone: 'Smartphone', computer: 'Computer' };
+
+type Device = { id: string | null; type: string; is_active: boolean; is_restricted: boolean };
+
+/**
+ * The device to play on: one like the one the command came from (a tap on
+ * the phone plays on the phone), else the active one, else a phone, else
+ * whatever Spotify lists first.
+ */
+async function someDevice(client: SpotifyClient, from?: Origin): Promise<string> {
+  const { devices } = await client.get<{ devices: Device[] }>('/me/player/devices');
   const usable = devices.filter((d) => d.id && !d.is_restricted);
-  const pick = usable.find((d) => d.is_active) ?? usable.find((d) => d.type === 'Smartphone') ?? usable[0];
+  const pick =
+    (from && usable.find((d) => d.type === KIND[from])) ??
+    usable.find((d) => d.is_active) ??
+    usable.find((d) => d.type === 'Smartphone') ??
+    usable[0];
   if (!pick) throw new PlayerError('Open Spotify on your phone or computer first, so there is somewhere to play.', 'no-device');
   return pick.id!;
 }
 
-export async function control(client: SpotifyClient, command: PlayerCommand): Promise<void> {
+/**
+ * Where a start (or a play from paused) should go. Music already playing
+ * stays where it is: someone listening on the TV meant to. Otherwise
+ * Spotify left to itself resumes on the last device used (the living room
+ * TV, often), so the device the command came from is named instead.
+ */
+async function target(client: SpotifyClient, from: Origin | undefined): Promise<string | undefined> {
+  if (!from) return undefined;
+  const playback = await client.get<{ is_playing?: boolean } | undefined>('/me/player').catch(() => undefined);
+  if (playback?.is_playing) return undefined;
+  return someDevice(client, from).catch(() => undefined);
+}
+
+export async function control(client: SpotifyClient, command: PlayerCommand, from?: Origin): Promise<void> {
   const send = async (deviceId?: string) => {
     const device = deviceId ? `device_id=${deviceId}` : '';
     const q = (extra: string) => [extra, device].filter(Boolean).join('&');
@@ -158,13 +186,14 @@ export async function control(client: SpotifyClient, command: PlayerCommand): Pr
       }
     }
   };
+  const starting = command.action === 'start' || command.action === 'play';
   try {
-    await send();
+    await send(starting ? await target(client, from) : undefined);
   } catch (error) {
     // Nothing active (Spotify not playing anywhere just now): wake a device and try once more.
     if (error instanceof SpotifyError && error.status === 404) {
       try {
-        await send(await someDevice(client));
+        await send(await someDevice(client, from));
         return;
       } catch (again) {
         explain(again);

@@ -77,6 +77,26 @@ describe('now playing', () => {
     expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual(['PUT /me/player/play?', 'GET /me/player/devices', 'PUT /me/player/play?device_id=phone']);
   });
 
+  it('starts on the phone it was tapped on, not the TV Spotify used last', async () => {
+    const devices = [
+      { id: 'tv', type: 'TV', is_active: true, is_restricted: false },
+      { id: 'phone', type: 'Smartphone', is_active: false, is_restricted: false },
+    ];
+    const { client, calls } = fakeClient(undefined, devices);
+    await control(client, { action: 'start', album: 'a'.repeat(22) }, 'phone');
+    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual(['GET /me/player', 'GET /me/player/devices', 'PUT /me/player/play?device_id=phone']);
+  });
+
+  it('leaves music already playing where it is', async () => {
+    const { client, calls } = fakeClient();
+    (client as unknown as { get: (path: string) => Promise<unknown> }).get = async (path: string) => {
+      calls.push(['GET', path, undefined]);
+      return { is_playing: true };
+    };
+    await control(client, { action: 'start', track: 't'.repeat(22) }, 'phone');
+    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual(['GET /me/player', 'PUT /me/player/play?']);
+  });
+
   it('says plainly why it cannot', async () => {
     await expect(control(fakeClient(new SpotifyError('Insufficient client scope', 403)).client, { action: 'next' })).rejects.toMatchObject({ reason: 'scope' });
     await expect(control(fakeClient(new SpotifyError('Player command failed: Premium required', 403)).client, { action: 'next' })).rejects.toMatchObject({ reason: 'premium' });

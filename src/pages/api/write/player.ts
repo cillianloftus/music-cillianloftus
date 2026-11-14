@@ -51,7 +51,9 @@ export const POST: APIRoute = async ({ request, locals }) => {
   if (!parsed.success) return Response.json({ error: 'Not a command this player knows.' }, { status: 400 });
   try {
     const client = spotifyFor(user.id);
-    await control(client, parsed.data as PlayerCommand);
+    // Started from a phone, it plays on the phone (player.ts, target).
+    const mobile = request.headers.get('sec-ch-ua-mobile') === '?1' || /Mobi|Android|iPhone|iPad/i.test(request.headers.get('user-agent') ?? '');
+    await control(client, parsed.data as PlayerCommand, mobile ? 'phone' : 'computer');
     // Spotify takes a moment to change track; the page polls again shortly.
     return Response.json({ ok: true });
   } catch (error) {
