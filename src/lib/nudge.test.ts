@@ -22,13 +22,24 @@ describe('rate what is playing', () => {
     expect(await inLibrary({ spotifyId: 'spA1', isrc: null }, 'u-friend')).toEqual({ id: 'a1', rated: false });
   });
 
-  it('falls back on the ISRC when the Spotify id is not known here', async () => {
-    expect(await inLibrary({ spotifyId: 'unknown', isrc: 'GBAAA2600001' }, 'u-owner')).toEqual({ id: 'n1', rated: false });
-    expect(await inLibrary({ spotifyId: 'unknown', isrc: null }, 'u-owner')).toBeNull();
+  it('falls back on the ISRC when the Spotify id is not known here, and remembers the id', async () => {
+    expect(await inLibrary({ spotifyId: 'spN1', isrc: 'GBAAA2600001' }, 'u-owner')).toEqual({ id: 'n1', rated: false });
+    expect(db.prepare(`SELECT spotify_id FROM recording WHERE id = 'n1'`).get()).toEqual({ spotify_id: 'spN1' });
+    expect(await inLibrary({ spotifyId: 'nowhere', isrc: null }, 'u-owner')).toBeNull();
+  });
+
+  it('falls back on the title and artist: Spotify has several ids for one song', async () => {
+    // a1 already has a Spotify id; this is another of the same song's.
+    const playing = { spotifyId: 'spA1-reissue', isrc: null, title: 'Song A1 - Remastered 2011', artists: ['Xavier'], album: 'Album A' };
+    expect(await inLibrary(playing, 'u-owner')).toEqual({ id: 'a1', rated: true });
+    // Its own id is left as it was.
+    expect(db.prepare(`SELECT spotify_id FROM recording WHERE id = 'a1'`).get()).toEqual({ spotify_id: 'spA1' });
+    // Not by someone else of the same title.
+    expect(await inLibrary({ ...playing, artists: ['Someone Else'] }, 'u-owner')).toBeNull();
   });
 
   it('says what is playing and opens its rating page', () => {
-    const message = nudgeMessage({ spotifyId: 'x', isrc: null, title: 'Ivy', artists: ['Frank Ocean'], art: 'https://i.scdn.co/a' }, 'n1');
+    const message = nudgeMessage({ spotifyId: 'x', isrc: null, title: 'Ivy', artists: ['Frank Ocean'], album: 'Blonde', art: 'https://i.scdn.co/a' }, 'n1');
     expect(message).toMatchObject({ title: 'Ivy', body: 'Frank Ocean · not rated yet', url: '/edit/rate/recording/n1', tag: 'rate-now' });
   });
 

@@ -73,21 +73,21 @@ describe('running out of requests', () => {
     expect(statuses()).toEqual(['done', 'done', 'done']);
   });
 
-  it('puts a job back when MusicBrainz is throttling, until it has been refused six times', async () => {
+  it('sends a job MusicBrainz refuses to the back of the queue, and moves on', async () => {
+    const first = await enqueue('backup', {});
     await enqueue('backup', {});
-    await enqueue('backup', {});
-    outcomes.push('throttled');
-    // Refused: back in its place, and the run stops.
+    outcomes.push('throttled', 'ok', 'ok');
+    // The second ran while the first waited behind it; then the first, on its second try.
+    expect(await runJobs({ budgetMs: 10_000 })).toBe(2);
+    const row = db.prepare('SELECT status, attempts FROM job WHERE id = ?').get(first) as { status: string; attempts: number };
+    expect(row).toEqual({ status: 'done', attempts: 2 });
+  });
+
+  it('stops the run when MusicBrainz refuses three in a row: it is down', async () => {
+    for (let i = 0; i < 4; i++) await enqueue('backup', {});
+    outcomes.push('throttled', 'throttled', 'throttled');
     expect(await runJobs({ budgetMs: 10_000 })).toBe(0);
-    expect(statuses()).toEqual(['queued', 'queued']);
-    // Refused every time: in the end it fails, and the queue moves on.
-    for (let i = 0; i < 5; i++) {
-      outcomes.push('throttled');
-      await runJobs({ budgetMs: 10_000 });
-    }
-    outcomes.push('throttled', 'ok');
-    await runJobs({ budgetMs: 10_000 });
-    expect(statuses()).toEqual(['failed', 'done']);
+    expect(statuses()).toEqual(['queued', 'queued', 'queued', 'queued']);
   });
 
   it('fails a job that runs out on a fresh allowance: it is too big on its own', async () => {

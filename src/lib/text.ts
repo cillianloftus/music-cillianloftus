@@ -12,7 +12,7 @@
 const EDITION_WORDS = /\b(remaster(ed)?|deluxe|expanded|anniversary|edition|bonus track)\b/;
 
 /** Drops "- Remastered 2011" and "(Deluxe Edition)" style suffixes. */
-function stripEditionSuffixes(title: string): string {
+export function stripEditionSuffixes(title: string): string {
   let result = title;
   // Trailing " - ..." segments that name an edition.
   result = result.replace(/\s+[-–—]\s+([^-–—]+)$/u, (match, tail: string) =>

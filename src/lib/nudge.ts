@@ -13,6 +13,7 @@
 import { env } from 'cloudflare:workers';
 import { MARKET, ReauthorizationRequired, SpotifyNotConfigured, spotifyFor, type SpotifyClient } from './spotify/client';
 import { sendPush, type PushTarget, type Vapid } from './push/webpush';
+import { findRecording } from './recording-match';
 
 /** The notification's tag on the device: one nudge at a time. */
 export const NUDGE_TAG = 'rate-now';
@@ -23,6 +24,7 @@ export interface Playing {
   isrc: string | null;
   title: string;
   artists: string[];
+  album: string | null;
   art: string | null;
 }
 
@@ -34,7 +36,7 @@ interface ApiCurrentlyPlaying {
     name: string;
     artists: { name: string }[];
     external_ids?: { isrc?: string };
-    album: { images: { url: string; width: number | null }[] };
+    album: { name: string; images: { url: string; width: number | null }[] };
   } | null;
 }
 
@@ -48,23 +50,23 @@ export async function playingNow(client: SpotifyClient): Promise<Playing | null>
     isrc: p.item.external_ids?.isrc?.toUpperCase() ?? null,
     title: p.item.name,
     artists: p.item.artists.map((a) => a.name),
+    album: p.item.album.name ?? null,
     // The smallest at least 128 wide: a notification icon, not a cover.
     art: (images.find((i) => (i.width ?? 0) >= 128) ?? images.at(-1))?.url ?? null,
   };
 }
 
-/** The library's recording for a Spotify track, and whether this listener has rated it. */
-export async function inLibrary(track: Pick<Playing, 'spotifyId' | 'isrc'>, userId: string): Promise<{ id: string; rated: boolean } | null> {
-  const row = await env.DB.prepare(
-    `SELECT id, EXISTS (SELECT 1 FROM rating x WHERE x.entity_type = 'recording' AND x.entity_id = m.id AND x.user_id = ?3) AS rated
-     FROM (SELECT r.id FROM recording r WHERE r.spotify_id = ?1
-           UNION ALL
-           SELECT r.id FROM recording r WHERE ?2 IS NOT NULL AND r.isrc = ?2) m
-     LIMIT 1`,
-  )
-    .bind(track.spotifyId, track.isrc, userId)
-    .first<{ id: string; rated: number }>();
-  return row ? { id: row.id, rated: row.rated === 1 } : null;
+/** The library's recording for a Spotify track (recording-match.ts), and whether this listener has rated it. */
+export async function inLibrary(
+  track: Pick<Playing, 'spotifyId' | 'isrc'> & Partial<Pick<Playing, 'title' | 'artists' | 'album'>>,
+  userId: string,
+): Promise<{ id: string; rated: boolean } | null> {
+  const id = await findRecording({ spotifyId: track.spotifyId, isrc: track.isrc, title: track.title ?? '', artists: track.artists ?? [], album: track.album });
+  if (!id) return null;
+  const rated = await env.DB.prepare(`SELECT 1 FROM rating WHERE entity_type = 'recording' AND entity_id = ? AND user_id = ? LIMIT 1`)
+    .bind(id, userId)
+    .first();
+  return { id, rated: rated !== null };
 }
 
 /** What the device shows. */

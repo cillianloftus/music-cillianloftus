@@ -17,6 +17,7 @@ import { ratingHistory } from '../lib/ratings';
 import { spotifyFor } from '../lib/spotify/client';
 import { nowPlaying, PlayerError, type NowState } from '../lib/spotify/player';
 import { activeWeights } from '../lib/weights';
+import { findRecording } from '../lib/recording-match';
 
 const user = Astro.locals.user;
 if (!user) return Astro.redirect('/manage');
@@ -39,8 +40,11 @@ interface Here {
   personal: number | null;
 }
 
-// The song in the catalogue: by its Spotify id, or as a listen already matched to it.
-const here = song
+// The song in the catalogue: by Spotify id, a matched listen, or title and artist (recording-match.ts).
+const hereId = song
+  ? await findRecording({ spotifyId: song.spotifyId, title: song.title, artists: song.artists, artistIds: song.artistIds, album: song.album })
+  : null;
+const here = hereId
   ? await env.DB.prepare(
       `SELECT rec.id, rec.title, g.id AS album_id, g.title AS album_title,
               (SELECT s.quality_score FROM v_recording_score s WHERE s.recording_id = rec.id AND s.user_id = ?2) AS quality,
@@ -49,12 +53,11 @@ const here = song
        LEFT JOIN track t ON t.recording_id = rec.id
        LEFT JOIN release r ON r.id = t.release_id
        LEFT JOIN release_group g ON g.id = r.release_group_id
-       WHERE rec.id = coalesce((SELECT id FROM recording WHERE spotify_id = ?1),
-                               (SELECT recording_id FROM listen_track WHERE key = 'spotify:' || ?1))
+       WHERE rec.id = ?1
        ORDER BY r.date IS NULL, r.date
        LIMIT 1`,
     )
-      .bind(song.spotifyId, user.id)
+      .bind(hereId, user.id)
       .first<Here>()
   : null;
 

@@ -19,11 +19,22 @@ import { planFromMusicBrainz } from '../import/musicbrainz';
 import { writePlan } from '../import/write';
 import { pushDefinition } from '../spotify/push';
 import { runBackup } from '../backup/store';
-import { claimNext, complete, defer, fail, requeue, type JobPayloads, type JobRow } from './queue';
+import { claimNext, complete, fail, requeue, toBack, type JobPayloads, type JobRow } from './queue';
 import { MusicBrainzError } from '../musicbrainz/client';
 
-/** Runs a job may be put off by MusicBrainz's "not now" before it fails. */
-const MAX_DEFERS = 6;
+/**
+ * Imports are pushed on hard: a job that stalls goes to the back of the
+ * queue and the next one starts. Stalling is taking longer than STALL_MS
+ * times its tries so far (an import usually takes 18 s, nine in ten under
+ * 32 s; a big one gets longer each time round), or MusicBrainz refusing it
+ * through all its own retries. After MAX_TRIES it fails, so it can be seen.
+ */
+const STALL_MS = 45_000;
+const MAX_TRIES = 6;
+/** Refused this many times running, MusicBrainz is down or throttling hard: the run stops. */
+const REFUSALS_TO_STOP = 3;
+
+const STALLED = Symbol('stalled');
 
 /**
  * The album's own artists, looked up straight away (who they are, other
@@ -180,15 +191,33 @@ export function isSubrequestLimit(error: unknown): boolean {
 export async function runJobs({ budgetMs }: { budgetMs: number }): Promise<number> {
   const deadline = Date.now() + budgetMs;
   let processed = 0;
+  let refusals = 0;
 
   while (Date.now() < deadline) {
     const job = await claimNext();
     if (!job) break;
 
     const handler = handlers[job.kind];
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       if (!handler) throw new Error(`No handler for job kind "${job.kind}" yet.`);
-      await handler(job);
+      const work = handler(job);
+      // Left running if it stalls: imports are idempotent, and one that
+      // finishes late still marks itself done.
+      work.catch((error) => console.warn(`Job ${job.id} ended after it was moved on from`, error));
+      const outcome = await Promise.race([
+        work,
+        new Promise<typeof STALLED>((resolve) => (timer = setTimeout(() => resolve(STALLED), STALL_MS * Math.max(1, job.attempts)))),
+      ]);
+      if (outcome === STALLED) {
+        if (job.attempts < MAX_TRIES) {
+          console.warn(`Job ${job.id} stalled; to the back of the queue`);
+          await toBack(job.id);
+        } else {
+          await fail(job.id, new Error(`Stalled on each of ${MAX_TRIES} tries.`));
+        }
+      }
+      refusals = 0;
     } catch (error) {
       if (processed > 0 && isSubrequestLimit(error)) {
         console.warn(`Job ${job.id} ran out of requests after ${processed} others; it goes first next run`);
@@ -197,14 +226,18 @@ export async function runJobs({ budgetMs }: { budgetMs: number }): Promise<numbe
       }
       // MusicBrainz said "not now" through all its own retries: it is
       // throttling (Workers share addresses with others' apps). Not the
-      // job's fault: back in its place, and this run stops to give it a rest.
-      if (error instanceof MusicBrainzError && error.status === 503 && job.attempts < MAX_DEFERS) {
-        console.warn(`Job ${job.id}: MusicBrainz is throttling; it waits for the next run`);
-        await defer(job.id);
-        break;
+      // job's fault: to the back, and on with the next. Refused several
+      // times running, it is down: the run stops to give it a rest.
+      if (error instanceof MusicBrainzError && error.status === 503 && job.attempts < MAX_TRIES) {
+        console.warn(`Job ${job.id}: MusicBrainz refused it; to the back of the queue`);
+        await toBack(job.id);
+        if (++refusals >= REFUSALS_TO_STOP) break;
+        continue;
       }
       console.error(`Job ${job.id} (${job.kind}) failed`, error);
       await fail(job.id, error);
+    } finally {
+      clearTimeout(timer);
     }
     processed++;
   }

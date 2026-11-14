@@ -89,31 +89,25 @@ export async function enqueueMany<K extends keyof JobPayloads>(kind: K, payloads
  */
 export async function claimNext(): Promise<JobRow | null> {
   const stuck = `status = 'running' AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${STALE_AFTER_MINUTES} minutes')`;
-  const [, claimed] = await env.DB.batch<JobRow>([
+  const [, , claimed] = await env.DB.batch<JobRow>([
     // Cut off on each of its tries: it would only be cut off again.
     env.DB.prepare(
       `UPDATE job SET status = 'failed', finished_at = ${NOW},
               error = 'Stopped after ${MAX_ATTEMPTS} tries: each time, the Worker running it was cut off before it finished (out of memory or time).'
        WHERE ${stuck} AND attempts >= ${MAX_ATTEMPTS}`,
     ),
+    // Cut off, with tries left: to the back of the queue, not the front.
+    env.DB.prepare(`UPDATE job SET status = 'queued', started_at = NULL, created_at = ${NOW} WHERE ${stuck}`),
     env.DB.prepare(
     `UPDATE job
      SET status = 'running', started_at = ${NOW}, error = NULL, attempts = attempts + 1
      WHERE id = (
-       -- The oldest queued job and the oldest stuck one, each one seek of
-       -- job_queue (status, created_at); an OR of the two read every job.
-       SELECT id FROM (
-         SELECT * FROM (SELECT id, created_at, rowid AS n FROM job WHERE status = 'queued' ORDER BY created_at, rowid LIMIT 1)
-         UNION ALL
-         SELECT * FROM (
-           SELECT id, created_at, rowid AS n FROM job
-            WHERE status = 'running'
-              AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${STALE_AFTER_MINUTES} minutes')
-            ORDER BY created_at, rowid LIMIT 1)
-       )
-       -- Nothing starts while the queue is paused; what is running finishes.
-       WHERE NOT EXISTS (SELECT 1 FROM app_setting WHERE key = 'jobs_paused' AND value = '1')
-       ORDER BY created_at, n
+       -- The oldest queued job: one seek of job_queue (status, created_at).
+       SELECT id FROM job
+       WHERE status = 'queued'
+         -- Nothing starts while the queue is paused; what is running finishes.
+         AND NOT EXISTS (SELECT 1 FROM app_setting WHERE key = 'jobs_paused' AND value = '1')
+       ORDER BY created_at, rowid
        LIMIT 1
      )
      RETURNING *`,
@@ -150,12 +144,13 @@ export async function requeue(id: string): Promise<void> {
 }
 
 /**
- * Back to queued for later, its attempts kept: a source that said "not
- * now" (MusicBrainz's 503) is no fault of the job, but one refused every
- * time must still fail in the end (runner.ts, MAX_DEFERS).
+ * To the back of the queue, its attempts kept: a job that stalled (too
+ * slow, refused by MusicBrainz, its Worker cut off) waits behind everything
+ * else rather than holding the queue up. One that stalls every time still
+ * fails in the end (runner.ts, MAX_TRIES).
  */
-export async function defer(id: string): Promise<void> {
-  await env.DB.prepare(`UPDATE job SET status = 'queued', started_at = NULL, error = NULL WHERE id = ?`).bind(id).run();
+export async function toBack(id: string): Promise<void> {
+  await env.DB.prepare(`UPDATE job SET status = 'queued', started_at = NULL, error = NULL, created_at = ${NOW} WHERE id = ?`).bind(id).run();
 }
 
 /** Puts a failed job back in the queue. Partial work is kept: imports are idempotent. */
