@@ -61,26 +61,53 @@ export interface ScoreInputs {
   kinds?: Record<string, TrackKind>;
   /** Track lengths in milliseconds, where known. */
   lengths?: Record<string, number>;
-  /**
-   * Each album's standard edition: its running time (the sum of the
-   * lengths known, or null) and how many tracks it has, every one counted.
-   */
-  runtimes?: Record<string, { ms: number | null; tracks: number }>;
 }
 
 /**
- * The lowest-rated track is left out of an album's score only when it is
- * less than this share of the album: of its running time, or, its length
- * unknown, of its tracks (migration 0057). One weak song on an hour-long
- * album is left out; one of two songs on a single is not.
+ * An album's odd songs out are left out of its score (migration 0065): a
+ * song OUTLIER_GAP points or more from the album's middle song (the median),
+ * high or low, when the songs that far out on its side are less than
+ * TRIM_MAX_SHARE of the songs rated (of their running time, or, a length
+ * unknown, of their number). More than that, and they are what the album
+ * is like.
  */
 export const TRIM_MAX_SHARE = 0.15;
+export const OUTLIER_GAP = 20;
 
-/** Whether a track this long is a small enough part of the album to leave out. Pure. */
-export function smallPart(length: number | undefined, runtime: { ms: number | null; tracks: number } | undefined): boolean {
+/** Whether songs this long (lengths, or undefined where unknown) are a small enough part of the album to leave out. Pure. */
+export function smallPart(lengths: (number | undefined)[], runtime: { ms: number | null; tracks: number } | undefined): boolean {
   if (!runtime) return false;
-  if (length !== undefined) return runtime.ms !== null && length < TRIM_MAX_SHARE * runtime.ms;
-  return 1 < TRIM_MAX_SHARE * runtime.tracks;
+  if (lengths.every((l) => l !== undefined)) {
+    const ms = lengths.reduce<number>((sum, l) => sum + l!, 0);
+    return runtime.ms !== null && ms < TRIM_MAX_SHARE * runtime.ms;
+  }
+  return lengths.length < TRIM_MAX_SHARE * runtime.tracks;
+}
+
+const medianOf = (sorted: number[]): number => {
+  const n = sorted.length;
+  return n % 2 ? sorted[(n - 1) / 2]! : (sorted[n / 2 - 1]! + sorted[n / 2]!) / 2;
+};
+
+/**
+ * The songs left out of an album's score as outliers: ids. Each side (low,
+ * high) is judged on its own. Pure.
+ */
+export function outliers(rated: { id: string; q: number; length?: number }[]): Set<string> {
+  const left = new Set<string>();
+  if (rated.length === 0) return left;
+  // The songs rated are the whole the share is of.
+  const runtime = {
+    ms: rated.every((r) => r.length !== undefined) ? rated.reduce((sum, r) => sum + r.length!, 0) : null,
+    tracks: rated.length,
+  };
+  const median = medianOf(rated.map((r) => r.q).sort((a, b) => a - b));
+  const low = rated.filter((r) => r.q <= median - OUTLIER_GAP);
+  const high = rated.filter((r) => r.q >= median + OUTLIER_GAP);
+  for (const side of [low, high]) {
+    if (side.length > 0 && smallPart(side.map((r) => r.length), runtime)) for (const r of side) left.add(r.id);
+  }
+  return left;
 }
 
 export interface Score {
@@ -167,10 +194,8 @@ export function computeScores(inputs: ScoreInputs, w: Weights): Scores {
     if (rated.length > 0) {
       const known = rated.filter((r) => r.length !== undefined);
       const mean = known.length > 0 ? known.reduce((a, r) => a + r.length!, 0) / known.length : null;
-      const ordered = [...rated].sort((a, b) => a.q - b.q || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-      const lowest = ordered[0]!;
-      const trim = ordered.length >= 2 && w.release.trim_lowest && smallPart(lowest.length, inputs.runtimes?.[id]);
-      const kept = trim ? ordered.slice(1) : ordered;
+      const left = w.release.trim_lowest ? outliers(rated) : new Set<string>();
+      const kept = rated.filter((r) => !left.has(r.id));
       let total = 0;
       let weight = 0;
       for (const r of kept) {

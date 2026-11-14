@@ -36,6 +36,8 @@ export function enhanceAutosave(root: Document | HTMLElement = document): void {
     let saved = snapshot(form);
     let timer: ReturnType<typeof setTimeout> | undefined;
     let inFlight = false;
+    /** The form as it is being sent, while a save is under way. */
+    let sending: string | null = null;
     let everSaved = false;
     form.dataset.autosave = '';
 
@@ -53,12 +55,17 @@ export function enhanceAutosave(root: Document | HTMLElement = document): void {
         say(now === saved && everSaved ? 'Saved' : '');
         return;
       }
+      // Already on its way. Leaving a page fires both pagehide and
+      // visibilitychange, and each flushed the same rating: 125 ratings
+      // were saved twice, milliseconds apart, before this.
+      if (now === sending) return;
       if (inFlight && !leaving) {
         // One save at a time; this change goes once the last one lands.
         timer = setTimeout(() => void save(), 500);
         return;
       }
       inFlight = true;
+      sending = now;
       say('Saving…');
       try {
         const res = await fetch(form.action, {
@@ -86,6 +93,7 @@ export function enhanceAutosave(root: Document | HTMLElement = document): void {
         say('Not saved: offline? It tries again on the next change.', 'error');
       } finally {
         inFlight = false;
+        sending = null;
       }
     };
 

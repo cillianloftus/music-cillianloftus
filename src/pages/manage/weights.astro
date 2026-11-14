@@ -110,7 +110,7 @@ function describe(w: Weights): string {
     w.release.length > 0 && `length ${Math.round(w.release.length * 100)}%`,
     w.release.interlude !== 0.5 && `interludes ${Math.round(w.release.interlude * 100)}%`,
   ].filter(Boolean);
-  return [...axes, blend, w.release.trim_lowest ? 'lowest track dropped' : 'every track counted', ...extra].join(', ');
+  return [...axes, blend, w.release.trim_lowest ? 'odd songs out left out' : 'every track counted', ...extra].join(', ');
 }
 
 const date = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -183,7 +183,7 @@ const clientData = {
           </div>
           <label class="check">
             <input type="checkbox" name="trim_lowest" checked={preview.release.trim_lowest} />
-            Drop each album’s lowest-rated track
+            Leave out an album’s odd songs out (a lone song far above or below the rest)
           </label>
         </fieldset>
 

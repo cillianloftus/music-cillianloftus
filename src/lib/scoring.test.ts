@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, computeScores, rank, smallPart, type Weights } from './scoring';
+import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, computeScores, outliers, rank, smallPart, type Weights } from './scoring';
 import { activateVersion, activeWeights, saveWeights, scoreInputs, weightsForm, weightsVersions } from './weights';
 
 let db: DatabaseSync;
@@ -183,10 +183,44 @@ describe('ranking', () => {
   });
 
   it('counts a track of unknown length as one of the album’s tracks', () => {
-    expect(smallPart(undefined, { ms: null, tracks: 12 })).toBe(true);
-    expect(smallPart(undefined, { ms: null, tracks: 4 })).toBe(false);
-    expect(smallPart(180_000, { ms: 3_600_000, tracks: 15 })).toBe(true);
-    expect(smallPart(240_000, { ms: 900_000, tracks: 4 })).toBe(false);
+    expect(smallPart([undefined], { ms: null, tracks: 12 })).toBe(true);
+    expect(smallPart([undefined], { ms: null, tracks: 4 })).toBe(false);
+    expect(smallPart([180_000], { ms: 3_600_000, tracks: 15 })).toBe(true);
+    expect(smallPart([240_000], { ms: 900_000, tracks: 4 })).toBe(false);
+    // Songs together: two of three minutes on a 40-minute album is 15%, not under it.
+    expect(smallPart([180_000, 180_000], { ms: 2_400_000, tracks: 12 })).toBe(false);
+  });
+
+  describe('odd songs out', () => {
+    const album = (qs: number[]) => qs.map((q, i) => ({ id: `t${i}`, q, length: 200_000 }));
+
+    it('leaves out one bad song on an otherwise good album', () => {
+      const songs = album([90, 90, 85, 90, 95, 88, 92, 90, 87, 60]);
+      expect([...outliers(songs)]).toEqual(['t9']);
+    });
+
+    it('keeps bad songs that are a fair part of the album: that is what it is like', () => {
+      // Four of sixteen far below the middle (60): a quarter of it, not outliers.
+      const songs = album([60, 60, 65, 55, 60, 70, 60, 65, 55, 60, 60, 15, 20, 20, 25, 82]);
+      expect(outliers(songs).has('t11')).toBe(false);
+      // The lone song far above the rest is.
+      expect([...outliers(songs)]).toEqual(['t15']);
+    });
+
+    it('judges each side on its own: a lone low and a lone high both go', () => {
+      const songs = album([60, 55, 60, 50, 60, 55, 60, 30, 85, 55]);
+      expect([...outliers(songs)].sort()).toEqual(['t7', 't8']);
+    });
+
+    it('measures the share among the songs rated, not the whole album', () => {
+      // Four far below of sixteen rated: a quarter, kept, however long the album.
+      const songs = album([76, 80, 75, 78, 76, 72, 80, 77, 74, 79, 76, 75, 21, 41, 56, 17]);
+      expect(outliers(songs).size).toBe(0);
+    });
+
+    it('leaves nothing out of a steady album', () => {
+      expect(outliers(album([80, 75, 85, 70, 80, 90, 75])).size).toBe(0);
+    });
   });
 });
 
