@@ -19,7 +19,7 @@
 import { artistRank } from './artist-rank';
 import { env } from 'cloudflare:workers';
 import { albumScores } from './album-scores';
-import { byLibrary, byLibraryMap } from './library-cache';
+import { byDayMap, byScores } from './library-cache';
 import { encodeDefinition } from './query/builder';
 import type { Where } from './query/schema';
 
@@ -95,8 +95,60 @@ interface Row {
   listener_count: number | null;
 }
 
-/** Everything known about each rated track; one artist's when given. */
+/**
+ * Everything known about each rated track; one artist's, album's or genre's
+ * when given: the library's facts (kept), narrowed by a few index seeks.
+ * Worked out on its own, each album, artist and genre page built the whole
+ * score view again (5,600 rows a page, 685 pages a day).
+ */
 export async function trackFacts(userId: string, scope: { artistId?: string; albumId?: string; genreId?: string } = {}): Promise<TrackFact[]> {
+  const all = await libraryFacts(userId);
+  if (!scope.artistId && !scope.albumId && !scope.genreId) return all;
+  const inScope = await scopedRecordings(scope, all);
+  return all.filter((f) => inScope.has(f.id));
+}
+
+/** The recordings an artist, album or genre covers, as trackFacts's scope meant them. */
+async function scopedRecordings(scope: { artistId?: string; albumId?: string; genreId?: string }, facts: TrackFact[]): Promise<Set<string>> {
+  if (scope.artistId) {
+    const { results } = await env.DB.prepare(
+      `SELECT entity_id AS id FROM artist_credit WHERE artist_id = ? AND entity_type = 'recording' AND role IN ('primary', 'featured')`,
+    )
+      .bind(scope.artistId)
+      .all<{ id: string }>();
+    return new Set(results.map((r) => r.id));
+  }
+  if (scope.albumId) {
+    // Every edition's tracks: the deluxe's too.
+    const { results } = await env.DB.prepare(
+      `SELECT t.recording_id AS id FROM release r JOIN track t ON t.release_id = r.id WHERE r.release_group_id = ?`,
+    )
+      .bind(scope.albumId)
+      .all<{ id: string }>();
+    return new Set(results.map((r) => r.id));
+  }
+  // A genre: tagged on the track, or on its album when the track has no genre of its own.
+  const ids = JSON.stringify(facts.map((f) => f.id));
+  const albums = JSON.stringify([...new Set(facts.map((f) => f.albumId).filter(Boolean))]);
+  const [own, tagged, taggedAlbums] = await env.DB.batch([
+    env.DB.prepare(`SELECT DISTINCT entity_id AS id FROM genre_tag WHERE entity_type = 'recording' AND entity_id IN (SELECT value FROM json_each(?1))`).bind(ids),
+    env.DB.prepare(
+      `SELECT entity_id AS id FROM genre_tag WHERE entity_type = 'recording' AND genre_id = ?2 AND entity_id IN (SELECT value FROM json_each(?1))`,
+    ).bind(ids, scope.genreId),
+    env.DB.prepare(
+      `SELECT entity_id AS id FROM genre_tag WHERE entity_type = 'release_group' AND genre_id = ?2 AND entity_id IN (SELECT value FROM json_each(?1))`,
+    ).bind(albums, scope.genreId),
+  ]);
+  const hasOwn = new Set((own!.results as { id: string }[]).map((r) => r.id));
+  const out = new Set((tagged!.results as { id: string }[]).map((r) => r.id));
+  const albumTagged = new Set((taggedAlbums!.results as { id: string }[]).map((r) => r.id));
+  for (const f of facts) if (!hasOwn.has(f.id) && f.albumId && albumTagged.has(f.albumId)) out.add(f.id);
+  return out;
+}
+
+/** The old, direct reading: kept for the test that libraryFacts matches it. */
+export async function trackFactsDirect(userId: string): Promise<TrackFact[]> {
+  const scope: { artistId?: string; albumId?: string; genreId?: string } = {};
   const { results } = await env.DB.prepare(
     `SELECT s.recording_id AS id, r.title, s.quality_score AS score, ax.rated_at, r.length_ms,
             r.bpm, r.loudness, r.explicit, r.listener_count,
@@ -221,9 +273,10 @@ async function trackParts(ids: string[]): Promise<Record<string, TrackPart>> {
  * 110 rated tracks and grew with every one.
  */
 export async function libraryFacts(userId: string): Promise<TrackFact[]> {
-  // The whole answer is kept too, until the next rating; then only the
-  // ratings are read again, and the one new track's facts.
-  return byLibrary('facts:v5', userId, () => gatherFacts(userId));
+  // The whole answer is kept too, until the next rating (byScores: an
+  // import elsewhere changes nothing here); then only the ratings are read
+  // again, and the one new track's facts.
+  return byScores('facts:v6', userId, () => gatherFacts(userId));
 }
 
 async function gatherFacts(userId: string): Promise<TrackFact[]> {
@@ -240,7 +293,8 @@ async function gatherFacts(userId: string): Promise<TrackFact[]> {
   )
     .bind(userId)
     .all<RatingPart>();
-  const parts = await byLibraryMap('track-parts:v2', null, rated.map((r) => r.id), trackParts);
+  // A track's album, credits and genres, kept for the day and grown a track at a time.
+  const parts = await byDayMap('track-parts:v3', rated.map((r) => r.id), trackParts);
   return rated.flatMap((r) => {
     const part = parts[r.id];
     return part ? [toFact({ ...part, ...r })] : [];
@@ -915,7 +969,8 @@ export async function artistBreakdown(userId: string, artistId: string): Promise
   const facts = await trackFacts(userId, { artistId });
   if (facts.length < 3) return null;
   const [{ libraryAverage, ranking, typicalSpread }, albumScoreMap] = await Promise.all([
-    byLibrary('artist-ranks:v3', userId, () => libraryRanks(userId)),
+    // Rankings move with ratings, not imports (scoresStamp).
+    byScores('artist-ranks:v4', userId, () => libraryRanks(userId)),
     albumScores(userId),
   ]);
 

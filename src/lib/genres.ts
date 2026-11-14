@@ -6,7 +6,7 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { byLibrary } from './library-cache';
+import { byHourAndGenres, byLibrary } from './library-cache';
 
 export interface GenreRow {
   id: string;
@@ -110,7 +110,9 @@ export interface GenreIndex {
 }
 
 export async function genreIndex(): Promise<GenreIndex> {
-  return byLibrary('genre-index:v1', null, async () => {
+  // By the hour and the tree's version: it reads every track and release, and
+  // keyed to the library it was read again after every album imported.
+  return byHourAndGenres('genre-index:v1', async () => {
     // Plain table reads, put together here: through the views and joins
     // they cost 155,000 rows; read raw, about the size of the tables.
     const [own, albumTags, tracks, releases] = await env.DB.batch([

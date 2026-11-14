@@ -5,6 +5,7 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { byDay } from './library-cache';
 
 export interface LinkedTrack {
   title: string;
@@ -80,7 +81,12 @@ type SamplingRow = { takes: 0 | 1; kind: 'samples' | 'interpolates'; name: strin
  * featured). Themselves left out. One seek of the credits, then of the
  * links each way, by index: a few hundred rows for a big artist.
  */
-export async function artistSampling(artistId: string, limit = 12): Promise<ArtistSampling> {
+export function artistSampling(artistId: string, limit = 12): Promise<ArtistSampling> {
+  // Song links arrive in the nightly fill: kept for the day (4,400 rows an artist page).
+  return byDay(`sampling:v1:${artistId}:${limit}`, () => workOutSampling(artistId, limit));
+}
+
+async function workOutSampling(artistId: string, limit: number): Promise<ArtistSampling> {
   const { results } = await env.DB.prepare(
     `WITH mine AS (
        SELECT DISTINCT r.genius_url AS url

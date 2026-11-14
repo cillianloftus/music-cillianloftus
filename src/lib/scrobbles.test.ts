@@ -178,7 +178,8 @@ describe('track facts', () => {
   it('the library-wide facts, kept a track at a time, are the same as worked out at once', async () => {
     const { libraryFacts } = await import('./discover');
     const byId = (list: Awaited<ReturnType<typeof trackFacts>>) => [...list].sort((a, b) => a.id.localeCompare(b.id));
-    expect(byId(await libraryFacts('u-owner'))).toEqual(byId(await trackFacts('u-owner')));
+    const { trackFactsDirect } = await import('./discover');
+    expect(byId(await libraryFacts('u-owner'))).toEqual(byId(await trackFactsDirect('u-owner')));
   });
 
   it('narrows to a genre: the track’s own genre first, else its album’s', async () => {

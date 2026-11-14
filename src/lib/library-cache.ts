@@ -135,6 +135,19 @@ export async function byScores<T>(name: string, userId: string | null, work: () 
 }
 
 /**
+ * The value under name for this hour (UTC) and the genre tree's version:
+ * for whole-library readings of genres, which a discography import would
+ * otherwise void every few seconds, but which a change to the tree (a
+ * rename, a move, a merge) must show at once.
+ */
+export async function byHourAndGenres<T>(name: string, work: () => Promise<T>, now = new Date()): Promise<T> {
+  const version = await perRequest('genres-version', async () =>
+    String((await env.DB.prepare(`SELECT value FROM app_setting WHERE key = 'genres_version'`).first<string>('value')) ?? '0'),
+  );
+  return keptOrWorkedOut(`hour:${BUILD}:${name}:${now.toISOString().slice(0, 13)}:${version}`, 1, work);
+}
+
+/**
  * The value under name for today (UTC), worked out at most once a day. For
  * readings that one import barely moves and that are dear to work out
  * (which artists are close to which: 90,000 rows for a big artist), where
@@ -158,7 +171,29 @@ export async function byLibraryMap<V>(
   ids: string[],
   work: (missing: string[]) => Promise<Record<string, V>>,
 ): Promise<Record<string, V | null>> {
-  const key = await libraryKey(name, userId);
+  return grownMap(await libraryKey(name, userId), ids, work);
+}
+
+/**
+ * As byLibraryMap, but kept for the day (UTC) rather than the library's
+ * state: for per-item facts an import elsewhere does not touch (a track's
+ * album, credits and genres), which byLibraryMap worked out again whole
+ * after every album imported.
+ */
+export function byDayMap<V>(
+  name: string,
+  ids: string[],
+  work: (missing: string[]) => Promise<Record<string, V>>,
+  now = new Date(),
+): Promise<Record<string, V | null>> {
+  return grownMap(`daymap:${BUILD}:${name}:${now.toISOString().slice(0, 10)}`, ids, work);
+}
+
+async function grownMap<V>(
+  key: string,
+  ids: string[],
+  work: (missing: string[]) => Promise<Record<string, V>>,
+): Promise<Record<string, V | null>> {
   const held = (await kept<Record<string, V | null>>(key)) ?? {};
   const missing = ids.filter((id) => !(id in held));
   if (missing.length === 0) return held;

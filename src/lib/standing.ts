@@ -7,7 +7,7 @@
 
 import { env } from 'cloudflare:workers';
 import type { TrackFact } from './discover';
-import { byLibrary } from './library-cache';
+import { byScores } from './library-cache';
 import { albumScores } from './album-scores';
 
 export interface Standing {
@@ -113,7 +113,8 @@ export interface StandingAlbum {
 export async function albumStandings(userId: string): Promise<StandingAlbum[]> {
   // Scores from the album scores (album-score-map), so only the artists are read here.
   const scores = await albumScores(userId);
-  return byLibrary('album-standing:v3', userId, async () => {
+  // With the scores: an import adds no scored album (scoresStamp).
+  return byScores('album-standing:v4', userId, async () => {
     const ids = Object.keys(scores).filter((id) => scores[id]!.quality != null);
     const { results } = await env.DB.prepare(
       `SELECT c.entity_id AS id, c.artist_id, a.name FROM artist_credit c JOIN artist a ON a.id = c.artist_id
