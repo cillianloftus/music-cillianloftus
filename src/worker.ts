@@ -81,9 +81,8 @@ async function linkSpotifyAlbums(): Promise<void> {
 export default {
   fetch: handle,
 
-  // Every minute: claim queued jobs and work through them. A scheduled
-  // invocation may run for minutes, but stopping well inside the cron
-  // interval keeps ticks from piling up behind each other.
+  // Every minute: claim queued jobs and work through them, for up to four
+  // minutes; ticks meanwhile find the runner's lease held and step aside.
   // Daily at 04:00 UTC: queue a backup, derive album genres, run the review rules.
   async scheduled(controller, _env, ctx) {
     ctx.waitUntil(
@@ -137,7 +136,11 @@ export default {
         await nudgeRatings().catch((error) => console.error('Rating nudges failed', error));
         // Gut conversions after a detailed rating (src/lib/gut-calibration.ts).
         await rebuildStaleGutConversions().catch((error) => console.error('Gut calibration failed', error));
-        await runJobs({ budgetMs: 50_000 });
+        // Up to four minutes: one run holds the lease (runner.ts), so the next
+        // minutes' ticks step aside rather than overlap, and the queue is not
+        // left idle between ticks. An import is mostly waiting on MusicBrainz,
+        // so this is little CPU.
+        await runJobs({ budgetMs: 240_000 });
         await checkOfficial().catch((error) => console.error('Official release check failed', error));
       })(),
     );
