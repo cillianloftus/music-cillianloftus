@@ -3,8 +3,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, computeScores, outliers, rank, smallPart, type Weights } from './scoring';
+import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, calibrate, computeScores, convert, levelGap, outliers, rank, smallPart, type Weights } from './scoring';
 import { activateVersion, activeWeights, saveWeights, scoreInputs, weightsForm, weightsVersions } from './weights';
+import { rebuildGutConversions } from './gut-calibration';
 
 let db: DatabaseSync;
 
@@ -80,6 +81,7 @@ function randomWeights(random: () => number): Weights {
       interlude: Math.round(random() * 20) / 20,
       length: random() < 0.3 ? 0 : Math.round(random() * 20) / 20,
     },
+    calibration: { evidence: 1 + Math.floor(random() * 30) },
   };
 }
 
@@ -108,6 +110,8 @@ describe('preview scoring matches the SQL views', () => {
       if (seed > 1) randomKindsAndLengths(random);
       const weights = seed === 1 ? DEFAULT_WEIGHTS : randomWeights(random);
       await saveWeights('u-owner', weights);
+      // The kept gut conversions, as the cron leaves them (saving the defaults over none saves nothing).
+      await rebuildGutConversions('u-owner');
 
       const preview = computeScores(await scoreInputs('u-owner'), weights);
       const calibration = db.prepare(`SELECT gut_offset, sample_size FROM v_gut_calibration WHERE user_id = 'u-owner'`).get() as {
@@ -130,6 +134,66 @@ describe('preview scoring matches the SQL views', () => {
       }
     });
   }
+});
+
+describe('gut calibration in layers', () => {
+  // Pairs: each song rated by gut 8 and in detail. Artist X runs 1 higher than the rest.
+  const pair = (recording: string, gut: number, craft: number) => ({ recording, gut, impact: null, songwriting: craft });
+  const w = (evidence: number): Weights => ({
+    ...DEFAULT_WEIGHTS,
+    craft: { arrangement: 0, sound: 0, songwriting: 1, lyrics: 0, performance: 0, originality: 0 },
+    calibration: { evidence },
+  });
+  const inputs = {
+    calibration: [pair('x1', 8, 9), pair('x2', 8, 9), pair('x3', 8, 9), pair('y1', 8, 8), pair('y2', 8, 8), pair('y3', 8, 8)],
+    artists: { x1: 'X', x2: 'X', x3: 'X', y1: 'Y', y2: 'Y', y3: 'Y' },
+    genres: { x1: ['rap'], x2: ['rap'], x3: ['rap'], y1: ['rap'], y2: ['rap'], y3: ['rap'] },
+    recordings: {},
+    albums: {},
+    canonical: {},
+  };
+
+  it('counts each song once, by its latest row with both', () => {
+    const twice = { ...inputs, calibration: [pair('y1', 8, 2), ...inputs.calibration] };
+    expect(calibrate(twice, w(5)).samples).toBe(6);
+    expect(calibrate(twice, w(5)).general).toBeCloseTo(0.5);
+  });
+
+  it('gives the artist its own gap, by how much evidence it has', () => {
+    const cal = calibrate(inputs, w(3));
+    // Overall +0.5; X is +0.5 beyond it on three songs, kept at 3 / (3 + 3).
+    expect(cal.artists.X!.gap).toBeCloseTo(0.25);
+    expect(cal.artists.Y!.gap).toBeCloseTo(-0.25);
+    expect(convert(cal, 8, 'X', ['rap']).offset).toBeGreaterThan(convert(cal, 8, 'Y', ['rap']).offset);
+    // More evidence needed: the artist counts for less.
+    expect(Math.abs(calibrate(inputs, w(30)).artists.X!.gap)).toBeLessThan(0.05);
+  });
+
+  it('lets genres explain only what the artist leaves', () => {
+    // Every song is rap: once X and Y are accounted for, rap has nothing left.
+    expect(calibrate(inputs, w(1)).genres.rap!.gap).toBeCloseTo(0, 1);
+  });
+
+  it('converts a new gut rating at once, as the full rebuild would', async () => {
+    // a1 and a2 (Xavier) rated both ways, 1 above their gut; then a3 by gut alone.
+    for (const [id, at] of [['a1', '01'], ['a2', '02']] as const) {
+      insert(db, 'rating', [{ id: `d-${id}`, user_id: 'u-owner', entity_type: 'recording', entity_id: id, depth: 'detailed', gut_score: 7, songwriting: 8, rated_at: `2031-01-${at}T00:00:00.000Z` }]);
+    }
+    await rebuildGutConversions('u-owner');
+    const { addRating } = await import('./ratings');
+    const none = { arrangement: null, sound: null, songwriting: null, lyrics: null, performance: null, originality: null, sequencing: null, cohesion: null, ambition: null };
+    await addRating('u-owner', { entity_type: 'recording', entity_id: 'a3', gut_score: 6, impact: null, impact_note: null, not_applicable: [], ...none });
+    const kept = db.prepare(`SELECT gut_offset FROM gut_conversion WHERE user_id = 'u-owner' AND recording_id = 'a3'`).get() as { gut_offset: number } | undefined;
+    expect(kept).toBeDefined();
+    const full = computeScores(await scoreInputs('u-owner'), await activeWeights('u-owner'));
+    const view = viewScores('v_recording_score', 'recording_id').get('a3')!;
+    expect(view.quality).toBeCloseTo(full.recordings.get('a3')!.quality, 9);
+  });
+
+  it('falls back to the general gap for an artist and genre it has never seen', () => {
+    const cal = calibrate(inputs, w(5));
+    expect(convert(cal, 8, 'Z', ['jazz']).offset).toBeCloseTo(levelGap(cal, 8));
+  });
 });
 
 describe('production split into arrangement and sound', () => {

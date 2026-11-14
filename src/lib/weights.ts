@@ -15,9 +15,13 @@ import {
   type TrackKind,
   type Weights,
 } from './scoring';
+import { genresOfRecordings } from './genres';
 
 /** How far from the rest makes a song an album's odd one out: 10–40 points in fives. */
 export const OUTLIER_GAP_RANGE = { min: 10, max: 40, step: 5 } as const;
+
+/** Songs rated both ways before an artist's, genre's or gut level's own gap counts half: 1–30. */
+export const EVIDENCE_RANGE = { min: 1, max: 30, step: 1 } as const;
 
 /** Axis weights run 0–3 in quarter steps; 0 leaves an axis out. */
 export const AXIS_WEIGHT = { min: 0, max: 3, step: 0.25 } as const;
@@ -41,6 +45,8 @@ export const weightsForm = z
     trim_lowest: z.preprocess((value) => value === 'on' || value === 'true' || value === true, z.boolean()),
     // Points from an album's middle song that make an odd one out (0066).
     outlier_gap: z.coerce.number().int().min(OUTLIER_GAP_RANGE.min).max(OUTLIER_GAP_RANGE.max).multipleOf(OUTLIER_GAP_RANGE.step).default(DEFAULT_WEIGHTS.release.outlier_gap),
+    // Songs rated both ways before a group's own gut gap counts half (0067).
+    evidence: z.coerce.number().int().min(EVIDENCE_RANGE.min).max(EVIDENCE_RANGE.max).default(DEFAULT_WEIGHTS.calibration.evidence),
   })
   .transform((form, ctx): Weights => {
     const value = (key: string) => (form as unknown as Record<string, number>)[key]!;
@@ -55,6 +61,7 @@ export const weightsForm = z
         interlude: form.interlude_share / 100,
         length: form.length_share / 100,
       },
+      calibration: { evidence: form.evidence },
     };
     // With every axis at zero a detailed rating would have no score at all.
     if (CRAFT_KEYS.every((k) => weights.craft[k] === 0)) {
@@ -75,7 +82,12 @@ function legacyCraft(craft: (Partial<Weights['craft']> & { production?: number }
 
 /** A stored payload with the views' defaults filled in, as v_active_weights does. */
 export function withDefaults(payload: unknown): Weights {
-  const p = (payload ?? {}) as { craft?: Partial<Weights['craft']>; album?: Partial<Weights['album']>; release?: Partial<Weights['release']> };
+  const p = (payload ?? {}) as {
+    craft?: Partial<Weights['craft']>;
+    album?: Partial<Weights['album']>;
+    release?: Partial<Weights['release']>;
+    calibration?: Partial<Weights['calibration']>;
+  };
   const trim = p.release?.trim_lowest;
   return {
     craft: { ...DEFAULT_WEIGHTS.craft, ...legacyCraft(p.craft) },
@@ -88,6 +100,7 @@ export function withDefaults(payload: unknown): Weights {
       interlude: p.release?.interlude ?? DEFAULT_WEIGHTS.release.interlude,
       length: p.release?.length ?? DEFAULT_WEIGHTS.release.length,
     },
+    calibration: { evidence: p.calibration?.evidence ?? DEFAULT_WEIGHTS.calibration.evidence },
   };
 }
 
@@ -145,7 +158,14 @@ export async function saveWeights(userId: string, weights: Weights): Promise<num
       JSON.stringify(weights),
     ),
   ]);
+  await reconvert(userId);
   return version;
+}
+
+/** New weights move every gut conversion (gut-calibration.ts): worked out again at once. */
+async function reconvert(userId: string): Promise<void> {
+  const { rebuildGutConversions } = await import('./gut-calibration');
+  await rebuildGutConversions(userId).catch((error) => console.warn('Gut calibration failed', error));
 }
 
 /** Makes an earlier version current again. False if it is not this user's. */
@@ -156,6 +176,7 @@ export async function activateVersion(userId: string, id: string): Promise<boole
     env.DB.prepare(`UPDATE weights SET active = 0 WHERE user_id = ? AND active = 1`).bind(userId),
     env.DB.prepare(`UPDATE weights SET active = 1 WHERE id = ? AND user_id = ?`).bind(id, userId),
   ]);
+  await reconvert(userId);
   return true;
 }
 
@@ -176,29 +197,46 @@ const sample = (r: SampleRow, keys: readonly ((typeof CRAFT_KEYS)[number] | (typ
  * small, since it is one person's ratings. Mirrors the views' choices:
  * latest row per entity, calibration over all history, canonical editions.
  */
-export async function scoreInputs(userId: string): Promise<ScoreInputs> {
-  const [ratings, canonical, tracks] = await env.DB.batch([
+export async function scoreInputs(userId: string, { albums = true }: { albums?: boolean } = {}): Promise<ScoreInputs> {
+  const rated = `SELECT DISTINCT entity_id AS recording_id FROM rating WHERE user_id = ?1 AND entity_type = 'recording'`;
+  const [ratings, tracks, artists, genres, canonical] = await env.DB.batch([
     env.DB.prepare(
-      `SELECT entity_type, entity_id, rated_at, gut_score, impact,
+      // Oldest first, ties by id, as v_gut_calibration and v_latest_rating_axes order them.
+      `SELECT id, entity_type, entity_id, rated_at, gut_score, impact,
               coalesce(arrangement, production) AS arrangement, coalesce(sound, production) AS sound,
               songwriting, lyrics, performance, originality, sequencing, cohesion, ambition
-       FROM rating WHERE user_id = ? ORDER BY rated_at`,
-    ).bind(userId),
-    env.DB.prepare(
-      `SELECT DISTINCT c.release_group_id, t.recording_id
-       FROM v_release_group_canonical c
-       JOIN track t ON t.release_id = c.release_id
-       WHERE EXISTS (SELECT 1 FROM rating r WHERE r.user_id = ? AND r.entity_type = 'recording' AND r.entity_id = t.recording_id)`,
+       FROM rating WHERE user_id = ?1 ORDER BY rated_at, id`,
     ).bind(userId),
     // Kind and length of every rated recording.
     env.DB.prepare(
       `SELECT r.id, r.length_ms, k.kind FROM recording r
        LEFT JOIN recording_kind k ON k.recording_id = r.id
-       WHERE r.id IN (SELECT entity_id FROM rating WHERE user_id = ? AND entity_type = 'recording')`,
+       WHERE r.id IN (${rated})`,
+    ).bind(userId),
+    // Each rated recording's first primary artist, for the gut calibration.
+    env.DB.prepare(
+      `SELECT x.recording_id AS id,
+              (SELECT c.artist_id FROM artist_credit c
+               WHERE c.entity_type = 'recording' AND c.entity_id = x.recording_id AND c.role = 'primary'
+               ORDER BY c.position LIMIT 1) AS artist
+       FROM (${rated}) x`,
+    ).bind(userId),
+    // And its genres.
+    env.DB.prepare(`WITH rated AS (${rated}) ${genresOfRecordings('rated')}`).bind(userId),
+    // Recordings on each album's standard edition (the preview's albums only).
+    env.DB.prepare(
+      albums
+        ? `SELECT DISTINCT c.release_group_id, t.recording_id
+           FROM v_release_group_canonical c
+           JOIN track t ON t.release_id = c.release_id
+           WHERE EXISTS (SELECT 1 FROM rating r WHERE r.user_id = ?1 AND r.entity_type = 'recording' AND r.entity_id = t.recording_id)`
+        : `SELECT NULL AS release_group_id, NULL AS recording_id WHERE ?1 IS NULL`,
     ).bind(userId),
   ]);
 
-  const inputs: ScoreInputs = { calibration: [], recordings: {}, albums: {}, canonical: {}, kinds: {}, lengths: {} };
+  const inputs: ScoreInputs = { calibration: [], recordings: {}, albums: {}, canonical: {}, kinds: {}, lengths: {}, artists: {}, genres: {} };
+  for (const a of (artists!.results ?? []) as { id: string; artist: string | null }[]) if (a.artist) inputs.artists![a.id] = a.artist;
+  for (const g of (genres!.results ?? []) as { recording_id: string; genre_id: string }[]) (inputs.genres![g.recording_id] ??= []).push(g.genre_id);
   for (const t of (tracks!.results ?? []) as { id: string; length_ms: number | null; kind: TrackKind | null }[]) {
     if (t.kind && t.kind !== 'song') inputs.kinds![t.id] = t.kind;
     if (t.length_ms != null) inputs.lengths![t.id] = t.length_ms;
@@ -208,14 +246,14 @@ export async function scoreInputs(userId: string): Promise<ScoreInputs> {
     if (r.entity_type === 'recording') {
       const s = sample(r, CRAFT_KEYS);
       // Only rows with both can ever calibrate, whatever the weights.
-      if (r.gut_score != null && CRAFT_KEYS.some((k) => r[k] != null)) inputs.calibration.push(s);
+      if (r.gut_score != null && CRAFT_KEYS.some((k) => r[k] != null)) inputs.calibration.push({ ...s, recording: r.entity_id });
       inputs.recordings[r.entity_id] = s;
     } else {
       inputs.albums[r.entity_id] = sample(r, ALBUM_KEYS);
     }
   }
-  for (const row of (canonical!.results ?? []) as { release_group_id: string; recording_id: string }[]) {
-    (inputs.canonical[row.release_group_id] ??= []).push(row.recording_id);
+  for (const row of (canonical!.results ?? []) as { release_group_id: string | null; recording_id: string }[]) {
+    if (row.release_group_id) (inputs.canonical[row.release_group_id] ??= []).push(row.recording_id);
   }
   return inputs;
 }

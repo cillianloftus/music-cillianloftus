@@ -22,6 +22,7 @@ import { fillAlbumsFromDiscogs } from './lib/sources/discogs';
 import { checkOfficialReleases } from './lib/official';
 import { nudgeRatings, pushToUser, vapid } from './lib/nudge';
 import { latestBackup, recordNightly, type TaskRun } from './lib/health';
+import { rebuildAllGutConversions, rebuildStaleGutConversions } from './lib/gut-calibration';
 
 /**
  * Checks the library against MusicBrainz's official releases a little at a
@@ -93,6 +94,8 @@ export default {
           // Both are housekeeping; neither failing may hold up the jobs.
           for (const [name, task] of [
             ['Album genre derivation', deriveAlbumGenres],
+            // After the genres: a song's conversion follows its artist and genres.
+            ['Gut score conversions', rebuildAllGutConversions],
             ['Review rules', detectAnomalies],
             ['Artist details', () => enrichArtists({ budgetMs: 20_000 })],
             ['Awards, labels and influences from Wikidata', () => fillArtistsFromWiki({ budgetMs: 15_000 })],
@@ -130,6 +133,8 @@ export default {
         }
         // First, and quick: a nudge for an unrated song playing now (src/lib/nudge.ts).
         await nudgeRatings().catch((error) => console.error('Rating nudges failed', error));
+        // Gut conversions after a detailed rating (src/lib/gut-calibration.ts).
+        await rebuildStaleGutConversions().catch((error) => console.error('Gut calibration failed', error));
         await runJobs({ budgetMs: 50_000 });
         await checkOfficial().catch((error) => console.error('Official release check failed', error));
       })(),

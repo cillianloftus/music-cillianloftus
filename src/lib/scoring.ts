@@ -28,6 +28,11 @@ export interface Weights {
    * outlier_gap: how many points from the album's middle song make a song an odd one out.
    */
   release: { tracks: number; album_axes: number; trim_lowest: boolean; outlier_gap: number; interlude: number; length: number };
+  /**
+   * evidence: how many songs rated both ways a gut level, an artist or a
+   * genre needs before its own gap counts half (src/lib/scoring.ts, calibrate).
+   */
+  calibration: { evidence: number };
 }
 
 /** The defaults the views fall back to for any missing key. */
@@ -35,6 +40,7 @@ export const DEFAULT_WEIGHTS: Weights = {
   craft: { arrangement: 0.5, sound: 0.5, songwriting: 1, lyrics: 1, performance: 1, originality: 1 },
   album: { sequencing: 1, cohesion: 1, ambition: 1 },
   release: { tracks: 0.7, album_axes: 0.3, trim_lowest: true, outlier_gap: 20, interlude: 0.5, length: 0 },
+  calibration: { evidence: 5 },
 };
 
 /** Song is the default and is never stored unless chosen. */
@@ -50,9 +56,21 @@ export interface RatingSample extends AxisValues {
   impact: number | null;
 }
 
+/** A recording rating with a gut score, and which recording it is. */
+export interface CalibrationSample extends RatingSample {
+  recording: string;
+}
+
 export interface ScoreInputs {
-  /** Every recording rating ever made with a gut score: calibration uses all history. */
-  calibration: RatingSample[];
+  /**
+   * Recording ratings with a gut score and track axes, oldest first (ties by
+   * id): each song's latest such row is its pair of gut and detailed score.
+   */
+  calibration: CalibrationSample[];
+  /** Each rated recording's first primary artist. */
+  artists?: Record<string, string>;
+  /** Each rated recording's genres, as v_recording_genre has them. */
+  genres?: Record<string, string[]>;
   /** Latest rating per recording. */
   recordings: Record<string, RatingSample>;
   /** Latest album rating per release group. */
@@ -139,17 +157,129 @@ export const albumComposite = (r: AxisValues, w: Weights) => weightedMean(r, ALB
 
 const clamp = (n: number) => Math.max(0, Math.min(100, n));
 
-/** v_gut_calibration: mean of (craft composite − gut) over rows with both. */
-export function gutOffset(inputs: ScoreInputs, w: Weights): { offset: number; samples: number } {
-  let total = 0;
-  let samples = 0;
+/** Each song's latest pair of gut and detailed score, under these weights. */
+function pairsOf(inputs: ScoreInputs, w: Weights): Map<string, { gut: number; craft: number }> {
+  const pairs = new Map<string, { gut: number; craft: number }>();
   for (const r of inputs.calibration) {
     const craft = craftComposite(r, w);
     if (r.gut == null || craft == null) continue;
-    total += craft - r.gut;
-    samples += 1;
+    pairs.set(r.recording, { gut: r.gut, craft }); // Oldest first: the last one stands.
   }
-  return { offset: samples === 0 ? 0 : total / samples, samples };
+  return pairs;
+}
+
+/**
+ * v_gut_calibration: the mean of (detailed − gut) over songs rated both
+ * ways, each song once (its latest row with both), so a song re-rated
+ * five times does not count five times.
+ */
+export function gutOffset(inputs: ScoreInputs, w: Weights): { offset: number; samples: number } {
+  const pairs = [...pairsOf(inputs, w).values()];
+  const total = pairs.reduce((sum, p) => sum + (p.craft - p.gut), 0);
+  return { offset: pairs.length === 0 ? 0 : total / pairs.length, samples: pairs.length };
+}
+
+/** A group's own gap, with how many songs rated both ways it rests on. */
+export interface CalibrationGroup {
+  gap: number;
+  songs: number;
+}
+
+/**
+ * How a gut score becomes a score (migration 0067): in layers, each
+ * counting by how much evidence it has.
+ *
+ * 1. general: the mean gap (detailed − gut) over every song rated both ways.
+ * 2. levels: the gap at each gut score 0–10, pulled toward the general
+ *    one; a gut 10 can run lower than a gut 6.
+ * 3. artists: what is left over, by the song's artist, pulled toward 0.
+ *    First, so the artist explains all it can: it counts most.
+ * 4. genres: what is left after the artist, by genre, pulled toward 0.
+ *    A Logic song is not counted twice, as Logic and again as hip-hop.
+ *
+ * "Pulled toward": a group with n songs keeps n / (n + evidence) of its own
+ * gap. With evidence 5, an artist with 5 songs counts half; with 45, nine
+ * tenths. Pure.
+ */
+export interface Calibration {
+  general: number;
+  samples: number;
+  /** The gap at gut 0, 1 … 10. */
+  levels: number[];
+  artists: Record<string, CalibrationGroup>;
+  genres: Record<string, CalibrationGroup>;
+}
+
+const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+
+/** The level gap at any gut score, half steps between their neighbours. */
+export function levelGap(cal: Calibration, gut: number): number {
+  const g = Math.max(0, Math.min(10, gut));
+  const lo = Math.floor(g);
+  const hi = Math.ceil(g);
+  return lo === hi ? cal.levels[lo]! : cal.levels[lo]! + (cal.levels[hi]! - cal.levels[lo]!) * (g - lo);
+}
+
+export function calibrate(inputs: ScoreInputs, w: Weights): Calibration {
+  const pairs = pairsOf(inputs, w);
+  const k = w.calibration.evidence;
+  const { offset: general, samples } = gutOffset(inputs, w);
+  const pulled = (sum: number, n: number, toward: number) => (sum + k * toward) / (n + k);
+
+  const byLevel: number[][] = Array.from({ length: 11 }, () => []);
+  for (const p of pairs.values()) byLevel[Math.max(0, Math.min(10, Math.round(p.gut)))]!.push(p.craft - p.gut);
+  const levels = byLevel.map((d) => pulled(d.reduce((a, b) => a + b, 0), d.length, general));
+  const cal: Calibration = { general, samples, levels, artists: {}, genres: {} };
+
+  const group = (sums: Map<string, number[]>): Record<string, CalibrationGroup> =>
+    Object.fromEntries([...sums].map(([key, d]) => [key, { gap: pulled(d.reduce((a, b) => a + b, 0), d.length, 0), songs: d.length }]));
+
+  const afterLevel = new Map([...pairs].map(([id, p]) => [id, p.craft - p.gut - levelGap(cal, p.gut)]));
+  const byArtist = new Map<string, number[]>();
+  for (const [id, r] of afterLevel) {
+    const artist = inputs.artists?.[id];
+    if (artist) (byArtist.get(artist) ?? byArtist.set(artist, []).get(artist)!).push(r);
+  }
+  cal.artists = group(byArtist);
+
+  const byGenre = new Map<string, number[]>();
+  for (const [id, r] of afterLevel) {
+    const artist = inputs.artists?.[id];
+    const left = r - (artist ? (cal.artists[artist]?.gap ?? 0) : 0);
+    for (const genre of new Set(inputs.genres?.[id] ?? [])) (byGenre.get(genre) ?? byGenre.set(genre, []).get(genre)!).push(left);
+  }
+  cal.genres = group(byGenre);
+  return cal;
+}
+
+/** One gut score's conversion, layer by layer: score = 10 × (gut + offset). Pure. */
+export interface Conversion {
+  offset: number;
+  level: number;
+  artist: number;
+  genre: number;
+}
+
+export function convert(cal: Calibration, gut: number, artist: string | undefined, genres: string[] | undefined): Conversion {
+  const level = levelGap(cal, gut);
+  const a = artist ? (cal.artists[artist]?.gap ?? 0) : 0;
+  const known = [...new Set(genres ?? [])].map((g) => cal.genres[g]?.gap).filter((g): g is number => g !== undefined);
+  const genre = known.length ? mean(known) : 0;
+  return { offset: level + a + genre, level, artist: a, genre };
+}
+
+/**
+ * The conversion of every recording whose latest rating is gut only: what
+ * gut_conversion holds (src/lib/gut-calibration.ts) and v_recording_score
+ * adds to the gut score. Pure.
+ */
+export function gutConversions(inputs: ScoreInputs, w: Weights, cal = calibrate(inputs, w)): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const [id, r] of Object.entries(inputs.recordings)) {
+    if (r.gut == null || craftComposite(r, w) != null) continue;
+    out.set(id, convert(cal, r.gut, inputs.artists?.[id], inputs.genres?.[id]).offset);
+  }
+  return out;
 }
 
 /** v_recording_score. Null only for a row with neither axes nor gut. */
@@ -163,13 +293,16 @@ function recordingScore(r: RatingSample, w: Weights, offset: number): Score | nu
 export interface Scores {
   offset: number;
   samples: number;
+  calibration: Calibration;
   recordings: Map<string, Score>;
   albums: Map<string, AlbumScore>;
 }
 
 /** Every recording and album score under the given weights. */
 export function computeScores(inputs: ScoreInputs, w: Weights): Scores {
-  const { offset, samples } = gutOffset(inputs, w);
+  const calibration = calibrate(inputs, w);
+  const { general: offset, samples } = calibration;
+  const conversions = gutConversions(inputs, w, calibration);
 
   const kinds = inputs.kinds ?? {};
   const lengths = inputs.lengths ?? {};
@@ -178,7 +311,7 @@ export function computeScores(inputs: ScoreInputs, w: Weights): Scores {
   const recordings = new Map<string, Score>();
   for (const [id, r] of Object.entries(inputs.recordings)) {
     if (kinds[id] === 'skit') continue;
-    const score = recordingScore(r, w, offset);
+    const score = recordingScore(r, w, conversions.get(id) ?? offset);
     if (score) recordings.set(id, score);
   }
 
@@ -227,7 +360,7 @@ export function computeScores(inputs: ScoreInputs, w: Weights): Scores {
     albums.set(id, { quality, personal: quality + (rating?.impact ?? 0), ratedTracks: qualities.length });
   }
 
-  return { offset, samples, recordings, albums };
+  return { offset, samples, calibration, recordings, albums };
 }
 
 /** Ids ordered best first, ties broken by id so the order is stable. */

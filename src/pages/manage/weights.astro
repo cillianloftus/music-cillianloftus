@@ -15,7 +15,9 @@ import CreditLine from '../../components/CreditLine.astro';
 import { releaseGroupsByIds, type CreditPart } from '../../lib/catalogue';
 import { hydrateTracks } from '../../lib/query/run';
 import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, computeScores, rank, type Weights } from '../../lib/scoring';
-import { AXIS_WEIGHT, OUTLIER_GAP_RANGE, scoreInputs, weightsForm, weightsVersions } from '../../lib/weights';
+import { AXIS_WEIGHT, EVIDENCE_RANGE, OUTLIER_GAP_RANGE, scoreInputs, weightsForm, weightsVersions } from '../../lib/weights';
+
+const evidenceLabel = (n: number) => `${n} ${n === 1 ? 'song' : 'songs'}`;
 
 const user = Astro.locals.user!;
 const params = Astro.url.searchParams;
@@ -109,6 +111,7 @@ function describe(w: Weights): string {
   const extra = [
     w.release.length > 0 && `length ${Math.round(w.release.length * 100)}%`,
     w.release.interlude !== 0.5 && `interludes ${Math.round(w.release.interlude * 100)}%`,
+    w.calibration.evidence !== DEFAULT_WEIGHTS.calibration.evidence && `gut evidence ${w.calibration.evidence} songs`,
   ].filter(Boolean);
   return [...axes, blend, w.release.trim_lowest ? `odd songs out left out (${w.release.outlier_gap} points)` : 'every track counted', ...extra].join(', ');
 }
@@ -222,10 +225,30 @@ const clientData = {
           </div>
         </fieldset>
 
-        <p class="calibration" id="calibration">
-          Gut offset <strong class="tabular" data-offset>{scores.offset >= 0 ? '+' : '−'}{Math.abs(scores.offset).toFixed(2)}</strong>
-          {' '}<span class="muted">from <span data-samples>{scores.samples}</span> ratings with both a gut score and track axes</span>
-        </p>
+        <fieldset>
+          <legend>Gut scores</legend>
+          <div class="slider slider--stacked">
+            <label for="evidence">Evidence before an artist or genre counts half</label>
+            <output for="evidence" id="evidence-value" class="tabular">{evidenceLabel(preview.calibration.evidence)}</output>
+            <input
+              type="range"
+              id="evidence"
+              name="evidence"
+              min={EVIDENCE_RANGE.min}
+              max={EVIDENCE_RANGE.max}
+              step={EVIDENCE_RANGE.step}
+              value={preview.calibration.evidence}
+              aria-describedby="evidence-hint"
+            />
+            <span class="hint" id="evidence-hint">
+              A gut score converts by the gap between your gut and detailed scores: overall, at that gut score, for the artist, then for the genres. Each counts by how many songs you rated both ways: lower trusts a little evidence sooner.
+            </span>
+          </div>
+          <p class="calibration" id="calibration">
+            Overall <strong class="tabular" data-offset>{scores.offset >= 0 ? '+' : '−'}{Math.abs(scores.offset).toFixed(2)}</strong>
+            {' '}<span class="muted">from <span data-samples>{scores.samples}</span> songs rated both ways</span>
+          </p>
+        </fieldset>
 
         <div class="buttons">
           <button class="button" type="submit" data-preview>Preview</button>
@@ -372,6 +395,7 @@ const clientData = {
         interlude: number('interlude_share') / 100,
         length: number('length_share') / 100,
       },
+      calibration: { evidence: number('evidence') },
     };
   }
 
@@ -393,7 +417,9 @@ const clientData = {
               ? n === 100 ? 'as a song' : n === 0 ? 'not at all' : `${n}% of a song`
               : input.name === 'outlier_gap'
                 ? `${n} points`
-                : `×${input.value}`;
+                : input.name === 'evidence'
+                  ? `${n} ${n === 1 ? 'song' : 'songs'}`
+                  : `×${input.value}`;
     }
 
     const weights = read();

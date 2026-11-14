@@ -123,6 +123,16 @@ export async function addRating(userId: string, input: RatingInput): Promise<str
       .bind(input.entity_id, userId)
       .run();
   }
+  // The gut conversion (gut-calibration.ts): a gut-only song gets its own at
+  // once; a detailed one may move the calibration, worked out next minute.
+  // Never the save's failure: a song without one uses the general gap.
+  if (input.entity_type === 'recording') {
+    const calibration = await import('./gut-calibration');
+    await (depth === 'gut' && input.gut_score !== null
+      ? calibration.convertOne(userId, input.entity_id, input.gut_score)
+      : calibration.markStale(userId)
+    ).catch((error) => console.warn('Gut conversion failed', error));
+  }
   return id;
 }
 

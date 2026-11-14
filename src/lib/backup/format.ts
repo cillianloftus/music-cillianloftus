@@ -42,7 +42,9 @@ export function isExcluded(table: string): boolean {
     // Pasted API keys: secrets too.
     table === 'connection_secret' ||
     // A device's push keys: tied to that browser, useless restored elsewhere.
-    table === 'push_subscription'
+    table === 'push_subscription' ||
+    // Worked out from the ratings (gut-calibration.ts), and again each night.
+    table === 'gut_conversion'
   );
 }
 
