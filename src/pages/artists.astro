@@ -1,5 +1,5 @@
 ---
-import { pictureAt, pictureSrcset } from '../lib/pictures';
+import { pictureAt } from '../lib/pictures';
 import Segmented from '../components/Segmented.astro';
 /**
  * Every artist at once: a wall of faces, filed A to Z (or by how much is
@@ -19,7 +19,14 @@ const requested = Astro.url.searchParams.get('sort');
 const SORT_KEYS: RosterSort[] = ['score', 'rated', 'releases', 'recent', 'name'];
 const sort: RosterSort = SORT_KEYS.includes(requested as RosterSort) ? (requested as RosterSort) : 'score';
 // Kept per library state, once for every order: it groups every credit, and changes only when the library does.
-const artists = sortRoster(await byLibrary('roster:v2', viewerId, () => roster(viewerId)), sort);
+const everyone = await byLibrary('roster:v2', viewerId, () => roster(viewerId));
+// The wall is artists with something here: releases of their own, or rated
+// tracks. Those only credited on others' tracks (a producer, a guest) are
+// found by search; on the wall they were 978 of 2,205 faces with nothing to say.
+const artists = sortRoster({ ...everyone, artists: everyone.artists.filter((a) => a.releases > 0 || a.rated > 0) }, sort);
+const creditedOnly = everyone.artists.length - artists.length;
+// Faces are one size (320 px): never wider than 10rem, so that covers twice the
+// pixels. A full srcset on each of a thousand faces was 420 KB of the page.
 
 // Letters earn their place once the wall is long; a short list is one grid.
 const LETTERS_FROM = 40;
@@ -90,7 +97,7 @@ const meta = (a: RosterArtist) =>
                   <a class="card" href={`/artist/${a.id}`}>
                     <span class="face">
                       {a.image_key ? (
-                        <img src={pictureAt(a.image_key, 320)} srcset={pictureSrcset(a.image_key)} sizes="(min-width: 40rem) 10rem, 45vw" alt="" loading={i < 12 ? 'eager' : 'lazy'} decoding="async" width="240" height="240" />
+                        <img src={pictureAt(a.image_key, 320)} alt="" loading={i < 12 ? 'eager' : 'lazy'} decoding="async" width="240" height="240" />
                       ) : a.art_key ? (
                         <CoverArt artKey={a.art_key} title={a.name} sizes="10rem" />
                       ) : (
@@ -123,6 +130,12 @@ const meta = (a: RosterArtist) =>
         </section>
       ))
     }
+
+    {creditedOnly > 0 && (
+      <p class="muted credited">
+        And {creditedOnly.toLocaleString('en-GB')} more only credited on others’ tracks, found by <a href="/search">search</a>.
+      </p>
+    )}
   </div>
 </Base>
 
@@ -303,5 +316,9 @@ const meta = (a: RosterArtist) =>
     .face {
       transition: none;
     }
+  }
+
+  .credited {
+    font-size: var(--step--1);
   }
 </style>
