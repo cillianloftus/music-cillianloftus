@@ -59,11 +59,12 @@ const [albums, appearances, { tracks: topTracks, total: trackTotal }, collaborat
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 const takings = (a: SampledArtist) =>
   a.samples && a.interpolations ? plural(a.samples + a.interpolations, 'song') : a.samples ? plural(a.samples, 'sample') : plural(a.interpolations, 'interpolation');
-const asPeople = (list: SampledArtist[]) =>
+// Each leads to the songs between the two (artist/[id]/samples.astro).
+const asPeople = (list: SampledArtist[], way: 'from' | 'by') =>
   list.map((a) => ({
     name: a.name,
-    href: a.id ? `/artist/${a.id}` : a.url,
-    external: !a.id,
+    href: `/artist/${id}/samples?${new URLSearchParams({ [way]: a.name })}`,
+    external: false,
     note: takings(a),
     title: a.samples && a.interpolations ? `${plural(a.samples, 'sample')}, ${plural(a.interpolations, 'interpolation')}` : undefined,
   }));
@@ -625,13 +626,13 @@ import { splitVersion } from '../../lib/versions';
           {sampling.takesFrom.length > 0 && (
             <div>
               <h3>Takes from</h3>
-              <PeoplePills people={asPeople(sampling.takesFrom)} label="Artists they sample" />
+              <PeoplePills people={asPeople(sampling.takesFrom, 'from')} label="Artists they sample" />
             </div>
           )}
           {sampling.takenBy.length > 0 && (
             <div>
               <h3>Taken up by</h3>
-              <PeoplePills people={asPeople(sampling.takenBy)} label="Artists who sample them" />
+              <PeoplePills people={asPeople(sampling.takenBy, 'by')} label="Artists who sample them" />
             </div>
           )}
         </section>

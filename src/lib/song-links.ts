@@ -144,3 +144,72 @@ export function bySongs(rows: SamplingRow[], limit: number): SampledArtist[] {
     .sort((a, b) => b.samples + b.interpolations - (a.samples + a.interpolations) || a.name.localeCompare(b.name))
     .slice(0, limit);
 }
+
+/** One song taking from another: a sample or an interpolation. */
+export interface SamplePair {
+  kind: 'samples' | 'interpolates';
+  /** The song doing the taking. */
+  song: { title: string; artist: string; year: number | null; url: string; recording_id: string | null };
+  /** The song taken from. */
+  source: { title: string; artist: string; year: number | null; url: string; recording_id: string | null };
+  /** A cover for the song doing the taking, when the library has it. */
+  art_key: string | null;
+}
+
+/**
+ * Every pair between an artist's songs and one other artist's, one way:
+ * "takes" for what their songs take from the other (Young Sinatra's songs
+ * sampling Logic), otherwise what the other's songs take from theirs. Behind
+ * the pills under Samples on an artist page. Newest first.
+ */
+export async function samplingWith(artistId: string, other: string, takes: boolean): Promise<SamplePair[]> {
+  // Their side and the other side of each link, by which end their song is on.
+  const [mine, theirs] = takes ? ['song', 'source'] : ['source', 'song'];
+  const { results } = await env.DB.prepare(
+    `WITH mine AS (
+       SELECT r.genius_url AS url, min(r.id) AS id
+       FROM artist_credit c JOIN recording r ON r.id = c.entity_id
+       WHERE c.entity_type = 'recording' AND c.artist_id = ?1 AND c.role IN ('primary', 'featured') AND r.genius_url IS NOT NULL
+       GROUP BY r.genius_url
+     )
+     SELECT l.kind,
+            l.song_title, l.song_artist, l.song_year, l.song_url,
+            l.source_title, l.source_artist, l.source_year, l.source_url,
+            mine.id AS mine_id,
+            (SELECT min(r.id) FROM recording r WHERE r.genius_url = l.${theirs}_url) AS theirs_id,
+            (SELECT x.art_key FROM track t JOIN release x ON x.id = t.release_id
+             WHERE t.recording_id = ${takes ? 'mine.id' : '(SELECT min(r.id) FROM recording r WHERE r.genius_url = l.song_url)'} AND x.art_key IS NOT NULL LIMIT 1) AS art_key
+     FROM mine JOIN song_link l ON l.${mine}_url = mine.url
+     WHERE l.${theirs}_artist = ?2 COLLATE NOCASE`,
+  )
+    .bind(artistId, other)
+    .all<{
+      kind: SamplePair['kind'];
+      song_title: string;
+      song_artist: string;
+      song_year: number | null;
+      song_url: string;
+      source_title: string;
+      source_artist: string;
+      source_year: number | null;
+      source_url: string;
+      mine_id: string;
+      theirs_id: string | null;
+      art_key: string | null;
+    }>();
+  const seen = new Set<string>();
+  return results
+    .filter((r) => {
+      const key = `${r.kind}|${r.song_url}|${r.source_url}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((r) => ({
+      kind: r.kind,
+      song: { title: r.song_title, artist: r.song_artist, year: r.song_year, url: r.song_url, recording_id: takes ? r.mine_id : r.theirs_id },
+      source: { title: r.source_title, artist: r.source_artist, year: r.source_year, url: r.source_url, recording_id: takes ? r.theirs_id : r.mine_id },
+      art_key: r.art_key,
+    }))
+    .sort((a, b) => (b.song.year ?? 0) - (a.song.year ?? 0) || a.song.title.localeCompare(b.song.title));
+}

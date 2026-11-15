@@ -102,6 +102,19 @@ describe('an artist’s samples', () => {
     // Their link is one of their songs that was taken.
     expect(sampling.takesFrom).toEqual([{ name: 'Old Band', id: null, url: expect.stringMatching(/Old-(break|hook)/), samples: 1, interpolations: 1 }]);
     expect(sampling.takenBy.map((a) => [a.name, a.id])).toEqual([['Yolanda', 'art-y']]);
+
+    // Behind each pill, the songs between the two, either way.
+    const { samplingWith } = await import('./song-links');
+    const from = await samplingWith('art-x', 'old band', true);
+    expect(from.map((p) => [p.kind, p.song.recording_id, p.source.title])).toEqual(
+      expect.arrayContaining([
+        ['samples', 'a1', 'Break'],
+        ['interpolates', 'a1', 'Hook'],
+      ]),
+    );
+    expect(from).toHaveLength(2);
+    const by = await samplingWith('art-x', 'Yolanda', false);
+    expect(by.map((p) => [p.song.title, p.song.recording_id, p.source.recording_id])).toEqual([['Song C1', 'c1', 'a1']]);
   });
 
   it('puts both kinds together per artist, most songs first, whatever the case of the name', () => {

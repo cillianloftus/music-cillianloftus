@@ -1,0 +1,91 @@
+---
+/**
+ * The songs behind one pill under Samples on an artist page: ?from=Logic
+ * lists their songs that take from Logic's, ?by=Logic the songs of
+ * Logic's that take from theirs. Each pair names what is taken; songs in
+ * the library lead to their track pages, others to Genius.
+ */
+import Base from '../../../layouts/Base.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import BackLink from '../../../components/BackLink.astro';
+import RowList from '../../../components/RowList.astro';
+import MediaRow from '../../../components/MediaRow.astro';
+import EmptyState from '../../../components/EmptyState.astro';
+import { artist as artistById } from '../../../lib/catalogue';
+import { samplingWith, type SamplePair } from '../../../lib/song-links';
+
+const id = Astro.params.id!;
+const from = Astro.url.searchParams.get('from');
+const by = Astro.url.searchParams.get('by');
+const other = (from ?? by ?? '').trim();
+const found = await artistById(id);
+if (!found || !other) return Astro.rewrite('/404');
+const takes = Boolean(from);
+const pairs = await samplingWith(id, other, takes);
+
+// "sample", "interpolate", or both: "take from".
+const kinds = new Set(pairs.map((p) => p.kind));
+const verb = kinds.size === 1 ? (kinds.has('samples') ? 'sample' : 'interpolate') : 'take from';
+const title = takes ? `${found.name} songs that ${verb} ${other}` : `${other} songs that ${verb} ${found.name}`;
+const href = (side: SamplePair['song']) => (side.recording_id ? `/track/${side.recording_id}` : side.url);
+// One row per song doing the taking, with everything it takes beneath
+// ("Warm It Up" samples six of Logic's).
+const songs = [...Map.groupBy(pairs, (p) => p.song.url).values()].map((group) => ({
+  song: group[0]!.song,
+  art_key: group.find((p) => p.art_key)?.art_key ?? null,
+  samples: group.filter((p) => p.kind === 'samples').map((p) => p.source),
+  interpolates: group.filter((p) => p.kind === 'interpolates').map((p) => p.source),
+}));
+---
+
+<Base title={title}>
+  <div class="wrap page">
+    <BackLink href={`/artist/${id}`}>{found.name}</BackLink>
+    <PageHeader title={title} count={songs.length || null} />
+    {
+      songs.length === 0 ? (
+        <EmptyState plain>Nothing found between these two.</EmptyState>
+      ) : (
+        <RowList label={title}>
+          {songs.map((s) => (
+            <MediaRow href={href(s.song)} title={s.song.title} artKey={s.art_key} artTitle={s.song.title}>
+              {(['samples', 'interpolates'] as const).map(
+                (kind) =>
+                  s[kind].length > 0 && (
+                    <span class="takes">
+                      {kind}{' '}
+                      {s[kind].map((source, i) => (
+                        <>
+                          {i > 0 && ', '}
+                          <a href={href(source)} rel={source.recording_id ? undefined : 'external noopener'}>
+                            {source.title}
+                          </a>
+                          {source.year && <span class="year"> ({source.year})</span>}
+                        </>
+                      ))}
+                    </span>
+                  ),
+              )}
+            </MediaRow>
+          ))}
+        </RowList>
+      )
+    }
+  </div>
+</Base>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-4);
+    --content-max: 44rem;
+  }
+
+  .takes {
+    display: block;
+  }
+
+  .year {
+    color: var(--text-subtle);
+  }
+</style>
