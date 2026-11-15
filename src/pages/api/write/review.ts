@@ -17,6 +17,11 @@ export const POST: APIRoute = async ({ request, redirect }) => {
   const back = (params: Record<string, string>) => {
     if (json) return Response.json({ ok: !params.error, ...params }, { status: params.error ? 400 : 200 });
     const query = new URLSearchParams(kind ? { kind, ...params } : params);
+    // Back to the same narrowing: one artist, a search.
+    for (const key of ['artist', 'q']) {
+      const value = form.get(key)?.toString();
+      if (value) query.set(key, value);
+    }
     return redirect(`/manage/review?${query}`, 303);
   };
 

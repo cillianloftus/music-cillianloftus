@@ -12,7 +12,8 @@ import PageHeader from '../../components/PageHeader.astro';
 import CoverArt from '../../components/CoverArt.astro';
 import { missingInfo } from '../../lib/gaps';
 import { byLibrary } from '../../lib/library-cache';
-import { linkableVersions, matchingAlbumPairs, matchingTrackPairs, openAnomalies, openCounts, reviewEntities, type Anomaly, type AnomalyKind } from '../../lib/review';
+import { linkableVersions, matchingAlbumPairs, matchingTrackPairs, openCounts, reviewEntities, type Anomaly, type AnomalyKind } from '../../lib/review';
+import { reviewQueue } from '../../lib/review-queue';
 
 const PAGE = 25;
 /** The order they are offered in: the quick, important ones first. */
@@ -79,7 +80,19 @@ const kinds = ORDER.filter((k) => (counts.get(k)?.open ?? 0) > 0);
 const asked = params.get('kind');
 const showGaps = asked === 'missing';
 const kind = (showGaps ? null : (kinds.find((k) => k === asked) ?? kinds[0])) ?? null;
-const items = kind ? await openAnomalies(kind, PAGE) : [];
+// What you care about first (review-queue.ts): items about music you have
+// rated, then by the artists you have rated most; narrowed to one artist
+// (the pills) or by a search, carried from kind to kind.
+const artist = params.get('artist') || null;
+const q = params.get('q')?.trim() || null;
+const queue = kind ? await reviewQueue(kind, Astro.locals.user?.id ?? null, { artist, q }, PAGE) : null;
+const items = queue?.items ?? [];
+const link = (over: Record<string, string | null>) => {
+  const next = new URLSearchParams();
+  const all = { kind, q, artist, ...over };
+  for (const [k, v] of Object.entries(all)) if (v) next.set(k, v);
+  return `/manage/review?${next}`;
+};
 const [entities, gaps, matching] = await Promise.all([
   reviewEntities(items),
   // Kept per state of the library (and ratings, which order it): the
@@ -159,7 +172,7 @@ const SOURCES: Record<string, string> = {
       (kinds.length > 0 || gaps.length > 0) && (
         <nav class="kinds" aria-label="Kinds of item">
           {kinds.map((k) => (
-            <a href={`/manage/review?kind=${k}`} aria-current={k === kind ? 'page' : undefined}>
+            <a href={link({ kind: k })} aria-current={k === kind ? 'page' : undefined}>
               {KINDS[k].tab} <span class="n tabular">{counts.get(k)!.open}</span>
             </a>
           ))}
@@ -181,6 +194,39 @@ const SOURCES: Record<string, string> = {
             {KINDS[kind].tab}
           </h2>
           <p class="muted explain">{KINDS[kind].explain}</p>
+
+          <div class="narrow">
+            <form method="get" action="/manage/review" class="search" role="search">
+              <input type="hidden" name="kind" value={kind} />
+              <label for="review-q" class="visually-hidden">Search these by title or artist</label>
+              <input id="review-q" name="q" type="search" value={q ?? ''} placeholder="Search by title or artist" autocomplete="off" />
+              <button class="button" type="submit">Search</button>
+              {(q || artist) && (
+                <a class="button button--quiet" href={link({ q: null, artist: null })}>
+                  Clear
+                </a>
+              )}
+            </form>
+            {queue && queue.pills.length > 1 && (
+              <nav class="pills" aria-label="By artist">
+                <a href={link({ artist: null })} aria-current={!artist ? 'true' : undefined}>
+                  Everyone
+                </a>
+                {queue.pills.map((p) => (
+                  <a href={link({ artist: p.id === artist ? null : p.id })} aria-current={p.id === artist ? 'true' : undefined}>
+                    {p.name} <span class="n tabular">{p.count}</span>
+                  </a>
+                ))}
+              </nav>
+            )}
+            {queue && (q || artist) && (
+              <p class="muted small" role="status">
+                {queue.matched === 0
+                  ? 'Nothing here matches.'
+                  : `${queue.matched} ${queue.matched === 1 ? 'item' : 'items'}${queue.artistName ? ` by ${queue.artistName}` : ''}${q ? ` matching “${q}”` : ''}.`}
+              </p>
+            )}
+          </div>
 
           {matching.length > 0 && (
             <form method="post" action="/api/write/review" class="bulk" data-bulk>
@@ -262,6 +308,8 @@ const SOURCES: Record<string, string> = {
                   <form method="post" action="/api/write/review" class="actions" data-row>
                     <input type="hidden" name="id" value={a.id} />
                     <input type="hidden" name="kind" value={kind} />
+                    {artist && <input type="hidden" name="artist" value={artist} />}
+                    {q && <input type="hidden" name="q" value={q} />}
                     {a.kind === 'version_of_recording' ? (
                       <>
                         <button class="button button--primary" type="submit" name="intent" value="link_work">
@@ -317,9 +365,9 @@ const SOURCES: Record<string, string> = {
               );
             })}
           </ul>
-          {(counts.get(kind)?.open ?? 0) > items.length && (
+          {(queue?.matched ?? 0) > items.length && (
             <p class="muted small more">
-              {(counts.get(kind)?.open ?? 0) - items.length} more after these. The next ones load as you clear this page.
+              {(queue?.matched ?? 0) - items.length} more after these. The next ones load as you clear this page.
             </p>
           )}
         </section>
@@ -469,6 +517,60 @@ const SOURCES: Record<string, string> = {
   .group {
     display: grid;
     gap: var(--space-4);
+  }
+
+  /* Narrowing the list: a search, then the artists most worth working through. */
+  .narrow {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .narrow p {
+    margin: 0;
+  }
+
+  .search {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .search input {
+    flex: 1 1 14rem;
+    min-width: 0;
+    min-height: var(--target);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    color: var(--text);
+    font: inherit;
+  }
+
+  .pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .pills a {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 2.25rem;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .pills a[aria-current='true'] {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface-1));
+    color: var(--text);
   }
 
   .explain {

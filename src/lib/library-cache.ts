@@ -135,6 +135,15 @@ export async function byScores<T>(name: string, userId: string | null, work: () 
 }
 
 /**
+ * The value under name for a stamp the caller reads itself, when neither
+ * the library nor the scores is the right thing to follow: the review
+ * queue's index moves only when new items are raised (anomaly rowids).
+ */
+export function byStamp<T>(name: string, stamp: string, work: () => Promise<T>): Promise<T> {
+  return keptOrWorkedOut(`stamp:${BUILD}:${name}:${stamp}`, 2, work);
+}
+
+/**
  * The value under name for this hour (UTC) and the genre tree's version:
  * for whole-library readings of genres, which a discography import would
  * otherwise void every few seconds, but which a change to the tree (a
