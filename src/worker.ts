@@ -138,11 +138,12 @@ export default {
         await nudgeRatings().catch((error) => console.error('Rating nudges failed', error));
         // Gut conversions after a detailed rating (src/lib/gut-calibration.ts).
         await rebuildStaleGutConversions().catch((error) => console.error('Gut calibration failed', error));
-        // Up to four minutes: one run holds the lease (runner.ts), so the next
-        // minutes' ticks step aside rather than overlap, and the queue is not
-        // left idle between ticks. An import is mostly waiting on MusicBrainz,
-        // so this is little CPU.
-        await runJobs({ budgetMs: 240_000 });
+        // Up to eleven minutes (an import started near the end still ends
+        // inside a cron run's fifteen): one run holds the lease (runner.ts), so the
+        // next minutes' ticks step aside rather than overlap. At four, the
+        // queue sat idle between one run's end and the next tick's start.
+        // An import is mostly waiting on MusicBrainz, so this is little CPU.
+        await runJobs({ budgetMs: 11 * 60_000 });
         await checkOfficial().catch((error) => console.error('Official release check failed', error));
       })(),
     );

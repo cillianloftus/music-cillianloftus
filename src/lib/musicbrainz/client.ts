@@ -34,7 +34,12 @@ const BASE = 'https://musicbrainz.org/ws/2';
 const USER_AGENT = 'music-cillianloftus/0.1 ( https://music.cillianloftus.com )';
 const MIN_INTERVAL_MS = 1100;
 const MAX_INTERVAL_MS = 5000;
-const MAX_ATTEMPTS = 4;
+/**
+ * Tries before a 503 is given up on. Refused, an import used to go to the
+ * back of the queue and its work so far was lost; the next one met the
+ * same refusal. Waiting longer here (2, 4, 8, 16, 16 s) costs less.
+ */
+const MAX_ATTEMPTS = 6;
 
 /** The earliest time the next request may start. */
 let nextSlot = 0;
@@ -71,9 +76,37 @@ export class MusicBrainzError extends Error {
   }
 }
 
+/**
+ * Answers kept a few minutes, by address: an import asks for a release and
+ * its group, and straight after, the pass for what it does not take
+ * (musicbrainz-more.ts) asked for the same two again. With one request a
+ * second the most MusicBrainz allows, every one saved is a second or more
+ * off each import. Kept as text, so no caller can change another's copy.
+ */
+const recent = new Map<string, { at: number; text: string }>();
+const RECENT_MS = 10 * 60_000;
+const RECENT_MAX = 24;
+
+function remembered(url: string): string | null {
+  const hit = recent.get(url);
+  if (!hit) return null;
+  if (Date.now() - hit.at > RECENT_MS) {
+    recent.delete(url);
+    return null;
+  }
+  return hit.text;
+}
+
+function remember(url: string, text: string): void {
+  recent.set(url, { at: Date.now(), text });
+  while (recent.size > RECENT_MAX) recent.delete(recent.keys().next().value!);
+}
+
 async function get<T>(path: string, inc: string[]): Promise<T> {
   const separator = path.includes('?') ? '&' : '?';
   const url = `${BASE}/${path}${separator}fmt=json${inc.length ? `&inc=${inc.join('+')}` : ''}`;
+  const kept = remembered(url);
+  if (kept !== null) return JSON.parse(kept) as T;
 
   for (let attempt = 1; ; attempt++) {
     const response = await throttle(() =>
@@ -81,12 +114,14 @@ async function get<T>(path: string, inc: string[]): Promise<T> {
     );
     if (response.ok) {
       interval = Math.max(MIN_INTERVAL_MS, interval - 250);
-      return (await response.json()) as T;
+      const text = await response.text();
+      remember(url, text);
+      return JSON.parse(text) as T;
     }
 
     if (response.status === 503) interval = Math.min(MAX_INTERVAL_MS, interval * 2);
     if (response.status === 503 && attempt < MAX_ATTEMPTS) {
-      await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt));
+      await new Promise((resolve) => setTimeout(resolve, 1000 * Math.min(16, 2 ** attempt)));
       continue;
     }
     if (response.status === 404) throw new MusicBrainzError(`Not found on MusicBrainz: ${path}`, 404);
@@ -94,39 +129,48 @@ async function get<T>(path: string, inc: string[]): Promise<T> {
   }
 }
 
+/**
+ * Everything asked of a release, by the import and by the pass for what
+ * it does not take (src/lib/sources/musicbrainz-more.ts: each track's
+ * genres and rating, cover and live marks, catalogue numbers), in one
+ * request: the same address, so the second is answered from memory.
+ */
+const RELEASE_INC = [
+  'artist-credits',
+  'labels',
+  'recordings',
+  'release-groups',
+  'isrcs',
+  // Credits: artist relationships on the release and on each recording,
+  // and writers via each recording's work.
+  'artist-rels',
+  'recording-level-rels',
+  'work-rels',
+  'work-level-rels',
+  'genres',
+  'ratings',
+];
+
+/** The same for a release group: its artists and genres, and the lists and series it is in. */
+const GROUP_INC = ['artist-credits', 'genres', 'series-rels'];
+
 /** A release with everything an import needs, in one request. */
 export function getRelease(mbid: string): Promise<MbRelease> {
-  return get<MbRelease>(`release/${mbid}`, [
-    'artist-credits',
-    'labels',
-    'recordings',
-    'release-groups',
-    'isrcs',
-    // Credits: artist relationships on the release and on each recording,
-    // and writers via each recording's work.
-    'artist-rels',
-    'recording-level-rels',
-    'work-rels',
-    'work-level-rels',
-  ]);
+  return get<MbRelease>(`release/${mbid}`, RELEASE_INC);
 }
 
-/**
- * A release with what the import does not take (src/lib/sources/musicbrainz-more.ts):
- * each track's genres and rating, cover and live marks on its song, the
- * labels with catalogue numbers, the album's rating.
- */
+/** A release with what the import does not take: the same request as getRelease, so usually from memory. */
 export function getReleaseMore<T>(mbid: string): Promise<T> {
-  return get<T>(`release/${mbid}`, ['recordings', 'labels', 'genres', 'ratings', 'release-groups', 'recording-level-rels', 'work-rels', 'artist-rels']);
+  return get<T>(`release/${mbid}`, RELEASE_INC);
 }
 
-/** The lists and series an album is part of. */
+/** The lists and series an album is part of: the same request as getReleaseGroup. */
 export function getReleaseGroupSeries<T>(mbid: string): Promise<T> {
-  return get<T>(`release-group/${mbid}`, ['series-rels']);
+  return get<T>(`release-group/${mbid}`, GROUP_INC);
 }
 
 export function getReleaseGroup(mbid: string): Promise<MbReleaseGroup> {
-  return get<MbReleaseGroup>(`release-group/${mbid}`, ['artist-credits', 'genres']);
+  return get<MbReleaseGroup>(`release-group/${mbid}`, GROUP_INC);
 }
 
 const BROWSE_PAGE = 100;

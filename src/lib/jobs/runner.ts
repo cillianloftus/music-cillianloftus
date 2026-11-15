@@ -29,7 +29,19 @@ import { MusicBrainzError } from '../musicbrainz/client';
  * 32 s; a big one gets longer each time round), or MusicBrainz refusing it
  * through all its own retries. After MAX_TRIES it fails, so it can be seen.
  */
-const STALL_MS = 45_000;
+const STALL_MS = 120_000;
+/**
+ * Never longer than this, however many tries: under the 6 minutes after
+ * which claimNext takes a running job for a dead one (queue.ts).
+ *
+ * At 45 s (15 Nov) more than half of all imports were given up on: when
+ * MusicBrainz slows the address the Worker shares, an import takes a
+ * minute; given up, it went on in the background beside the next one,
+ * both slower for it, and more were given up. 48 sent back in an hour
+ * against 38 done.
+ */
+const STALL_CAP_MS = 5 * 60_000;
+const stallFor = (attempts: number) => Math.min(STALL_CAP_MS, STALL_MS * Math.max(1, attempts));
 const MAX_TRIES = 6;
 /** Refused this many times running, MusicBrainz is down or throttling hard: the run stops. */
 const REFUSALS_TO_STOP = 3;
@@ -274,7 +286,7 @@ async function work(deadline: number, token: string): Promise<number> {
     const job = await claimNext();
     if (!job) break;
     // Held for as long as this job may run before it counts as stalled.
-    await lease(token, STALL_MS * Math.max(1, job.attempts) + 15_000);
+    await lease(token, stallFor(job.attempts) + 15_000);
 
     const handler = handlers[job.kind];
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -286,7 +298,7 @@ async function work(deadline: number, token: string): Promise<number> {
       running.catch((error) => console.warn(`Job ${job.id} ended after it was moved on from`, error));
       const outcome = await Promise.race([
         running,
-        new Promise<typeof STALLED>((resolve) => (timer = setTimeout(() => resolve(STALLED), STALL_MS * Math.max(1, job.attempts)))),
+        new Promise<typeof STALLED>((resolve) => (timer = setTimeout(() => resolve(STALLED), stallFor(job.attempts)))),
       ]);
       if (outcome === STALLED) {
         if (job.attempts < MAX_TRIES) {
