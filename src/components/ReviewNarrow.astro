@@ -1,0 +1,109 @@
+---
+/**
+ * Narrowing a Review list: a search over titles and artists, then pills
+ * for the artists most worth working through (src/lib/review-queue.ts,
+ * narrow). Every tab of the Review page that lists things has it.
+ */
+import type { ReviewQueue } from '../lib/review-queue';
+
+interface Props {
+  kind: string;
+  q: string | null;
+  artist: string | null;
+  /** What the narrowing found: its pills, how many match, the artist's name. */
+  found: Pick<ReviewQueue<unknown>, 'pills' | 'matched' | 'artistName'> | null;
+  /** The page's address with some of kind, q and artist changed. */
+  link: (over: Record<string, string | null>) => string;
+}
+
+const { kind, q, artist, found, link } = Astro.props;
+---
+
+<div class="narrow">
+  <form method="get" action="/manage/review" class="search" role="search">
+    <input type="hidden" name="kind" value={kind} />
+    <label for="review-q" class="visually-hidden">Search these by title or artist</label>
+    <input id="review-q" name="q" type="search" value={q ?? ''} placeholder="Search by title or artist" autocomplete="off" />
+    <button class="button" type="submit">Search</button>
+    {(q || artist) && (
+      <a class="button button--quiet" href={link({ q: null, artist: null })}>
+        Clear
+      </a>
+    )}
+  </form>
+  {found && found.pills.length > 1 && (
+    <nav class="pills" aria-label="By artist">
+      <a href={link({ artist: null })} aria-current={!artist ? 'true' : undefined}>
+        Everyone
+      </a>
+      {found.pills.map((p) => (
+        <a href={link({ artist: p.id === artist ? null : p.id })} aria-current={p.id === artist ? 'true' : undefined}>
+          {p.name} <span class="n tabular">{p.count}</span>
+        </a>
+      ))}
+    </nav>
+  )}
+  {found && (q || artist) && (
+    <p class="muted small" role="status">
+      {found.matched === 0
+        ? 'Nothing here matches.'
+        : `${found.matched} ${found.matched === 1 ? 'item' : 'items'}${found.artistName ? ` by ${found.artistName}` : ''}${q ? ` matching “${q}”` : ''}.`}
+    </p>
+  )}
+</div>
+
+<style>
+  /* Narrowing the list: a search, then the artists most worth working through. */
+  .narrow {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .narrow p {
+    margin: 0;
+  }
+
+  .search {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .search input {
+    flex: 1 1 14rem;
+    min-width: 0;
+    min-height: var(--target);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    color: var(--text);
+    font: inherit;
+  }
+
+  .pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .pills a {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 2.25rem;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .pills a[aria-current='true'] {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface-1));
+    color: var(--text);
+  }
+</style>

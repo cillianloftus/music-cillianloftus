@@ -444,7 +444,7 @@ import { splitVersion } from '../../lib/versions';
     {
       hidden > 0 && (
         <p class="hidden-note">
-          {hidden} not-official {hidden === 1 ? 'release' : 'releases'} kept off this page. <a href="/manage/unofficial">Clear them</a>
+          {hidden} not-official {hidden === 1 ? 'release' : 'releases'} kept off this page. <a href={`/manage/review?kind=unofficial&artist=${artist.id}`}>Clear them</a>
         </p>
       )
     }

@@ -51,7 +51,7 @@ async function reviewIndex(kind: AnomalyKind): Promise<Index> {
 }
 
 /** How much each artist matters (songs and albums rated), and what is rated. */
-async function care(userId: string | null): Promise<{ artists: Record<string, number>; rated: string[] }> {
+export async function care(userId: string | null): Promise<{ artists: Record<string, number>; rated: string[] }> {
   if (!userId) return { artists: {}, rated: [] };
   return byScores('review-care:v1', userId, async () => {
     const [byArtist, rated] = await env.DB.batch([
@@ -83,8 +83,8 @@ export interface ArtistPill {
   count: number;
 }
 
-export interface ReviewQueue {
-  items: Anomaly[];
+export interface ReviewQueue<T = Anomaly> {
+  items: T[];
   /** How many match the filter, all pages. */
   matched: number;
   pills: ArtistPill[];
@@ -117,19 +117,41 @@ export function arrange(
   limit: number,
 ): ReviewQueue {
   const rated = new Set(cares.rated);
-  const words = filter.q ? normaliseName(filter.q).split(/\s+/).filter(Boolean) : [];
-  const info = (a: Anomaly) => index[a.id] ?? { t: '', a: [] };
-  const searched = open.filter((a) => {
+  const result = narrow(open, (a) => index[a.id] ?? { t: '', a: [] }, cares, filter, {
+    // Items about music rated first.
+    bonus: (a) => (rated.has(a.entity_a) || (a.entity_b !== null && rated.has(a.entity_b)) ? 1_000_000 : 0),
+    // Skipped ones last, longest-skipped first among them, as before.
+    first: (x, y) => Number(Boolean(x.skipped_at)) - Number(Boolean(y.skipped_at)) || (x.skipped_at ?? '').localeCompare(y.skipped_at ?? ''),
+    last: (x, y) => x.detected_at.localeCompare(y.detected_at) || x.id.localeCompare(y.id),
+  });
+  return { ...result, items: result.items.slice(0, limit) };
+}
+
+/**
+ * Any review list narrowed and ordered the same way: by a search over each
+ * item's title and artists, or to one artist (the pills, the artists most
+ * worth working through first), the artists rated most first. The Not
+ * official list uses it as the queue does.
+ */
+export function narrow<T>(
+  items: T[],
+  describe: (item: T) => { t: string; a: [string, string][] },
+  cares: { artists: Record<string, number> },
+  filter: ReviewFilter,
+  order: { bonus?: (item: T) => number; first?: (x: T, y: T) => number; last?: (x: T, y: T) => number } = {},
+): ReviewQueue<T> {
+  const words = filter.q ? normaliseName(filter.q).split(/s+/).filter(Boolean) : [];
+  const searched = items.filter((item) => {
     if (words.length === 0) return true;
-    const { t, a: artists } = info(a);
+    const { t, a: artists } = describe(item);
     const text = normaliseName([t, ...artists.map(([, name]) => name)].join(' '));
     return words.every((w) => text.includes(w));
   });
 
   // The pills: the artists most worth working through among what matches the search.
   const tally = new Map<string, ArtistPill & { care: number }>();
-  for (const a of searched) {
-    for (const [id, name] of info(a).a) {
+  for (const item of searched) {
+    for (const [id, name] of describe(item).a) {
       const pill = tally.get(id) ?? { id, name, count: 0, care: cares.artists[id] ?? 0 };
       pill.count++;
       tally.set(id, pill);
@@ -140,22 +162,12 @@ export function arrange(
   const chosen = filter.artist ? tally.get(filter.artist) : undefined;
   if (chosen && !pills.includes(chosen)) pills = [chosen, ...pills.slice(0, PILLS - 1)];
 
-  const matching = filter.artist ? searched.filter((a) => info(a).a.some(([id]) => id === filter.artist)) : searched;
-  const worth = (a: Anomaly) =>
-    (rated.has(a.entity_a) || (a.entity_b !== null && rated.has(a.entity_b)) ? 1_000_000 : 0) +
-    Math.max(0, ...info(a).a.map(([id]) => cares.artists[id] ?? 0));
-  const scored = matching.map((a) => ({ a, worth: worth(a) }));
-  scored.sort(
-    (x, y) =>
-      // Skipped ones last, longest-skipped first among them, as before.
-      Number(Boolean(x.a.skipped_at)) - Number(Boolean(y.a.skipped_at)) ||
-      (x.a.skipped_at ?? '').localeCompare(y.a.skipped_at ?? '') ||
-      y.worth - x.worth ||
-      x.a.detected_at.localeCompare(y.a.detected_at) ||
-      x.a.id.localeCompare(y.a.id),
-  );
+  const matching = filter.artist ? searched.filter((item) => describe(item).a.some(([id]) => id === filter.artist)) : searched;
+  const worth = (item: T) => (order.bonus?.(item) ?? 0) + Math.max(0, ...describe(item).a.map(([id]) => cares.artists[id] ?? 0));
+  const scored = matching.map((item) => ({ item, worth: worth(item) }));
+  scored.sort((x, y) => (order.first?.(x.item, y.item) ?? 0) || y.worth - x.worth || (order.last?.(x.item, y.item) ?? 0));
   return {
-    items: scored.slice(0, limit).map((s) => s.a),
+    items: scored.map((s) => s.item),
     matched: matching.length,
     pills: pills.map(({ id, name, count }) => ({ id, name, count })),
     artistName: chosen?.name ?? null,

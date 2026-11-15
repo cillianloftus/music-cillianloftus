@@ -1,7 +1,9 @@
 ---
 /**
- * The Manage hub: everything behind sign-in, grouped by what it is for,
- * with a word of live status where there is something waiting.
+ * The Manage hub: everything behind sign-in. What needs Cillian first,
+ * then compact lists grouped by what he goes there to do (add music, tidy,
+ * listen, scores, settings), each row a word of live status. Seventeen
+ * tall cards made the one wanted hard to find on a phone (15 Nov).
  */
 import { env } from 'cloudflare:workers';
 import Base from '../../layouts/Base.astro';
@@ -12,20 +14,21 @@ import { THEME_COOKIE, themeFrom } from '../../lib/theme';
 import { connection } from '../../lib/spotify/client';
 import { waitingCount } from '../../lib/connections';
 import { latestBackup, nightlyRuns } from '../../lib/health';
+import { jobCounts } from '../../lib/jobs/queue';
 
 const user = Astro.locals.user!;
-const [counts, spotify] = await Promise.all([
+const [counts, spotify, jobs] = await Promise.all([
   env.DB.prepare(
     `SELECT (SELECT count(*) FROM anomaly WHERE status = 'open') AS review,
-            (SELECT count(*) FROM job WHERE status = 'failed') AS failed,
-            (SELECT count(*) FROM job WHERE status IN ('queued', 'running')) AS running,
             (SELECT count(*) FROM file) AS files,
             (SELECT count(*) FROM play WHERE user_id = ?1 AND counted = 1) AS plays,
             (SELECT count(*) FROM release_group WHERE official = 0 AND keep_unofficial = 0) AS unofficial`,
   )
     .bind(user.id)
-    .first<{ review: number; failed: number; running: number; files: number; plays: number; unofficial: number }>(),
+    .first<{ review: number; files: number; plays: number; unofficial: number }>(),
   connection(user.id).catch(() => null),
+  // Kept by triggers (0070), not counted.
+  jobCounts().catch(() => null),
 ]);
 const [waiting, backup, nightly] = await Promise.all([
   waitingCount().catch(() => 0),
@@ -46,7 +49,7 @@ interface Item {
   title: string;
   text: string;
   icon: string;
-  status?: { text: string; tone: Tone } | null;
+  status?: { text: string; tone: Tone } | null | undefined;
 }
 
 const n = (x: number, one: string, many = `${one}s`) => `${x.toLocaleString('en-GB')} ${x === 1 ? one : many}`;
@@ -59,7 +62,6 @@ const ICONS = {
   history: 'M12 7v5l3 2M3 12a9 9 0 1 0 3-6.7M3 4v4h4',
   spotify: 'M6 10c4-1.5 8-1 12 1M7 13.5c3-1 6.5-.7 9.5.8M8 17c2.2-.6 4.6-.4 6.8.6',
   review: 'M9 12l2 2 4-4M12 3l8 4v5c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V7z',
-  unofficial: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM5.6 5.6l12.8 12.8',
   kinds: 'M9 18V6l10-2v12M9 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm10-2a2 2 0 1 1-4 0 2 2 0 0 1 4 0z',
   genres: 'M12 7a3 3 0 1 0 0-.1M6 20a3 3 0 1 0 0-.1M18 20a3 3 0 1 0 0-.1M12 7v4m0 0l-5 5m5-5l5 5',
   weights: 'M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4',
@@ -71,90 +73,79 @@ const ICONS = {
   backups: 'M5 7c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3zm0 0v10c0 1.7 3.1 3 7 3s7-1.3 7-3V7M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3',
 };
 
+// Not official releases are a Review tab now: counted with the rest of it.
+const toReview = (counts?.review ?? 0) + (counts?.unofficial ?? 0);
+const working = (jobs?.queued ?? 0) + (jobs?.running ?? 0);
+const item = {
+  import: { href: '/manage/import', title: 'Import', text: 'MusicBrainz, Spotify, a folder or by hand.', icon: ICONS.import },
+  jobs: {
+    href: '/manage/jobs',
+    title: 'Jobs',
+    text: 'Imports, refreshes, pushes and backups.',
+    icon: ICONS.jobs,
+    status: jobs?.failed
+      ? { text: `${jobs.failed} failed`, tone: 'attention' }
+      : working
+        ? { text: `${working.toLocaleString('en-GB')} to import`, tone: 'quiet' }
+        : null,
+  },
+  files: {
+    href: '/manage/files',
+    title: 'Files',
+    text: 'Audio you own, and checks for damaged rips.',
+    icon: ICONS.files,
+    status: counts?.files ? { text: n(counts.files, 'file'), tone: 'quiet' } : null,
+  },
+  review: {
+    href: '/manage/review',
+    title: 'Review',
+    text: 'Duplicates, versions, bootlegs and loose ends.',
+    icon: ICONS.review,
+    status: toReview ? { text: `${toReview.toLocaleString('en-GB')} to look at`, tone: 'attention' } : { text: 'All clear', tone: 'quiet' },
+  },
+  genres: { href: '/manage/genres', title: 'Genre tree', text: 'Which genre sits under which.', icon: ICONS.genres },
+  kinds: { href: '/manage/track-kinds', title: 'Track kinds', text: 'Interludes and skits.', icon: ICONS.kinds },
+  roles: { href: '/manage/roles', title: 'Credit roles', text: 'Which credits come first.', icon: ICONS.roles },
+  playlist: { href: '/query', title: 'New playlist', text: 'Ask for it, or build it with filters.', icon: ICONS.playlist },
+  history: {
+    href: '/manage/history',
+    title: 'Listening history',
+    text: 'What you play against what you rate.',
+    icon: ICONS.history,
+    status: counts?.plays ? { text: n(counts.plays, 'play'), tone: 'quiet' } : null,
+  },
+  spotify: {
+    href: '/manage/spotify',
+    title: 'Spotify',
+    text: 'Where playlists are pushed.',
+    icon: ICONS.spotify,
+    status: spotify ? { text: 'Connected', tone: 'quiet' } : { text: 'Not connected', tone: 'attention' },
+  },
+  weights: { href: '/manage/weights', title: 'Weights', text: 'How scores are worked out.', icon: ICONS.weights },
+  connections: {
+    href: '/manage/connections',
+    title: 'Connections',
+    text: 'Keys for outside services.',
+    icon: ICONS.connections,
+    status: waiting ? { text: `${waiting} waiting for a key`, tone: 'attention' } : { text: 'All connected', tone: 'quiet' },
+  },
+  health: { href: '/manage/health', title: 'Health', text: 'Backups, database reads, last night.', icon: ICONS.health, status: health },
+  backups: { href: '/manage/backups', title: 'Backups', text: 'Daily copies, and restoring one.', icon: ICONS.backups },
+  refresh: { href: '/manage/refresh', title: 'Refresh everything', text: 'Look the whole library up again.', icon: ICONS.refresh },
+} satisfies Record<string, Item>;
+
+// By what Cillian goes there to do, the most used first in each.
 const groups: { heading: string; items: Item[] }[] = [
-  {
-    heading: 'Add music',
-    items: [
-      { href: '/manage/import', title: 'Import', text: 'MusicBrainz, Spotify, a folder or by hand.', icon: ICONS.import },
-      {
-        href: '/manage/files',
-        title: 'Files',
-        text: 'Audio you own, and checks for damaged rips.',
-        icon: ICONS.files,
-        status: counts?.files ? { text: n(counts.files, 'file'), tone: 'quiet' } : null,
-      },
-    ],
-  },
-  {
-    heading: 'Listen',
-    items: [
-      { href: '/query', title: 'New playlist', text: 'Ask for it, or build it with filters.', icon: ICONS.playlist },
-      {
-        href: '/manage/history',
-        title: 'Listening history',
-        text: 'What you play against what you rate.',
-        icon: ICONS.history,
-        status: counts?.plays ? { text: n(counts.plays, 'play'), tone: 'quiet' } : null,
-      },
-      {
-        href: '/manage/spotify',
-        title: 'Spotify',
-        text: 'Where playlists are pushed.',
-        icon: ICONS.spotify,
-        status: spotify ? { text: 'Connected', tone: 'quiet' } : { text: 'Not connected', tone: 'attention' },
-      },
-    ],
-  },
-  {
-    heading: 'Curate',
-    items: [
-      {
-        href: '/manage/review',
-        title: 'Review',
-        text: 'Duplicates and loose ends.',
-        icon: ICONS.review,
-        status: counts?.review ? { text: `${counts.review} to look at`, tone: 'attention' } : { text: 'All clear', tone: 'quiet' },
-      },
-      {
-        href: '/manage/unofficial',
-        title: 'Not official',
-        text: 'Bootlegs and fan-made releases.',
-        icon: ICONS.unofficial,
-        status: counts?.unofficial ? { text: `${counts.unofficial} to clear`, tone: 'attention' } : undefined,
-      },
-      { href: '/manage/genres', title: 'Genre tree', text: 'Which genre sits under which.', icon: ICONS.genres },
-      { href: '/manage/track-kinds', title: 'Track kinds', text: 'Interludes and skits.', icon: ICONS.kinds },
-      { href: '/manage/weights', title: 'Weights', text: 'How scores are worked out.', icon: ICONS.weights },
-      { href: '/manage/roles', title: 'Credit roles', text: 'Which credits come first.', icon: ICONS.roles },
-    ],
-  },
-  {
-    heading: 'System',
-    items: [
-      { href: '/manage/health', title: 'Health', text: 'Backups, database reads, last night.', icon: ICONS.health, status: health },
-      { href: '/manage/refresh', title: 'Refresh everything', text: 'Look the whole library up again.', icon: ICONS.refresh },
-      {
-        href: '/manage/jobs',
-        title: 'Jobs',
-        text: 'Imports, pushes and backups.',
-        icon: ICONS.jobs,
-        status: counts?.failed
-          ? { text: `${counts.failed} failed`, tone: 'attention' }
-          : counts?.running
-            ? { text: `${counts.running} running`, tone: 'quiet' }
-            : null,
-      },
-      {
-        href: '/manage/connections',
-        title: 'Connections',
-        text: 'Keys for outside services.',
-        icon: ICONS.connections,
-        status: waiting ? { text: `${waiting} waiting for a key`, tone: 'attention' } : { text: 'All connected', tone: 'quiet' },
-      },
-      { href: '/manage/backups', title: 'Backups', text: 'Daily copies, and restoring one.', icon: ICONS.backups },
-    ],
-  },
+  { heading: 'Add music', items: [item.import, item.jobs, item.files] },
+  { heading: 'Tidy the library', items: [item.review, item.genres, item.kinds, item.roles] },
+  { heading: 'Listen', items: [item.playlist, item.history, item.spotify] },
+  { heading: 'Scores', items: [item.weights] },
+  { heading: 'Settings', items: [item.connections, item.health, item.backups, item.refresh] },
 ];
+// What wants him now, whichever group it is in: first, so nothing waits unseen.
+const needs: Item[] = (Object.values(item) as Item[]).filter((i) => i.status?.tone === 'attention');
+const shown = [...(needs.length ? [{ heading: 'Needs you', items: needs }] : []), ...groups];
+const slug = (heading: string) => heading.toLowerCase().replace(/\s+/g, '-');
 ---
 
 <Base title="Manage">
@@ -164,26 +155,31 @@ const groups: { heading: string; items: Item[] }[] = [
     </PageHeader>
 
     {
-      groups.map((group) => (
-        <section aria-labelledby={`group-${group.heading.replace(/\s+/g, '-')}`}>
-          <h2 id={`group-${group.heading.replace(/\s+/g, '-')}`}>{group.heading}</h2>
-          <ul role="list" class="cards">
-            {group.items.map((item) => (
+      shown.map((group) => (
+        <section aria-labelledby={`group-${slug(group.heading)}`} class:list={[{ needs: group.heading === 'Needs you' }]}>
+          <h2 id={`group-${slug(group.heading)}`}>{group.heading}</h2>
+          <ul role="list" class="rows">
+            {group.items.map((entry) => (
               <li>
                 <span class="icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24">
-                    <path d={item.icon} />
+                    <path d={entry.icon} />
                   </svg>
                 </span>
                 <div class="text">
-                  <a href={item.href}>{item.title}</a>
-                  <p>{item.text}</p>
+                  <a href={entry.href}>{entry.title}</a>
+                  <p>{entry.text}</p>
                 </div>
-                {item.status && (
-                  <span class="status" data-tone={item.status.tone}>
-                    {item.status.text}
+                {entry.status ? (
+                  <span class="status" data-tone={entry.status.tone}>
+                    {entry.status.text}
                   </span>
+                ) : (
+                  <span />
                 )}
+                <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m9 6 6 6-6 6" />
+                </svg>
               </li>
             ))}
           </ul>
@@ -206,12 +202,12 @@ const groups: { heading: string; items: Item[] }[] = [
 <style>
   .page {
     display: grid;
-    gap: var(--space-6);
-    --content-max: 60rem;
+    gap: var(--space-5);
+    --content-max: 44rem;
   }
 
   h2 {
-    margin-bottom: var(--space-3);
+    margin-bottom: var(--space-2);
     color: var(--text-muted);
     font-size: var(--step--1);
     font-weight: 700;
@@ -219,48 +215,53 @@ const groups: { heading: string; items: Item[] }[] = [
     text-transform: uppercase;
   }
 
-  .cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
-    gap: var(--space-3);
+  .needs h2 {
+    color: var(--accent);
+  }
+
+  /* One rounded list per group, rows divided by hairlines: a phone screen
+     shows most of the page, where cards showed four. */
+  .rows {
     margin: 0;
     padding: 0;
     list-style: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    overflow: hidden;
   }
 
   li {
     position: relative;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: start;
-    gap: var(--space-3) var(--space-4);
-    padding: var(--space-4);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-m);
-    background: var(--surface-1);
-    transition:
-      border-color 0.15s,
-      transform 0.15s;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 3.5rem;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  li + li {
+    border-top: 1px solid var(--border);
   }
 
   li:hover {
-    border-color: var(--text-subtle);
-    transform: translateY(-1px);
+    background: var(--surface-2);
   }
 
   .icon {
     display: grid;
     place-items: center;
-    width: 2.5rem;
-    height: 2.5rem;
+    width: 2.1rem;
+    height: 2.1rem;
     border-radius: var(--radius-s);
     background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
     color: var(--accent);
   }
 
   .icon svg {
-    width: 1.35rem;
-    height: 1.35rem;
+    width: 1.2rem;
+    height: 1.2rem;
     fill: none;
     stroke: currentColor;
     stroke-width: 1.8;
@@ -270,7 +271,7 @@ const groups: { heading: string; items: Item[] }[] = [
 
   .text {
     display: grid;
-    gap: 2px;
+    min-width: 0;
   }
 
   a {
@@ -279,12 +280,11 @@ const groups: { heading: string; items: Item[] }[] = [
     text-decoration: none;
   }
 
-  /* The whole card is the link target. */
+  /* The whole row is the link target. */
   a::after {
     content: '';
     position: absolute;
     inset: 0;
-    border-radius: var(--radius-m);
   }
 
   a:focus-visible {
@@ -293,12 +293,17 @@ const groups: { heading: string; items: Item[] }[] = [
 
   a:focus-visible::after {
     outline: 3px solid var(--focus);
-    outline-offset: 2px;
+    outline-offset: -3px;
+    border-radius: var(--radius-m);
   }
 
   p {
+    overflow: hidden;
+    margin: 0;
     color: var(--text-muted);
     font-size: var(--step--1);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .status {
@@ -316,30 +321,20 @@ const groups: { heading: string; items: Item[] }[] = [
     color: var(--accent);
   }
 
-  /* Phones: a tighter list, so a screen shows most of what is here. */
+  .chevron {
+    width: 1rem;
+    height: 1rem;
+    fill: none;
+    stroke: var(--text-subtle);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* Phones: the name and its status only; what each is for is plain from its name. */
   @media (max-width: 39.99rem) {
-    .page {
-      gap: var(--space-5);
-    }
-
-    .cards {
-      gap: var(--space-2);
-    }
-
-    li {
-      align-items: center;
-      gap: var(--space-3);
-      padding: var(--space-3);
-    }
-
-    .icon {
-      width: 2.25rem;
-      height: 2.25rem;
-    }
-
-    .icon svg {
-      width: 1.2rem;
-      height: 1.2rem;
+    p {
+      display: none;
     }
   }
 </style>

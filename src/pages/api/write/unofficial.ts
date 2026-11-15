@@ -11,8 +11,17 @@ export const POST: APIRoute = async ({ request, redirect }) => {
   const intent = form.get('intent')?.toString();
   const id = form.get('id')?.toString() ?? '';
   const json = request.headers.get('Accept')?.includes('application/json');
+  // Back to the Review page's Not official tab, narrowed as it was.
+  const back = (params: Record<string, string>) => {
+    const query = new URLSearchParams({ kind: 'unofficial', ...params });
+    for (const key of ['artist', 'q']) {
+      const value = form.get(key)?.toString();
+      if (value) query.set(key, value);
+    }
+    return `/manage/review?${query}`;
+  };
   const reply = (body: Record<string, unknown>, params: Record<string, string>) =>
-    json ? Response.json({ ok: true, ...body }) : redirect(`/manage/unofficial?${new URLSearchParams(params)}`, 303);
+    json ? Response.json({ ok: true, ...body }) : redirect(back(params), 303);
 
   try {
     switch (intent) {
@@ -22,13 +31,14 @@ export const POST: APIRoute = async ({ request, redirect }) => {
       case 'remove_not_wanted': {
         // From an album's own page: anything Cillian does not count, official or not.
         await removeReleaseGroup(id, 'not_wanted');
-        return json ? Response.json({ ok: true }) : redirect('/manage/unofficial?done=removed', 303);
+        return json ? Response.json({ ok: true }) : redirect(back({ done: 'removed' }), 303);
       }
       case 'keep':
         await keepUnofficial(id);
         return reply({}, { done: 'kept' });
       case 'remove_all': {
-        const { removed, left } = await removeUnofficial({ budgetMs: 20_000 });
+        const ids = form.get('ids')?.toString();
+        const { removed, left } = await removeUnofficial({ budgetMs: 20_000, ids: ids ? (JSON.parse(ids) as string[]) : undefined });
         return reply({ removed, left }, { done: 'batch', removed: String(removed), left: String(left) });
       }
       default:
@@ -38,6 +48,6 @@ export const POST: APIRoute = async ({ request, redirect }) => {
     if (!(error instanceof RemovalError)) throw error;
     return json
       ? Response.json({ ok: false, error: error.message }, { status: 400 })
-      : redirect(`/manage/unofficial?${new URLSearchParams({ error: error.message })}`, 303);
+      : redirect(back({ error: error.message }), 303);
   }
 };

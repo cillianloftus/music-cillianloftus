@@ -10,7 +10,7 @@
  * Artists, artists without a MusicBrainz id) are looked up one by one.
  *
  * Nothing is removed by the check. Cillian removes what he agrees with on
- * /manage/unofficial; a removal keeps a full snapshot of every row it took
+ * the Review page's Not official tab; a removal keeps a full snapshot of every row it took
  * (removed_release_group), and a discography import skips its MusicBrainz id.
  */
 
@@ -140,6 +140,8 @@ export interface UnofficialGroup {
   type: string;
   first_release_date: string | null;
   artist: string | null;
+  /** Its primary artists, [id, name], for the Review page's search and pills. */
+  artists: [string, string][];
   art_key: string | null;
   /** Rated as an album, or owned: removing it waits on Cillian keeping or merging it. */
   blocked: string | null;
@@ -153,6 +155,8 @@ export async function unofficialGroups(): Promise<UnofficialGroup[]> {
         FROM artist_credit c JOIN artist a ON a.id = c.artist_id
         WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary'
         ORDER BY c.position) AS artist,
+       (SELECT json_group_array(json_array(a.id, a.name)) FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+        WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary') AS artists,
        (SELECT r.art_key FROM release r WHERE r.release_group_id = g.id AND r.art_key IS NOT NULL LIMIT 1) AS art_key,
        CASE
          WHEN EXISTS (SELECT 1 FROM rating x WHERE x.entity_type = 'release_group' AND x.entity_id = g.id) THEN 'rated'
@@ -161,8 +165,16 @@ export async function unofficialGroups(): Promise<UnofficialGroup[]> {
      FROM release_group g
      WHERE g.official = 0 AND g.keep_unofficial = 0
      ORDER BY artist COLLATE NOCASE, g.first_release_date DESC`,
-  ).all<UnofficialGroup>();
-  return results;
+  ).all<Omit<UnofficialGroup, 'artists'> & { artists: string | null }>();
+  return results.map((g) => {
+    let artists: [string, string][] = [];
+    try {
+      artists = (JSON.parse(g.artists ?? '[]') as [string, string][]).filter((a) => a && a[0]);
+    } catch {
+      /* None known. */
+    }
+    return { ...g, artists };
+  });
 }
 
 /** Keeps a group Cillian counts as real though MusicBrainz does not. */
@@ -301,9 +313,11 @@ export async function removeReleaseGroup(id: string, reason: 'unofficial' | 'not
  * out (a request has only so many database calls). Returns how many went
  * and how many are left to go.
  */
-export async function removeUnofficial({ budgetMs }: { budgetMs: number }): Promise<{ removed: number; left: number }> {
+export async function removeUnofficial({ budgetMs, ids }: { budgetMs: number; ids?: string[] }): Promise<{ removed: number; left: number }> {
   const stop = Date.now() + budgetMs;
-  const free = (await unofficialGroups()).filter((g) => !g.blocked);
+  // Only those shown, when the list was narrowed (an artist, a search).
+  const only = ids ? new Set(ids) : null;
+  const free = (await unofficialGroups()).filter((g) => !g.blocked && (!only || only.has(g.id)));
   let removed = 0;
   for (const group of free) {
     if (Date.now() > stop || removed >= 40) break;

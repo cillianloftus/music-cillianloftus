@@ -1,0 +1,232 @@
+---
+/**
+ * Releases MusicBrainz does not count as official (src/lib/official.ts),
+ * on the Review page's Not official tab: each to keep or remove, and all
+ * of those shown at once. Narrowed (an artist, a search), "Remove all"
+ * takes only what is shown. Rated or owned ones wait, apart.
+ */
+import CoverArt from './CoverArt.astro';
+import type { UnofficialGroup } from '../lib/official';
+
+interface Props {
+  /** Free to remove, in the order shown. */
+  free: UnofficialGroup[];
+  /** Rated or owned: kept until kept or merged. */
+  held: UnofficialGroup[];
+  /** Whether a filter narrowed the list (then Remove all sends the ids shown). */
+  narrowed: boolean;
+  /** The narrowing, carried through each action. */
+  artist: string | null;
+  q: string | null;
+}
+
+const { free, held, narrowed, artist, q } = Astro.props;
+const TYPES: Record<string, string> = {
+  album: 'Album',
+  ep: 'EP',
+  single: 'Single',
+  compilation: 'Compilation',
+  mixtape: 'Mixtape',
+  soundtrack: 'Soundtrack',
+  live: 'Live',
+};
+---
+
+{
+  free.length > 0 && (
+    <form method="post" action="/api/write/unofficial" class="all" data-remove-all>
+      {narrowed && <input type="hidden" name="ids" value={JSON.stringify(free.map((g) => g.id))} />}
+      {artist && <input type="hidden" name="artist" value={artist} />}
+      {q && <input type="hidden" name="q" value={q} />}
+      <button class="button button--primary" type="submit" name="intent" value="remove_all">
+        {narrowed ? `Remove these ${free.length}` : `Remove all ${free.length}`}
+      </button>
+      <span class="muted small" data-all-status aria-live="polite">
+        Each is kept whole in a snapshot, and imports will not bring it back.
+      </span>
+    </form>
+  )
+}
+
+{
+  free.length > 0 && (
+    <ul role="list" class="list">
+      {free.map((g) => (
+        <li class="row" id={`u-${g.id}`}>
+          <a class="art" href={`/album/${g.id}`} tabindex="-1" aria-hidden="true">
+            <CoverArt artKey={g.art_key} title={g.title} sizes="3rem" />
+          </a>
+          <div class="text">
+            <a class="title" href={`/album/${g.id}`}>
+              {g.title}
+            </a>
+            <span class="meta muted small">{[g.artist, TYPES[g.type] ?? g.type, g.first_release_date?.slice(0, 4)].filter(Boolean).join(' · ')}</span>
+          </div>
+          <form method="post" action="/api/write/unofficial" class="actions" data-unofficial-row>
+            <input type="hidden" name="id" value={g.id} />
+            {artist && <input type="hidden" name="artist" value={artist} />}
+            {q && <input type="hidden" name="q" value={q} />}
+            <button class="button small button--quiet" type="submit" name="intent" value="keep">
+              Keep
+            </button>
+            <button class="button small" type="submit" name="intent" value="remove">
+              Remove
+            </button>
+          </form>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+{
+  held.length > 0 && (
+    <section aria-labelledby="held-heading" class="held">
+      <h3 id="held-heading">Rated or owned ({held.length})</h3>
+      <p class="muted small">These stay until you keep them, or merge them into the real album from the Albums tab.</p>
+      <ul role="list" class="list">
+        {held.map((g) => (
+          <li class="row" id={`u-${g.id}`}>
+            <a class="art" href={`/album/${g.id}`} tabindex="-1" aria-hidden="true">
+              <CoverArt artKey={g.art_key} title={g.title} sizes="3rem" />
+            </a>
+            <div class="text">
+              <a class="title" href={`/album/${g.id}`}>
+                {g.title}
+              </a>
+              <span class="meta muted small">{[g.artist, TYPES[g.type] ?? g.type, g.blocked === 'rated' ? 'rated' : 'owned'].filter(Boolean).join(' · ')}</span>
+            </div>
+            <form method="post" action="/api/write/unofficial" class="actions" data-unofficial-row>
+              <input type="hidden" name="id" value={g.id} />
+              {artist && <input type="hidden" name="artist" value={artist} />}
+              {q && <input type="hidden" name="q" value={q} />}
+              <button class="button small button--quiet" type="submit" name="intent" value="keep">
+                Keep
+              </button>
+            </form>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+<script>
+  const post = async (form: HTMLFormElement, intent: string) => {
+    const body = new FormData(form);
+    body.set('intent', intent);
+    const response = await fetch(form.action, { method: 'POST', body, headers: { Accept: 'application/json' } });
+    return (await response.json()) as { ok: boolean; error?: string; removed?: number; left?: number };
+  };
+
+  // One row at a time: the row goes, and focus moves to the next.
+  for (const form of document.querySelectorAll<HTMLFormElement>('[data-unofficial-row]')) {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const intent = (event.submitter as HTMLButtonElement | null)?.value ?? 'remove';
+      const row = form.closest('li')!;
+      for (const b of form.querySelectorAll('button')) b.disabled = true;
+      const result = await post(form, intent);
+      if (!result.ok) {
+        alert(result.error ?? 'That did not work.');
+        for (const b of form.querySelectorAll('button')) b.disabled = false;
+        return;
+      }
+      const next = row.nextElementSibling?.querySelector<HTMLElement>('button[value="remove"], button');
+      row.remove();
+      next?.focus();
+    });
+  }
+
+  // Everything shown: a batch at a time until nothing is left, then the same view afresh.
+  const all = document.querySelector<HTMLFormElement>('[data-remove-all]');
+  all?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = all.querySelector('button')!;
+    const status = all.querySelector<HTMLElement>('[data-all-status]')!;
+    button.disabled = true;
+    let removed = 0;
+    for (;;) {
+      const result = await post(all, 'remove_all');
+      if (!result.ok) {
+        status.textContent = result.error ?? 'That did not work.';
+        button.disabled = false;
+        return;
+      }
+      removed += result.removed ?? 0;
+      status.textContent = `Removed ${removed}${result.left ? `, ${result.left} to go…` : '.'}`;
+      if (!result.left || !result.removed) break;
+    }
+    const url = new URL(location.href);
+    url.searchParams.set('done', 'unofficial_batch');
+    url.searchParams.set('removed', String(removed));
+    location.assign(url);
+  });
+</script>
+
+<style>
+  .all {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 3rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding-block: var(--space-2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .art {
+    display: block;
+    width: 3rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .text {
+    display: grid;
+    min-width: 0;
+  }
+
+  .title {
+    overflow: hidden;
+    font-weight: 650;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .actions {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .held {
+    display: grid;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+  }
+
+  .held h3 {
+    font-size: var(--step-1);
+  }
+</style>
