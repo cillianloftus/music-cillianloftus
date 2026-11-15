@@ -57,7 +57,8 @@ if (Astro.request.method === 'POST') {
     // A song chosen for a line is used only while it still is that line's (the tracklist may have changed since the preview).
     input.existing = await fittingChoices(input.existing ?? {}, parseTracklist(input.tracklist));
     const result = await writePlan(buildManualPlan(input));
-    return Astro.redirect(`/album/${result.releaseGroupId}`, 303);
+    // The release, saying it was just added: the page itself is the proof.
+    return Astro.redirect(`/album/${result.releaseGroupId}?added=1`, 303);
   }
   if (errors.length > 0) Astro.response.status = 422;
   previewing = errors.length === 0;
@@ -128,7 +129,10 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
       )
     }
 
-    <form method="post" class="form" id="manual-form">
+    {/* Posted as an ordinary page (data-native): the answer to Preview is this page with the preview
+        on it, which the background save (SoftForms) threw away by reloading, so the form came back
+        empty and nothing said what had happened (15 Nov). It lands at the preview. */}
+    <form method="post" action="#preview" class="form" id="manual-form" data-native>
       <div class="row">
         <div class="field">
           <label for="artist">Artist</label>
@@ -167,13 +171,15 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
       <div class="buttons">
         <button class="button" type="submit" name="intent" value="preview">Preview</button>
         {previewing && <button class="button button--primary" type="submit" name="intent" value="save">Add to catalogue</button>}
+        {!previewing && <span class="muted small">Preview shows what will be made. Nothing is added until you press Add.</span>}
       </div>
     </form>
 
     {
       previewing && (
-        <section class="preview" aria-labelledby="preview-heading">
-          <h2 id="preview-heading">What will be added</h2>
+        <section class="preview" id="preview" aria-labelledby="preview-heading" tabindex="-1">
+          <h2 id="preview-heading">Preview</h2>
+          <p class="not-yet" role="status">Not added yet. Check it below, change anything above, then Add to catalogue.</p>
           {duplicates.length > 0 && (
             <p class="warning" role="status">
               The catalogue already has{' '}
@@ -243,6 +249,9 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
               </tbody>
             </table>
           )}
+          <div class="buttons">
+            <button class="button button--primary" type="submit" form="manual-form" name="intent" value="save">Add to catalogue</button>
+          </div>
         </section>
       )
     }
@@ -314,7 +323,25 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
   .buttons {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: var(--space-3);
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  /* Plainly a preview: nothing has been made yet. */
+  .not-yet {
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-s);
+    background: var(--surface-1);
+    font-weight: 600;
+  }
+
+  .preview:focus {
+    outline: none;
   }
 
   .errors {

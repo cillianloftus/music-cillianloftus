@@ -120,7 +120,8 @@ try {
       )
     }
 
-    <form method="post" class="editor">
+    {/* Posted as an ordinary page: Preview and errors are answered on this page, which a background save would throw away. */}
+    <form method="post" class="editor" data-native>
       <div class="field">
         <label for="name">Name</label>
         <input class="input" id="name" name="name" type="text" maxlength="100" value={name} autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />

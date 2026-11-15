@@ -88,6 +88,8 @@ const albumRating = viewerId ? ((await ratingHistory(viewerId, 'release_group', 
 // The collection is private: only the signed-in owner of it sees it.
 const holdings = user ? await holdingsFor(user.id, album.id) : [];
 const holdingError = user ? Astro.url.searchParams.get('holding_error') : null;
+// Just made by hand (Add by hand): say so, so the page reads as the result.
+const added = user && Astro.url.searchParams.get('added') === '1';
 
 const [tracks, standardTracks, genres, people, albumFacts, extras] = await Promise.all([
   releaseId ? tracklist(releaseId, viewerId) : Promise.resolve([]),
@@ -236,6 +238,11 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
 >
   <article class="wrap album">
     <Backdrop artKey={album.art_key} />
+    {added && (
+      <p class="added" role="status">
+        Added to your library. <a href="/manage/import/manual">Add another by hand</a>
+      </p>
+    )}
     <EntityHero artWidth="20rem">
       <Fragment slot="art">
         <CoverArt
@@ -869,6 +876,16 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
 
   .own-form .button {
     justify-self: start;
+  }
+
+  .added {
+    position: relative;
+    margin-top: var(--space-5);
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--good, var(--accent));
+    border-radius: var(--radius-s);
+    background: var(--surface-1);
+    font-weight: 600;
   }
 
   .holding-error {
