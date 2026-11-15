@@ -5,7 +5,9 @@
  * an import.
  */
 
+import { env } from 'cloudflare:workers';
 import { parsePartialDate } from '../dates';
+import { normaliseTitle, withoutFeaturing } from '../text';
 import type { ImportPlan, PlanArtist, PlanCredit, PlanRecording, PlanTrack, ReleaseGroupType } from './plan';
 
 export const MAX_TRACKS = 200;
@@ -106,7 +108,15 @@ export interface ManualInput {
   date: string;
   genres: string;
   tracklist: string;
+  /**
+   * Lines that are songs already in the library, by "disc-position": the
+   * song's id. Those lines place that song on the album instead of a new one.
+   */
+  existing?: Record<string, string>;
 }
+
+/** A line's key in ManualInput.existing. */
+export const lineKey = (t: Pick<ParsedTrack, 'disc' | 'position'>) => `${t.disc}-${t.position}`;
 
 export function validateManual(input: ManualInput): string[] {
   const errors: string[] = [];
@@ -147,6 +157,7 @@ export function buildManualPlan(input: ManualInput): ImportPlan {
   for (const track of tracks) {
     const key = `recording:${track.disc}-${track.position}`;
     recordings.push({
+      existing_id: input.existing?.[lineKey(track)] ?? null,
       key,
       mbid: null,
       title: track.title,
@@ -203,4 +214,61 @@ export function buildManualPlan(input: ManualInput): ImportPlan {
     credits,
     releaseGroupGenres: genres.map((name) => ({ name, weight: 1 })),
   };
+}
+
+/** A song already here that a typed line may be. */
+export interface ExistingSong {
+  id: string;
+  title: string;
+  album_title: string | null;
+  /** The viewer's score for it, when rated. */
+  score: number | null;
+}
+
+/** How a line and a song are matched: the title, case, punctuation and guests aside. */
+const songKey = (title: string) => normaliseTitle(withoutFeaturing(title));
+
+/**
+ * For each typed line, the songs by that artist (by name or alias) already
+ * in the library with the same title: what the Add by hand preview offers
+ * to reuse, so a release made from songs already here keeps their ratings,
+ * plays and credits instead of copying them. Keyed by lineKey.
+ */
+export async function existingSongs(artistName: string, tracks: ParsedTrack[], viewerId: string | null): Promise<Record<string, ExistingSong[]>> {
+  const name = artistName.trim();
+  if (!name || tracks.length === 0) return {};
+  const { results } = await env.DB.prepare(
+    `WITH who AS (
+       SELECT id FROM artist WHERE name = ?1 COLLATE NOCASE
+       UNION SELECT artist_id FROM artist_alias WHERE name = ?1
+     )
+     SELECT DISTINCT r.id, r.title,
+            (SELECT g.title FROM track t JOIN release x ON x.id = t.release_id JOIN release_group g ON g.id = x.release_group_id
+             WHERE t.recording_id = r.id ORDER BY g.first_release_date LIMIT 1) AS album_title
+     FROM who JOIN artist_credit c ON c.artist_id = who.id AND c.entity_type = 'recording' AND c.role = 'primary'
+     JOIN recording r ON r.id = c.entity_id`,
+  )
+    .bind(name)
+    .all<{ id: string; title: string; album_title: string | null }>();
+  const wanted = new Set(tracks.map((t) => songKey(t.title)));
+  const matching = results.filter((r) => wanted.has(songKey(r.title)));
+  const scores = new Map<string, number>();
+  if (viewerId && matching.length) {
+    const { results: scored } = await env.DB.prepare(
+      `SELECT recording_id, personal_score FROM v_recording_score WHERE user_id = ? AND recording_id IN (SELECT value FROM json_each(?))`,
+    )
+      .bind(viewerId, JSON.stringify(matching.map((m) => m.id)))
+      .all<{ recording_id: string; personal_score: number }>();
+    for (const r of scored) scores.set(r.recording_id, r.personal_score);
+  }
+  const out: Record<string, ExistingSong[]> = {};
+  for (const t of tracks) {
+    const same = matching
+      .filter((m) => songKey(m.title) === songKey(t.title))
+      .map((m) => ({ ...m, score: scores.get(m.id) ?? null }))
+      // Rated first: the copy holding the ratings is the one to reuse.
+      .sort((a, b) => Number(b.score !== null) - Number(a.score !== null) || (b.score ?? 0) - (a.score ?? 0));
+    if (same.length) out[lineKey(t)] = same;
+  }
+  return out;
 }

@@ -123,3 +123,28 @@ describe('manual plans through the writer', () => {
     expect(db.prepare('SELECT status FROM release_group').get()!.status).toBe('announced');
   });
 });
+
+describe('a release made from songs already here', () => {
+  it('finds them by the artist and title, and places them on it as they are', async () => {
+    const { seedLibrary } = await import('../../test/db');
+    const { existingSongs } = await import('./manual');
+    const db = migratedDb();
+    seedLibrary(db);
+    (env as { DB: D1Database }).DB = d1(db);
+    // Xavier's a1 ("Song A1") is rated; "A New One" is not here.
+    const input: ManualInput = { artist: 'xavier', title: 'An EP', type: 'ep', date: '', genres: '', tracklist: '1. Song A1 (feat. Someone)\n2. A New One' };
+    const tracks = parseTracklist(input.tracklist);
+    const found = await existingSongs(input.artist, tracks, 'u-owner');
+    expect(found['1-1']?.map((s) => s.id)).toEqual(['a1']);
+    expect(found['1-1']?.[0]?.score).not.toBeNull();
+    expect(found['1-2']).toBeUndefined();
+
+    const before = (db.prepare(`SELECT count(*) n FROM recording`).get() as { n: number }).n;
+    const result = await writePlan(buildManualPlan({ ...input, existing: { '1-1': 'a1' } }));
+    const placed = db.prepare(`SELECT t.position, t.recording_id FROM track t WHERE t.release_id = ? ORDER BY t.position`).all(result.releaseId) as { position: number; recording_id: string }[];
+    expect(placed[0]?.recording_id).toBe('a1');
+    expect(placed[1]?.recording_id).not.toBe('a1');
+    // Only the new song was created.
+    expect((db.prepare(`SELECT count(*) n FROM recording`).get() as { n: number }).n).toBe(before + 1);
+  });
+});

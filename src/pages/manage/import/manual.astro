@@ -9,7 +9,8 @@ import { env } from 'cloudflare:workers';
 import Base from '../../../layouts/Base.astro';
 import ChipInput from '../../../components/ChipInput.astro';
 import { formatDuration } from '../../../lib/format';
-import { MAX_TRACKS, buildManualPlan, parseTracklist, validateManual, type ManualInput } from '../../../lib/import/manual';
+import { MAX_TRACKS, buildManualPlan, existingSongs, lineKey, parseTracklist, validateManual, type ExistingSong, type ManualInput } from '../../../lib/import/manual';
+
 import type { ReleaseGroupType } from '../../../lib/import/plan';
 import { writePlan } from '../../../lib/import/write';
 
@@ -27,6 +28,10 @@ let input: ManualInput = { artist: '', title: '', type: 'album', date: '', genre
 let errors: string[] = [];
 let previewing = false;
 let duplicates: { id: string; title: string }[] = [];
+// Each line's songs already here (by the same artist and title), to reuse instead of copying.
+let matches: Record<string, ExistingSong[]> = {};
+// What each line was set to last time ("new", or a song's id); unset, the best match.
+let chosen: Record<string, string> = {};
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
@@ -40,9 +45,15 @@ if (Astro.request.method === 'POST') {
     genres: text('genres'),
     tracklist: text('tracklist'),
   };
+  for (const [name, value] of form) if (name.startsWith('existing_')) chosen[name.slice('existing_'.length)] = String(value);
+  // Only lines set to a song, and only while the tracklist is the one previewed.
+  input.existing = Object.fromEntries(Object.entries(chosen).filter(([, value]) => value && value !== 'new'));
   errors = validateManual(input);
 
   if (errors.length === 0 && form.get('intent') === 'save') {
+    // A song chosen for a line is used only while it still is that line's (the tracklist may have changed since the preview).
+    const fits = await existingSongs(input.artist, parseTracklist(input.tracklist), Astro.locals.user?.id ?? null);
+    input.existing = Object.fromEntries(Object.entries(input.existing ?? {}).filter(([key, id]) => fits[key]?.some((m) => m.id === id)));
     const result = await writePlan(buildManualPlan(input));
     return Astro.redirect(`/album/${result.releaseGroupId}`, 303);
   }
@@ -59,6 +70,7 @@ if (Astro.request.method === 'POST') {
       .bind(input.title.trim(), input.artist.trim())
       .all<{ id: string; title: string }>();
     duplicates = results;
+    matches = await existingSongs(input.artist, parseTracklist(input.tracklist), Astro.locals.user?.id ?? null);
   }
 }
 
@@ -83,7 +95,7 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
       )
     }
 
-    <form method="post" class="form">
+    <form method="post" class="form" id="manual-form">
       <div class="row">
         <div class="field">
           <label for="artist">Artist</label>
@@ -157,6 +169,12 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
               {discs > 1 && ` on ${discs} discs`}
             </span>
           </p>
+          {Object.keys(matches).length > 0 && (
+            <p class="muted">
+              {Object.keys(matches).length} of these {Object.keys(matches).length === 1 ? 'is a song' : 'are songs'} already in the library: they go on the
+              album as they are, ratings, plays and credits with them. Choose “New song” for any that is a different recording.
+            </p>
+          )}
           {tracks.length > 0 && (
             <table>
               <thead>
@@ -165,6 +183,7 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
                   <th scope="col">Title</th>
                   <th scope="col">Featuring</th>
                   <th scope="col">Length</th>
+                  {Object.keys(matches).length > 0 && <th scope="col">Song</th>}
                 </tr>
               </thead>
               <tbody>
@@ -174,6 +193,24 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
                     <td>{t.title}</td>
                     <td>{t.featured.join(', ')}</td>
                     <td class="tabular">{formatDuration(t.length_ms) ?? ''}</td>
+                    {Object.keys(matches).length > 0 && (
+                      <td>
+                        {matches[lineKey(t)] ? (
+                          <select class="input small" name={`existing_${lineKey(t)}`} form="manual-form" aria-label={`${t.title}: a song already here, or a new one`}>
+                            {matches[lineKey(t)]!.map((m, i) => (
+                              <option value={m.id} selected={chosen[lineKey(t)] ? chosen[lineKey(t)] === m.id : i === 0}>
+                                Already here{m.album_title ? `: ${m.album_title}` : ''}{m.score !== null ? ` (rated ${Math.round(m.score)})` : ''}
+                              </option>
+                            ))}
+                            <option value="new" selected={chosen[lineKey(t)] === 'new'}>
+                              New song
+                            </option>
+                          </select>
+                        ) : (
+                          <span class="muted">New song</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

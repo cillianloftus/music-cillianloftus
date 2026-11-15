@@ -1,0 +1,120 @@
+---
+/**
+ * On a song's page, for Cillian: put it on an album (its artist's, offered
+ * in a list, or any found by search), at the end or at a track number.
+ * For releases made by hand around songs already here (src/lib/add-to-album.ts).
+ */
+import Disclosure from './Disclosure.astro';
+
+interface Props {
+  id: string;
+  albums: { id: string; title: string; year: string | null; type: string }[];
+}
+
+const { id, albums } = Astro.props;
+const TYPES: Record<string, string> = { album: 'Album', ep: 'EP', single: 'Single', mixtape: 'Mixtape', compilation: 'Compilation', soundtrack: 'Soundtrack', live: 'Live' };
+---
+
+<Disclosure heading="Add to an album">
+  <form method="post" action="/api/write/track/add-to-album" class="add" data-add-to-album>
+    <input type="hidden" name="id" value={id} />
+    <div class="field">
+      <label for={`add-album-${id}`}>Album</label>
+      <select class="input" id={`add-album-${id}`} name="album" required data-add-album>
+        {albums.length === 0 && <option value="">Search for one below</option>}
+        {albums.map((a) => <option value={a.id}>{[a.title, TYPES[a.type] ?? a.type, a.year].filter(Boolean).join(' · ')}</option>)}
+      </select>
+    </div>
+    <div class="field position">
+      <label for={`add-position-${id}`}>Track number <span class="optional">(optional)</span></label>
+      <input class="input" id={`add-position-${id}`} name="position" type="number" min="1" inputmode="numeric" placeholder="At the end" />
+    </div>
+    <button class="button button--primary" type="submit">Add</button>
+    <p class="muted small find">
+      <label for={`add-q-${id}`}>Another artist’s album?</label>
+      <input class="input" id={`add-q-${id}`} type="search" placeholder="Search albums" autocomplete="off" data-add-q />
+    </p>
+    <p class="muted small" role="status" data-add-status></p>
+  </form>
+</Disclosure>
+
+<script>
+  for (const form of document.querySelectorAll<HTMLFormElement>('[data-add-to-album]')) {
+    const select = form.querySelector('[data-add-album]') as unknown as HTMLSelectElement;
+    const search = form.querySelector<HTMLInputElement>('[data-add-q]')!;
+    const status = form.querySelector<HTMLElement>('[data-add-status]')!;
+
+    // Found albums join the list, the first of them chosen.
+    let timer: number | undefined;
+    search.addEventListener('input', () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        const q = search.value.trim();
+        if (q.length < 2) return;
+        const found = ((await (await fetch(`/api/search?${new URLSearchParams({ q })}`)).json()) as { albums: { href: string; title: string; detail: string }[] }).albums;
+        for (const option of select.querySelectorAll('option[data-found]')) option.remove();
+        const added = found.map((a) => {
+          const option = document.createElement('option');
+          option.value = a.href.split('/').pop()!;
+          option.textContent = [a.title, a.detail].filter(Boolean).join(' · ');
+          option.dataset.found = '';
+          return option;
+        });
+        for (const option of [...added].reverse()) select.insertBefore(option, select.firstChild);
+        if (added[0]) select.value = added[0].value;
+        status.textContent = added.length ? `${added.length} found, added to the list.` : 'No albums found.';
+      }, 300);
+    });
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = form.querySelector<HTMLButtonElement>('button[type=submit]')!;
+      button.disabled = true;
+      status.textContent = 'Adding…';
+      const response = await fetch(form.action, { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } });
+      const result = (await response.json().catch(() => ({ ok: false }))) as { ok: boolean; error?: string; href?: string };
+      if (!result.ok) {
+        status.textContent = result.error ?? 'That did not work.';
+        button.disabled = false;
+        return;
+      }
+      location.assign(result.href!);
+    });
+  }
+</script>
+
+<style>
+  .add {
+    display: grid;
+    gap: var(--space-3);
+    max-width: 32rem;
+  }
+
+  .field {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .position input {
+    max-width: 10rem;
+  }
+
+  .optional {
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+
+  .find {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+  }
+
+  form > p {
+    margin: 0;
+  }
+
+  .add > .button {
+    justify-self: start;
+  }
+</style>

@@ -91,6 +91,15 @@ async function resolveExisting(plan: ImportPlan): Promise<Record<Table, Map<stri
   }
   const isrcIds = new Map(results[i++]!.results.filter((r) => r.matches === 1).map((r) => [r.ext, r.id]));
   for (const r of byIsrc) if (!resolved.recording.has(r.key) && isrcIds.has(r.isrc!)) resolved.recording.set(r.key, isrcIds.get(r.isrc!)!);
+  // Songs chosen by hand as ones already here: those that still exist are reused.
+  const chosen = plan.recordings.filter((r) => r.existing_id);
+  if (chosen.length) {
+    const { results: there } = await env.DB.prepare(`SELECT id FROM recording WHERE id IN (SELECT value FROM json_each(?))`)
+      .bind(JSON.stringify(chosen.map((r) => r.existing_id)))
+      .all<{ id: string }>();
+    const exists = new Set(there.map((r) => r.id));
+    for (const r of chosen) if (exists.has(r.existing_id!)) resolved.recording.set(r.key, r.existing_id!);
+  }
 
   // By name, when no id matched: the one artist of that name, provided it
   // holds no id that contradicts the plan's. So John Lindahl imported from

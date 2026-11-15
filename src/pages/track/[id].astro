@@ -33,6 +33,8 @@ import { standing } from '../../lib/standing';
 import BarChart from '../../components/BarChart.astro';
 import { otherVersions, trackAppearances, trackCredits, trackDetail } from '../../lib/pages';
 import MarkVersion from '../../components/MarkVersion.astro';
+import AddToAlbum from '../../components/AddToAlbum.astro';
+import { albumsForSong } from '../../lib/add-to-album';
 import { versionCandidates } from '../../lib/mark-versions';
 import { ratingHistory } from '../../lib/ratings';
 import { spotifyLink } from '../../lib/spotify/links';
@@ -49,7 +51,7 @@ if (!track) {
   return Astro.rewrite('/404');
 }
 
-const [appearances, credits, versions, genres, history, plays, songLinks, candidates] = await Promise.all([
+const [appearances, credits, versions, genres, history, plays, songLinks, candidates, albumChoices] = await Promise.all([
   trackAppearances(id, viewerId),
   trackCredits(id),
   otherVersions(id, track.work_id, viewerId),
@@ -59,6 +61,8 @@ const [appearances, credits, versions, genres, history, plays, songLinks, candid
   trackLinks(id),
   // Its artist's likely versions not yet linked, for marking them here (signed in).
   user ? versionCandidates(id) : Promise.resolve([]),
+  // Its artist's albums it is not on, to add it to one here (signed in).
+  user ? albumsForSong(id) : Promise.resolve([]),
 ]);
 // What it takes from and what takes from it, each kind only when there is some.
 const linkGroups = [
@@ -329,6 +333,7 @@ function ordinalOf(n: number): string {
     }
 
     {user && <MarkVersion id={id} title={track.title} candidates={candidates} />}
+    {user && <AddToAlbum id={id} albums={albumChoices} />}
 
       </div>
 

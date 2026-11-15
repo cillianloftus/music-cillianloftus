@@ -60,6 +60,12 @@ export interface PlanRecording {
   isrc: string | null;
   work_key: string | null;
   spotify_id?: string | null;
+  /**
+   * A song already in the library this one is (chosen by hand, on the Add by
+   * hand page): it is placed on the release as it is, ratings and all, not
+   * created again.
+   */
+  existing_id?: string | null;
 }
 
 export interface PlanReleaseGroup {
