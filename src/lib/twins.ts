@@ -9,8 +9,14 @@
  * (merge.ts, survivor), so ratings, plays and pins are on one song.
  *
  * After each import, for its own songs; and through the rest of the
- * library a batch at a time on the cron (10,700 pairs on 15 Nov).
+ * library a batch at a time on the cron (10,700 pairs on 15 Nov). Once a
+ * pass of the library finds none, it is not looked through again for a day
+ * (twins_clear_at): each look reads every recording (188,000 rows), and
+ * imports merge their own twins as they land.
  */
+
+/** How long a library found free of twins is left before it is looked through again. */
+const CLEAR_FOR_MS = 24 * 60 * 60 * 1000;
 
 import { env } from 'cloudflare:workers';
 import { mergeRecordings, survivor } from './merge';
@@ -46,12 +52,26 @@ export async function findTwins(of: string[] | null, limit = 200): Promise<[stri
  */
 export async function mergeTwins({ budgetMs, of = null }: { budgetMs: number; of?: string[] | null }): Promise<number> {
   const stop = Date.now() + budgetMs;
-  if (!of && !(await takeLease(budgetMs + 30_000))) return 0;
+  if (!of) {
+    const clear = await env.DB.prepare(`SELECT value FROM app_setting WHERE key = 'twins_clear_at'`).first<{ value: string }>();
+    if (clear && Date.now() - Date.parse(clear.value) < CLEAR_FOR_MS) return 0;
+    if (!(await takeLease(budgetMs + 30_000))) return 0;
+  }
   let merged = 0;
   try {
     while (Date.now() < stop) {
       const pairs = await findTwins(of);
-      if (pairs.length === 0) break;
+      if (pairs.length === 0) {
+        // The whole library looked through and none left: not again for a day.
+        if (!of) {
+          await env.DB.prepare(
+            `INSERT INTO app_setting (key, value) VALUES ('twins_clear_at', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+          )
+            .bind(new Date().toISOString())
+            .run();
+        }
+        break;
+      }
       // Each song once a batch: a merged-away song cannot be merged again.
       const gone = new Set<string>();
       let progress = 0;

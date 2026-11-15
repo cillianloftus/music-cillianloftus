@@ -9,7 +9,7 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { byLibrary } from './library-cache';
+import { byStamp } from './library-cache';
 
 export interface Gap {
   id: string;
@@ -42,11 +42,17 @@ const albumArtist = `(SELECT group_concat(a.name, ', ') FROM artist_credit c JOI
                       WHERE c.entity_type = 'release_group' AND c.entity_id = p.id AND c.role = 'primary')`;
 
 /**
- * Kept until the library changes: an edit that fills a gap moves the stamp.
- * Worked out on every visit, the six lists read about 300,000 rows.
+ * Kept for the hour, or until something is edited or merged by hand (what
+ * fills a gap; moves the stamp at once). Worked out on every visit, the
+ * six lists read about 300,000 rows; kept until the library changed, they
+ * were worked out again after every import (113 times on 15 Nov, 75
+ * million rows), though an import only adds to the lists' far end.
  */
-export function missingInfo(): Promise<GapGroup[]> {
-  return byLibrary('missing-info', null, workOutMissingInfo);
+export async function missingInfo(now = new Date()): Promise<GapGroup[]> {
+  const row = await env.DB.prepare(
+    `SELECT (SELECT max(edited_at) FROM field_override) AS edits, (SELECT max(rowid) FROM entity_redirect) AS merges`,
+  ).first<{ edits: string | null; merges: number | null }>();
+  return byStamp('missing-info', [now.toISOString().slice(0, 13), row?.edits, row?.merges].join(':'), workOutMissingInfo);
 }
 
 async function workOutMissingInfo(): Promise<GapGroup[]> {
