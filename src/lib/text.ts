@@ -48,3 +48,8 @@ export function normaliseName(name: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+/** A title without its guests: "Like You Used To (feat. Sophia Rollando)" is "Like You Used To". */
+export function withoutFeaturing(title: string): string {
+  return title.replace(/\s*[([](?:feat\.?|ft\.?|featuring|with)\s[^)\]]*[)\]]|\s+(?:feat\.?|ft\.?|featuring)\s.+$/giu, '').trim() || title;
+}

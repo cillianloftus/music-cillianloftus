@@ -16,6 +16,7 @@ import { ownerId } from '../../lib/auth/user';
 import {
   artist as getArtist,
   artistAppearances,
+  artistFeatures,
   artistCollaborators,
   artistReleaseGroups,
   hiddenUnofficial,
@@ -24,6 +25,10 @@ import {
   TRACKS_PER_PAGE,
 } from '../../lib/catalogue';
 import TrackPage from '../../components/TrackPage.astro';
+import RowList from '../../components/RowList.astro';
+import MediaRow from '../../components/MediaRow.astro';
+import Disclosure from '../../components/Disclosure.astro';
+import { withoutFeaturing } from '../../lib/text';
 import { artistImages } from '../../lib/artist-images';
 import { artistBreakdown } from '../../lib/discover';
 import { kinOf } from '../../lib/kin';
@@ -43,7 +48,7 @@ if (!artist) {
 }
 
 const viewerId = Astro.locals.user?.id ?? (await ownerId());
-const [albums, appearances, { tracks: topTracks, total: trackTotal }, collaborators, about, images, genres, breakdown, kin, sampling] = await Promise.all([
+const [albums, appearances, { tracks: topTracks, total: trackTotal }, collaborators, about, images, genres, breakdown, kin, sampling, features] = await Promise.all([
   artistReleaseGroups(artist.id, viewerId),
   artistAppearances(artist.id),
   artistTracks(artist.id, viewerId, 0, TRACKS_PER_PAGE),
@@ -54,7 +59,10 @@ const [albums, appearances, { tracks: topTracks, total: trackTotal }, collaborat
   viewerId ? artistBreakdown(viewerId, id) : Promise.resolve(null),
   kinOf(id, 6),
   artistSampling(id, 8),
+  artistFeatures(id, viewerId),
 ]);
+// Songs they are a guest on: ten, the rest a tap away.
+const FEATURES_SHOWN = 10;
 // "6 samples", "3 interpolations", or "12 songs" when both, with the split as a tooltip.
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 const takings = (a: SampledArtist) =>
@@ -464,6 +472,34 @@ import { splitVersion } from '../../lib/versions';
         }
       })();
     </script>
+
+    {
+      features.length > 0 && (
+        <section aria-labelledby="featured-heading" class="featured">
+          <h2 id="featured-heading">
+            Featured on <span class="count tabular">{features.length}</span>
+          </h2>
+          <RowList labelledby="featured-heading">
+            {features.slice(0, FEATURES_SHOWN).map((t) => (
+              <MediaRow href={`/track/${t.id}`} title={withoutFeaturing(t.title)} artKey={t.art_key} artTitle={t.album_title ?? t.title} score={{ quality: t.quality_score, personal: t.personal_score }}>
+                <span>{[t.lead, t.album_title].filter(Boolean).join(' · ')}</span>
+              </MediaRow>
+            ))}
+          </RowList>
+          {features.length > FEATURES_SHOWN && (
+            <Disclosure heading={`The other ${features.length - FEATURES_SHOWN}`} ruled={false}>
+              <RowList>
+                {features.slice(FEATURES_SHOWN).map((t) => (
+                  <MediaRow href={`/track/${t.id}`} title={withoutFeaturing(t.title)} artKey={t.art_key} artTitle={t.album_title ?? t.title} score={{ quality: t.quality_score, personal: t.personal_score }}>
+                    <span>{[t.lead, t.album_title].filter(Boolean).join(' · ')}</span>
+                  </MediaRow>
+                ))}
+              </RowList>
+            </Disclosure>
+          )}
+        </section>
+      )
+    }
 
     {
       (topTracks.length > 0 || roleFamilies.length > 0) && (
@@ -1307,6 +1343,17 @@ import { splitVersion } from '../../lib/versions';
   }
 
   /* The heading, with the pager on its line at the right. */
+  /* Songs they are a guest on: the count small beside the heading, as on shelves. */
+  .featured .count {
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-weight: 700;
+  }
+
+  .featured :global(.disclosure) {
+    margin-top: var(--space-2);
+  }
+
   .favourites-head {
     display: flex;
     align-items: baseline;

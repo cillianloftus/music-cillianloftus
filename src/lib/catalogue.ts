@@ -18,6 +18,25 @@ export interface CreditPart {
   join_phrase: string;
 }
 
+/**
+ * What goes between the names of a credit line, one per gap. The stored
+ * join phrases where they make sense; where a source left them out
+ * (featured guests filled in from elsewhere: "100 Miles and Running" read
+ * "Logic, Wale, John Lindahl"), " feat. " before the guests and " & "
+ * before the last of the artists or of the guests.
+ */
+export function creditJoins(parts: Pick<CreditPart, 'role' | 'join_phrase'>[]): string[] {
+  return parts.slice(0, -1).map((part, i) => {
+    const next = parts[i + 1]!;
+    if (part.role !== 'featured' && next.role === 'featured') {
+      return /\b(feat|ft|featuring|with)\b/i.test(part.join_phrase) ? part.join_phrase : ' feat. ';
+    }
+    if (part.join_phrase) return part.join_phrase;
+    const lastOfKind = i + 2 === parts.length || parts[i + 2]!.role !== next.role;
+    return lastOfKind ? ' & ' : ', ';
+  });
+}
+
 export interface Score {
   quality_score: number;
   personal_score: number;
@@ -357,6 +376,65 @@ export async function artistAppearances(
     .bind(artistId)
     .all<{ role: CreditRole; label: string; family: string; key_order: number | null; count: number }>();
   return results;
+}
+
+/** A song an artist is featured on, someone else's. */
+export interface FeaturedTrack {
+  id: string;
+  title: string;
+  /** Whose song it is: its primary artists. */
+  lead: string | null;
+  released: string | null;
+  quality_score: number | null;
+  personal_score: number | null;
+  album_id: string | null;
+  album_title: string | null;
+  art_key: string | null;
+}
+
+/**
+ * The songs an artist is featured on: rated ones best first, then the
+ * rest newest first. Neither their releases nor their favourite tracks
+ * (their own songs) show these, so an artist known for a feature had an
+ * empty page (Sophia Rollando, on Daniel Martz's "Like You Used To").
+ * Scores are read whole and matched here, never joined per song.
+ */
+export async function artistFeatures(artistId: string, viewerId: string | null): Promise<FeaturedTrack[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT r.id, r.title, r.first_release_date AS released,
+            (SELECT group_concat(a.name, ', ') FROM artist_credit p JOIN artist a ON a.id = p.artist_id
+             WHERE p.entity_type = 'recording' AND p.entity_id = r.id AND p.role = 'primary') AS lead
+     FROM artist_credit c JOIN recording r ON r.id = c.entity_id
+     WHERE c.artist_id = ?1 AND c.entity_type = 'recording' AND c.role = 'featured'
+       -- Credited as both the artist and a guest (some sources do): their own song.
+       AND NOT EXISTS (SELECT 1 FROM artist_credit o WHERE o.entity_type = 'recording' AND o.entity_id = r.id
+                       AND o.artist_id = ?1 AND o.role = 'primary')
+     LIMIT 500`,
+  )
+    .bind(artistId)
+    .all<{ id: string; title: string; released: string | null; lead: string | null }>();
+  if (results.length === 0) return [];
+  const [places, scores] = await Promise.all([
+    trackPlaces(results.map((r) => r.id)),
+    viewerId
+      ? env.DB.prepare(`SELECT recording_id, quality_score, personal_score FROM v_recording_score WHERE user_id = ?`)
+          .bind(viewerId)
+          .all<{ recording_id: string; quality_score: number | null; personal_score: number | null }>()
+          .then((r) => new Map(r.results.map((s) => [s.recording_id, s])))
+      : Promise.resolve(new Map<string, { quality_score: number | null; personal_score: number | null }>()),
+  ]);
+  return results
+    .map((r) => {
+      const s = scores.get(r.id);
+      return { ...r, quality_score: s?.quality_score ?? null, personal_score: s?.personal_score ?? null, album_id: null, album_title: null, art_key: null, ...places[r.id] };
+    })
+    .sort(
+      (a, b) =>
+        Number(b.personal_score !== null) - Number(a.personal_score !== null) ||
+        (b.personal_score ?? 0) - (a.personal_score ?? 0) ||
+        (b.released ?? '').localeCompare(a.released ?? '') ||
+        a.title.localeCompare(b.title),
+    );
 }
 
 export interface ArtistTrack {
