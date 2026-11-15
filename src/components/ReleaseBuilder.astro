@@ -1,0 +1,356 @@
+---
+/**
+ * Building a release's tracklist by hand, as the rest of the site finds
+ * things: search for songs already in the library (the chosen artist's
+ * first) and add them, or add what was typed as a new song; reorder and
+ * remove rows; or paste a list. It fills the form's tracklist (one numbered
+ * line a row, "Disc 2" lines between discs) and an existing_<disc-position>
+ * field for each song chosen from the library, which the Add by hand page
+ * reads as it did a pasted list (src/lib/import/manual.ts).
+ */
+
+export interface BuilderRow {
+  kind: 'song' | 'disc';
+  /** A new song's line as typed ("Title (feat. Name) 3:41"), a chosen song's title, or "Disc 2". */
+  text: string;
+  /** Chosen from the library: which song, and what tells it apart. */
+  existing?: { id: string; detail: string } | null;
+}
+
+interface Props {
+  /** The form the hidden fields belong to. */
+  form: string;
+  rows: BuilderRow[];
+  max: number;
+}
+
+const { form, rows, max } = Astro.props;
+---
+
+<div class="builder" data-release-builder data-form={form} data-max={max}>
+  <script type="application/json" data-rows set:html={JSON.stringify(rows).replaceAll('<', '\\u003c')} />
+  <div class="head">
+    <h2 id="builder-heading">Tracks</h2>
+    <span class="muted small" data-count></span>
+  </div>
+  <ol role="list" class="rows" aria-labelledby="builder-heading" data-list></ol>
+  <p class="muted small empty" data-empty>No tracks yet. Leave it empty for an announced release.</p>
+
+  <div class="add">
+    <label for="builder-q">Add a song</label>
+    <input class="input" id="builder-q" type="search" autocomplete="off" placeholder="Search your library, or type a new song’s title" data-q />
+    <ul role="list" class="found" data-found aria-live="polite"></ul>
+  </div>
+
+  <details class="paste">
+    <summary>Paste a tracklist instead</summary>
+    <label class="visually-hidden" for="builder-paste">Tracklist</label>
+    <textarea class="input" id="builder-paste" rows="8" spellcheck="false" data-paste
+      placeholder="One per line. Numbers, durations (3:41), “(feat. Name)” and “Disc 2” are understood."></textarea>
+    <button class="button small" type="button" data-paste-add>Add these</button>
+  </details>
+
+  <textarea name="tracklist" form={form} hidden data-tracklist></textarea>
+  <div hidden data-existing></div>
+</div>
+
+<script>
+  type Row = { kind: 'song' | 'disc'; text: string; existing?: { id: string; detail: string } | null };
+  type Track = { href: string; title: string; detail: string; score: number | null };
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-release-builder]')) {
+    const formId = root.dataset.form!;
+    const max = Number(root.dataset.max);
+    let rows = JSON.parse(root.querySelector('[data-rows]')!.textContent || '[]') as Row[];
+    const list = root.querySelector('[data-list]')!;
+    const empty = root.querySelector<HTMLElement>('[data-empty]')!;
+    const count = root.querySelector<HTMLElement>('[data-count]')!;
+    const q = root.querySelector('[data-q]') as unknown as HTMLInputElement;
+    const found = root.querySelector('[data-found]')!;
+    const tracklist = root.querySelector('[data-tracklist]') as unknown as HTMLTextAreaElement;
+    const existing = root.querySelector('[data-existing]')!;
+    const artistField = document.querySelector('#artist') as unknown as HTMLInputElement | null;
+
+    const element = (tag: string, props: Record<string, unknown> = {}, ...children: (Node | string)[]): HTMLElement => {
+      const el = Object.assign(document.createElement(tag), props);
+      el.replaceChildren(...children);
+      return el;
+    };
+
+    /** The form's fields from the rows: numbered lines, discs between, a choice per library song. */
+    function serialise() {
+      const lines: string[] = [];
+      const fields: HTMLInputElement[] = [];
+      let disc = 1;
+      let position = 0;
+      for (const row of rows) {
+        if (row.kind === 'disc') {
+          disc++;
+          position = 0;
+          lines.push(`Disc ${disc}`);
+          continue;
+        }
+        position++;
+        lines.push(`${position}. ${row.text}`);
+        if (row.existing) {
+          fields.push(Object.assign(document.createElement('input'), { type: 'hidden', name: `existing_${disc}-${position}`, value: row.existing.id }));
+          fields.at(-1)!.setAttribute('form', formId);
+        }
+      }
+      tracklist.value = lines.join('\n');
+      existing.replaceChildren(...fields);
+    }
+
+    function move(i: number, by: number) {
+      const j = i + by;
+      if (j < 0 || j >= rows.length) return;
+      [rows[i], rows[j]] = [rows[j]!, rows[i]!];
+      render();
+    }
+
+    function render() {
+      const songs = rows.filter((r) => r.kind === 'song').length;
+      count.textContent = songs ? `${songs} ${songs === 1 ? 'track' : 'tracks'}` : '';
+      empty.hidden = rows.length > 0;
+      let n = 0;
+      list.replaceChildren(
+        ...rows.map((row, i) => {
+          const controls = element(
+            'span',
+            { className: 'controls' },
+            element('button', { type: 'button', className: 'icon', title: 'Move up', ariaLabel: `Move ${row.text} up`, disabled: i === 0, onclick: () => move(i, -1) }, '↑'),
+            element('button', { type: 'button', className: 'icon', title: 'Move down', ariaLabel: `Move ${row.text} down`, disabled: i === rows.length - 1, onclick: () => move(i, 1) }, '↓'),
+            element('button', { type: 'button', className: 'icon', title: 'Remove', ariaLabel: `Remove ${row.text}`, onclick: () => ((rows = rows.filter((_, k) => k !== i)), render()) }, '×'),
+          );
+          if (row.kind === 'disc') return element('li', { className: 'row disc' }, element('span', { className: 'what' }, row.text), controls);
+          n++;
+          const what = row.existing
+            ? element('span', { className: 'what' }, element('strong', {}, row.text), element('span', { className: 'muted small' }, `In your library · ${row.existing.detail}`))
+            : element(
+                'span',
+                { className: 'what' },
+                // A new song's line stays editable: "(feat. Name)" and a length are understood.
+                element('input', {
+                  className: 'input',
+                  value: row.text,
+                  ariaLabel: `Track ${n} title`,
+                  oninput: (event: Event) => {
+                    row.text = (event.target as HTMLInputElement).value;
+                    serialise();
+                  },
+                }),
+                element('span', { className: 'muted small' }, 'New song'),
+              );
+          return element('li', { className: 'row' }, element('span', { className: 'n tabular' }, String(n)), what, controls);
+        }),
+      );
+      serialise();
+    }
+
+    function add(row: Row) {
+      if (rows.filter((r) => r.kind === 'song').length >= max) return;
+      rows.push(row);
+      render();
+      q.value = '';
+      found.replaceChildren();
+      q.focus();
+    }
+
+    // Searching: the site's own search; the chosen artist's songs first; and always the typed title as a new song.
+    let timer: number | undefined;
+    q.addEventListener('input', () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        const text = q.value.trim();
+        if (!text) return found.replaceChildren();
+        let tracks: Track[] = [];
+        if (text.length >= 2) {
+          const response = await fetch(`/api/search?${new URLSearchParams({ q: text })}`).catch(() => null);
+          tracks = response?.ok ? ((await response.json()) as { tracks: Track[] }).tracks : [];
+          const artist = artistField?.value.trim().toLowerCase();
+          if (artist) tracks.sort((a, b) => Number(b.detail.toLowerCase().includes(artist)) - Number(a.detail.toLowerCase().includes(artist)));
+        }
+        const chosen = new Set(rows.map((r) => r.existing?.id).filter(Boolean));
+        found.replaceChildren(
+          ...tracks
+            .filter((t) => !chosen.has(t.href.split('/').pop()!))
+            .map((t) =>
+              element(
+                'li',
+                {},
+                element(
+                  'button',
+                  { type: 'button', className: 'pick', onclick: () => add({ kind: 'song', text: t.title, existing: { id: t.href.split('/').pop()!, detail: [t.detail, t.score !== null ? `rated ${t.score}` : null].filter(Boolean).join(' · ') } }) },
+                  element('strong', {}, t.title),
+                  element('span', { className: 'muted small' }, [t.detail, t.score !== null ? `rated ${t.score}` : null].filter(Boolean).join(' · ')),
+                ),
+              ),
+            ),
+          element('li', {}, element('button', { type: 'button', className: 'pick new', onclick: () => add({ kind: 'song', text, existing: null }) }, element('strong', {}, `Add “${text}” as a new song`))),
+        );
+      }, 250);
+    });
+    // Enter adds the typed title as a new song, rather than sending the form.
+    q.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      const text = q.value.trim();
+      if (text) add({ kind: 'song', text, existing: null });
+    });
+
+    // Pasting: each line a new song ("Disc 2" lines between discs); the preview then offers library songs by the same title.
+    root.querySelector('[data-paste-add]')!.addEventListener('click', () => {
+      const paste = root.querySelector('[data-paste]') as unknown as HTMLTextAreaElement;
+      for (const line of paste.value.split('\n').map((l) => l.trim()).filter(Boolean)) {
+        if (/^(?:disc|cd|disk)\s*\d+\b/i.test(line)) rows.push({ kind: 'disc', text: line });
+        else rows.push({ kind: 'song', text: line.replace(/^\d+[.)]\s*/, ''), existing: null });
+      }
+      paste.value = '';
+      render();
+    });
+
+    render();
+  }
+</script>
+
+<style>
+  .builder {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+
+  .head h2 {
+    margin: 0;
+    font-size: var(--step-1);
+  }
+
+  .rows,
+  .found {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .rows :global(.row) {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-2);
+    padding-block: var(--space-2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .rows :global(.row.disc) {
+    grid-template-columns: minmax(0, 1fr) auto;
+    color: var(--text-muted);
+    font-weight: 700;
+  }
+
+  .rows :global(.n) {
+    color: var(--text-muted);
+    text-align: right;
+  }
+
+  .rows :global(.what) {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .rows :global(.what input) {
+    min-height: 2.25rem;
+  }
+
+  .rows :global(.controls) {
+    display: flex;
+  }
+
+  .rows :global(.icon) {
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .rows :global(.icon:hover:not(:disabled)) {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .rows :global(.icon:disabled) {
+    opacity: 0.3;
+    cursor: default;
+  }
+
+  .empty {
+    margin: 0;
+  }
+
+  .add {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .add label {
+    font-weight: 600;
+  }
+
+  .found :global(.pick) {
+    display: grid;
+    width: 100%;
+    gap: 2px;
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .found :global(.pick:hover),
+  .found :global(.pick:focus-visible) {
+    background: var(--surface-2);
+  }
+
+  .found :global(.pick.new strong) {
+    color: var(--accent);
+  }
+
+  .paste summary {
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .paste[open] {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .paste textarea {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+  }
+
+  .paste .button {
+    justify-self: start;
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+</style>

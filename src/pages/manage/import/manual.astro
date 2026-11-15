@@ -1,15 +1,18 @@
 ---
 /**
- * Manual entry: for music on no database at all. Paste a tracklist;
- * Preview shows exactly what will be created (the dry run, ARCHITECTURE.md
- * §5); Add writes it through the same import writer as everything else.
+ * Manual entry: for music on no database at all, or a release made of
+ * songs already here. The tracklist is built by searching the library and
+ * typing new songs (ReleaseBuilder), or pasted; Preview shows exactly what
+ * will be created (the dry run, ARCHITECTURE.md §5); Add writes it through
+ * the same import writer as everything else.
  */
 import BackLink from '../../../components/BackLink.astro';
 import { env } from 'cloudflare:workers';
 import Base from '../../../layouts/Base.astro';
 import ChipInput from '../../../components/ChipInput.astro';
 import { formatDuration } from '../../../lib/format';
-import { MAX_TRACKS, buildManualPlan, existingSongs, lineKey, parseTracklist, validateManual, type ExistingSong, type ManualInput } from '../../../lib/import/manual';
+import { MAX_TRACKS, buildManualPlan, existingSongs, fittingChoices, lineKey, parseTracklist, songsByIds, validateManual, type ExistingSong, type ManualInput } from '../../../lib/import/manual';
+import ReleaseBuilder, { type BuilderRow } from '../../../components/ReleaseBuilder.astro';
 
 import type { ReleaseGroupType } from '../../../lib/import/plan';
 import { writePlan } from '../../../lib/import/write';
@@ -52,8 +55,7 @@ if (Astro.request.method === 'POST') {
 
   if (errors.length === 0 && form.get('intent') === 'save') {
     // A song chosen for a line is used only while it still is that line's (the tracklist may have changed since the preview).
-    const fits = await existingSongs(input.artist, parseTracklist(input.tracklist), Astro.locals.user?.id ?? null);
-    input.existing = Object.fromEntries(Object.entries(input.existing ?? {}).filter(([key, id]) => fits[key]?.some((m) => m.id === id)));
+    input.existing = await fittingChoices(input.existing ?? {}, parseTracklist(input.tracklist));
     const result = await writePlan(buildManualPlan(input));
     return Astro.redirect(`/album/${result.releaseGroupId}`, 303);
   }
@@ -71,6 +73,37 @@ if (Astro.request.method === 'POST') {
       .all<{ id: string; title: string }>();
     duplicates = results;
     matches = await existingSongs(input.artist, parseTracklist(input.tracklist), Astro.locals.user?.id ?? null);
+    // Songs picked in the builder (by any artist, a guest's say) are offered on their lines too, first.
+    const picked = await songsByIds(Object.values(input.existing ?? {}), Astro.locals.user?.id ?? null);
+    for (const [key, id] of Object.entries(input.existing ?? {})) {
+      const song = picked.get(id);
+      if (song && !matches[key]?.some((m) => m.id === id)) matches[key] = [song, ...(matches[key] ?? [])];
+    }
+  }
+}
+
+// The builder's rows, from what was sent: each line, and the library song chosen for it.
+const builderRows: BuilderRow[] = [];
+{
+  const lines = input.tracklist.split('\n').map((l) => l.trim()).filter(Boolean);
+  const details = await songsByIds(Object.values(input.existing ?? {}), Astro.locals.user?.id ?? null);
+  let disc = 1;
+  let position = 0;
+  for (const line of lines) {
+    if (/^(?:disc|cd|disk)\s*\d+\b/i.test(line)) {
+      disc++;
+      position = 0;
+      builderRows.push({ kind: 'disc', text: line });
+      continue;
+    }
+    position++;
+    const id = input.existing?.[`${disc}-${position}`];
+    const song = id ? details.get(id) : undefined;
+    builderRows.push({
+      kind: 'song',
+      text: song ? song.title : line.replace(/^\d+[.)]\s*/, ''),
+      existing: song ? { id: song.id, detail: [song.album_title, song.score !== null ? `rated ${Math.round(song.score)}` : null].filter(Boolean).join(' · ') } : null,
+    });
   }
 }
 
@@ -84,7 +117,7 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
     <header>
       <p><BackLink href="/manage/import">Import</BackLink></p>
       <h1>Add by hand</h1>
-      <p class="muted">For music on no database: mixtapes, demos, bedroom releases. Paste the tracklist.</p>
+      <p class="muted">For music on no database (mixtapes, demos, bedroom releases), or a release made of songs already in your library.</p>
     </header>
 
     {
@@ -99,7 +132,8 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
       <div class="row">
         <div class="field">
           <label for="artist">Artist</label>
-          <input class="input" id="artist" name="artist" value={input.artist} required autocomplete="off" />
+          <input class="input" id="artist" name="artist" value={input.artist} required autocomplete="off" list="artist-options" />
+          <datalist id="artist-options"></datalist>
         </div>
         <div class="field">
           <label for="title">Title</label>
@@ -128,14 +162,7 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
         placeholder="Add a genre"
         hint="Your own tags, over any imported ones."
       />
-      <div class="field">
-        <label for="tracklist">Tracklist</label>
-        <textarea class="input tracklist" id="tracklist" name="tracklist" rows="12" spellcheck="false" aria-describedby="tracklist-hint">{input.tracklist}</textarea>
-        <span class="hint" id="tracklist-hint">
-          One track per line. Numbers, durations (3:41) and “(feat. Name)” are understood; “Disc 2” starts a
-          new disc. Up to {MAX_TRACKS} tracks; leave it empty for an announced album.
-        </span>
-      </div>
+      <ReleaseBuilder form="manual-form" rows={builderRows} max={MAX_TRACKS} />
 
       <div class="buttons">
         <button class="button" type="submit" name="intent" value="preview">Preview</button>
@@ -221,6 +248,24 @@ const discs = new Set(tracks.map((t) => t.disc)).size;
     }
   </div>
 </Base>
+
+<script>
+  // The artist field suggests artists already in the library as you type.
+  const artist = document.querySelector('#artist') as unknown as HTMLInputElement | null;
+  const options = document.querySelector('#artist-options');
+  let timer: number | undefined;
+  artist?.addEventListener('input', () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(async () => {
+      const q = artist.value.trim();
+      if (q.length < 2 || !options) return;
+      const response = await fetch(`/api/search?${new URLSearchParams({ q })}`).catch(() => null);
+      if (!response?.ok) return;
+      const { artists } = (await response.json()) as { artists: { title: string }[] };
+      options.replaceChildren(...artists.map((a) => Object.assign(document.createElement('option'), { value: a.title })));
+    }, 250);
+  });
+</script>
 
 <style>
   .page {

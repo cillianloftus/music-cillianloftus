@@ -148,3 +148,16 @@ describe('a release made from songs already here', () => {
     expect((db.prepare(`SELECT count(*) n FROM recording`).get() as { n: number }).n).toBe(before + 1);
   });
 });
+
+describe('songs picked for lines', () => {
+  it('are kept while their line still has their title, by any artist, and dropped when it changed', async () => {
+    const { seedLibrary } = await import('../../test/db');
+    const { fittingChoices } = await import('./manual');
+    const db = migratedDb();
+    seedLibrary(db);
+    (env as { DB: D1Database }).DB = d1(db);
+    // c1 is Yolanda's "Song A1 (Cover)"; a1 Xavier's "Song A1".
+    const tracks = parseTracklist('1. Song A1 (Cover)\n2. Something Else');
+    expect(await fittingChoices({ '1-1': 'c1', '1-2': 'a1' }, tracks)).toEqual({ '1-1': 'c1' });
+  });
+});

@@ -272,3 +272,34 @@ export async function existingSongs(artistName: string, tracks: ParsedTrack[], v
   }
   return out;
 }
+
+/** Songs by id, as a line's choices show them: for songs picked in the builder by search, by any artist. */
+export async function songsByIds(ids: string[], viewerId: string | null): Promise<Map<string, ExistingSong>> {
+  if (ids.length === 0) return new Map();
+  const { results } = await env.DB.prepare(
+    `SELECT r.id, r.title,
+            (SELECT g.title FROM track t JOIN release x ON x.id = t.release_id JOIN release_group g ON g.id = x.release_group_id
+             WHERE t.recording_id = r.id ORDER BY g.first_release_date LIMIT 1) AS album_title,
+            (SELECT s.personal_score FROM v_recording_score s WHERE s.recording_id = r.id AND s.user_id = ?2) AS score
+     FROM recording r WHERE r.id IN (SELECT value FROM json_each(?1))`,
+  )
+    .bind(JSON.stringify(ids), viewerId)
+    .all<ExistingSong>();
+  return new Map(results.map((r) => [r.id, r]));
+}
+
+/**
+ * The chosen songs that still fit their lines: the same title (case,
+ * punctuation and guests aside). A tracklist edited after its preview, or
+ * a line moved, cannot put a song on the wrong track.
+ */
+export async function fittingChoices(existing: Record<string, string>, tracks: ParsedTrack[]): Promise<Record<string, string>> {
+  const songs = await songsByIds(Object.values(existing), null);
+  const titleOf = new Map(tracks.map((t) => [lineKey(t), songKey(t.title)]));
+  return Object.fromEntries(
+    Object.entries(existing).filter(([key, id]) => {
+      const song = songs.get(id);
+      return song !== undefined && titleOf.get(key) === songKey(song.title);
+    }),
+  );
+}
