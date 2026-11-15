@@ -398,6 +398,8 @@ export async function mergeRecordings(keepId: string, goneId: string): Promise<v
     ...moveEntity('genre_tag'),
     ...moveEntity('field_override'),
     db.prepare(`DELETE FROM queue_skip WHERE entity_type = 'recording' AND entity_id = ?`).bind(goneId),
+    // Borrowed scores to or from it: worked out again on the next rebuild (inherited.ts).
+    db.prepare(`DELETE FROM inherited_score WHERE recording_id = ?1 OR from_recording_id = ?1`).bind(goneId),
     db.prepare(`DELETE FROM queue_handoff WHERE entity_type = 'recording' AND entity_id = ?`).bind(goneId),
     db.prepare(`DELETE FROM lookup_log WHERE entity_id = ?`).bind(goneId),
     db.prepare(`UPDATE entity_redirect SET new_id = ?1 WHERE entity_type = 'recording' AND new_id = ?2`).bind(keepId, goneId),

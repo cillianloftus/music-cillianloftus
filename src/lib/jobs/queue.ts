@@ -21,7 +21,8 @@ export interface JobPayloads {
         label?: string;
         /** Local files to catalogue against the release once written (import from tags). */
         files?: import('../import/files').FileAttachment[];
-        result?: { releaseGroupId: string; filesAttached?: number };
+        /** timing: each stage in ms (plan, write, twins, art, musicbrainz, others), to see where imports spend their time. */
+        result?: { releaseGroupId: string; filesAttached?: number; timing?: Record<string, number> };
       }
     | {
         source: 'spotify';

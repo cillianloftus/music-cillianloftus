@@ -206,7 +206,9 @@ const sample = (r: SampleRow, keys: readonly ((typeof CRAFT_KEYS)[number] | (typ
  */
 export async function scoreInputs(userId: string, { albums = true }: { albums?: boolean } = {}): Promise<ScoreInputs> {
   const rated = `SELECT DISTINCT entity_id AS recording_id FROM rating WHERE user_id = ?1 AND entity_type = 'recording'`;
-  const [ratings, tracks, artists, genres, canonical] = await env.DB.batch([
+  // Rated, or borrowing a version's score (0075): the songs an album's score can count.
+  const scored = `${rated} UNION SELECT recording_id FROM inherited_score WHERE user_id = ?1`;
+  const [ratings, tracks, artists, genres, canonical, inherited] = await env.DB.batch([
     env.DB.prepare(
       // Oldest first, ties by id, as v_gut_calibration and v_latest_rating_axes order them.
       `SELECT id, entity_type, entity_id, rated_at, gut_score, impact,
@@ -218,7 +220,7 @@ export async function scoreInputs(userId: string, { albums = true }: { albums?: 
     env.DB.prepare(
       `SELECT r.id, r.length_ms, k.kind FROM recording r
        LEFT JOIN recording_kind k ON k.recording_id = r.id
-       WHERE r.id IN (${rated})`,
+       WHERE r.id IN (${scored})`,
     ).bind(userId),
     // Each rated recording's first primary artist, for the gut calibration.
     env.DB.prepare(
@@ -236,12 +238,14 @@ export async function scoreInputs(userId: string, { albums = true }: { albums?: 
         ? `SELECT DISTINCT c.release_group_id, t.recording_id
            FROM v_release_group_canonical c
            JOIN track t ON t.release_id = c.release_id
-           WHERE EXISTS (SELECT 1 FROM rating r WHERE r.user_id = ?1 AND r.entity_type = 'recording' AND r.entity_id = t.recording_id)`
+           WHERE t.recording_id IN (${scored})`
         : `SELECT NULL AS release_group_id, NULL AS recording_id WHERE ?1 IS NULL`,
     ).bind(userId),
+    env.DB.prepare(`SELECT recording_id, from_recording_id FROM inherited_score WHERE user_id = ?1`).bind(userId),
   ]);
 
-  const inputs: ScoreInputs = { recordings: {}, albums: {}, canonical: {}, kinds: {}, lengths: {}, artists: {}, genres: {} };
+  const inputs: ScoreInputs = { recordings: {}, albums: {}, canonical: {}, kinds: {}, lengths: {}, artists: {}, genres: {}, inherits: {} };
+  for (const i of (inherited!.results ?? []) as { recording_id: string; from_recording_id: string }[]) inputs.inherits![i.recording_id] = i.from_recording_id;
   for (const a of (artists!.results ?? []) as { id: string; artist: string | null }[]) if (a.artist) inputs.artists![a.id] = a.artist;
   for (const g of (genres!.results ?? []) as { recording_id: string; genre_id: string }[]) (inputs.genres![g.recording_id] ??= []).push(g.genre_id);
   for (const t of (tracks!.results ?? []) as { id: string; length_ms: number | null; kind: TrackKind | null }[]) {

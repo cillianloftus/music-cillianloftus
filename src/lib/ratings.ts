@@ -142,6 +142,8 @@ export async function addRating(userId: string, input: RatingInput): Promise<str
       depth === 'gut' && input.gut_score !== null ? calibration.convertOne(userId, input.entity_id, input.gut_score) : Promise.resolve(),
       depth === 'detailed' || wasDetailed ? calibration.markStale(userId) : Promise.resolve(),
     ]).catch((error) => console.warn('Gut conversion failed', error));
+    // Its versions borrow its new score, or stop borrowing now it has its own (0075).
+    await (await import('./inherited')).rebuildInheritedScores(userId).catch((error) => console.warn('Borrowed scores failed', error));
   }
   return id;
 }

@@ -24,6 +24,7 @@ import { nudgeRatings, pushToUser, vapid } from './lib/nudge';
 import { latestBackup, recordNightly, type TaskRun } from './lib/health';
 import { rebuildAllGutConversions, rebuildStaleGutConversions } from './lib/gut-calibration';
 import { mergeTwins } from './lib/twins';
+import { rebuildAllInheritedScores } from './lib/inherited';
 
 /**
  * Checks the library against MusicBrainz's official releases a little at a
@@ -98,6 +99,8 @@ export default {
             ['Album genre derivation', deriveAlbumGenres],
             // After the genres: a song's conversion follows its artist and genres.
             ['Gut score conversions', rebuildAllGutConversions],
+            // After them: versions borrow the scores the conversions set (0075).
+            ['Borrowed scores for versions', rebuildAllInheritedScores],
             ['Review rules', detectAnomalies],
             // The kept job counts (0070) set from a real count, once a day.
             ['Job counts', recountJobs],

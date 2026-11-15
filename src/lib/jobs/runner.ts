@@ -22,11 +22,15 @@ import { runBackup } from '../backup/store';
 import { claimNext, complete, fail, requeue, toBack, type JobPayloads, type JobRow } from './queue';
 import { MusicBrainzError } from '../musicbrainz/client';
 import { mergeTwins } from '../twins';
+import { inheritForNewSongs } from '../inherited';
 
 /** An imported release's songs joined to the same recordings already here (twins.ts), so their ratings show. */
 async function joinTwins(releaseId: string): Promise<void> {
   const { results } = await env.DB.prepare(`SELECT DISTINCT recording_id AS id FROM track WHERE release_id = ?`).bind(releaseId).all<{ id: string }>();
   await mergeTwins({ budgetMs: 15_000, of: results.map((r) => r.id) }).catch((error) => console.warn('Twins after import failed', error));
+  // What is left after the merges: new versions of rated songs borrow their score (0075).
+  const { results: left } = await env.DB.prepare(`SELECT DISTINCT recording_id AS id FROM track WHERE release_id = ?`).bind(releaseId).all<{ id: string }>();
+  await inheritForNewSongs(left.map((r) => r.id)).catch((error) => console.warn('Borrowed scores after import failed', error));
 }
 
 /**
@@ -202,7 +206,7 @@ async function importRelease(job: JobRow): Promise<void> {
 
   // The file list has done its job; keep the payload small.
   const { files: _files, ...rest } = payload;
-  await complete(job.id, { ...rest, result: { releaseGroupId: result.releaseGroupId, filesAttached } }, 1);
+  await complete(job.id, { ...rest, result: { releaseGroupId: result.releaseGroupId, filesAttached, timing } }, 1);
 }
 
 async function spotifyPush(job: JobRow): Promise<void> {

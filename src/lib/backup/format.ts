@@ -44,7 +44,9 @@ export function isExcluded(table: string): boolean {
     // A device's push keys: tied to that browser, useless restored elsewhere.
     table === 'push_subscription' ||
     // Worked out from the ratings (gut-calibration.ts), and again each night.
-    table === 'gut_conversion'
+    table === 'gut_conversion' ||
+    // The same: scores versions borrow (inherited.ts).
+    table === 'inherited_score'
   );
 }
 

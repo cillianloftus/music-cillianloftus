@@ -72,6 +72,12 @@ export interface ScoreInputs {
   kinds?: Record<string, TrackKind>;
   /** Track lengths in milliseconds, where known. */
   lengths?: Record<string, number>;
+  /**
+   * Unrated versions of a rated song, each with the version it borrows its
+   * score from (inherited_score, 0075). Its score is that one's, under the
+   * weights given, so the preview moves both together.
+   */
+  inherits?: Record<string, string>;
 }
 
 /**
@@ -327,6 +333,12 @@ export function computeScores(inputs: ScoreInputs, w: Weights): Scores {
   for (const [id, r] of Object.entries(inputs.recordings)) {
     if (kinds[id] === 'skit') continue;
     const score = recordingScore(r, w, conversions.get(id) ?? offset);
+    if (score) recordings.set(id, score);
+  }
+  // v_recording_score's second half: unrated versions borrow a rated one's score.
+  for (const [id, from] of Object.entries(inputs.inherits ?? {})) {
+    if (inputs.recordings[id] || kinds[id] === 'skit') continue;
+    const score = recordings.get(from);
     if (score) recordings.set(id, score);
   }
 

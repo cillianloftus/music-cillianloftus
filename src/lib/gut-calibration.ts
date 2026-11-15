@@ -85,6 +85,8 @@ export async function rebuildGutConversions(userId: string): Promise<number> {
   if (statements.length > 0) {
     statements.push(env.DB.prepare(BUMP_SCORES));
     for (let i = 0; i < statements.length; i += 100) await env.DB.batch(statements.slice(i, i + 100));
+    // Versions that borrow a moved score take it again (0075, inherited.ts).
+    await (await import('./inherited')).rebuildInheritedScores(userId).catch((error) => console.warn('Borrowed scores failed', error));
   }
   await kv((cache) => cache.put(calibrationKey(userId), JSON.stringify(cal)), undefined);
   return statements.length === 0 ? 0 : statements.length - 1;
