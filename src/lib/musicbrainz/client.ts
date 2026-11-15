@@ -62,9 +62,21 @@ async function throttle<T>(task: () => Promise<T>): Promise<T> {
   const now = Date.now();
   const slot = Math.max(now, nextSlot);
   nextSlot = slot + interval;
-  if (slot > now) await new Promise((resolve) => setTimeout(resolve, slot - now));
+  if (slot > now) {
+    mbStats.waitedMs += slot - now;
+    await new Promise((resolve) => setTimeout(resolve, slot - now));
+  }
+  mbStats.requests++;
   return task();
 }
+
+/**
+ * What this isolate has asked of MusicBrainz: requests sent, answered from
+ * memory, refused (503), and time spent waiting for a turn or after a
+ * refusal. An import keeps the difference across it (runner.ts), to show
+ * where its time goes.
+ */
+export const mbStats = { requests: 0, remembered: 0, refused: 0, waitedMs: 0 };
 
 export class MusicBrainzError extends Error {
   constructor(
@@ -106,7 +118,10 @@ async function get<T>(path: string, inc: string[]): Promise<T> {
   const separator = path.includes('?') ? '&' : '?';
   const url = `${BASE}/${path}${separator}fmt=json${inc.length ? `&inc=${inc.join('+')}` : ''}`;
   const kept = remembered(url);
-  if (kept !== null) return JSON.parse(kept) as T;
+  if (kept !== null) {
+    mbStats.remembered++;
+    return JSON.parse(kept) as T;
+  }
 
   for (let attempt = 1; ; attempt++) {
     const response = await throttle(() =>
@@ -119,8 +134,12 @@ async function get<T>(path: string, inc: string[]): Promise<T> {
       return JSON.parse(text) as T;
     }
 
-    if (response.status === 503) interval = Math.min(MAX_INTERVAL_MS, interval * 2);
+    if (response.status === 503) {
+      interval = Math.min(MAX_INTERVAL_MS, interval * 2);
+      mbStats.refused++;
+    }
     if (response.status === 503 && attempt < MAX_ATTEMPTS) {
+      mbStats.waitedMs += 1000 * Math.min(16, 2 ** attempt);
       await new Promise((resolve) => setTimeout(resolve, 1000 * Math.min(16, 2 ** attempt)));
       continue;
     }

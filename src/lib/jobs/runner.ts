@@ -20,7 +20,7 @@ import { writePlan } from '../import/write';
 import { pushDefinition } from '../spotify/push';
 import { runBackup } from '../backup/store';
 import { claimNext, complete, fail, requeue, toBack, type JobPayloads, type JobRow } from './queue';
-import { MusicBrainzError } from '../musicbrainz/client';
+import { MusicBrainzError, mbStats } from '../musicbrainz/client';
 import { mergeTwins } from '../twins';
 import { inheritForNewSongs } from '../inherited';
 
@@ -175,6 +175,8 @@ async function importRelease(job: JobRow): Promise<void> {
     timing[stage] = Date.now() - mark;
     mark = Date.now();
   };
+  // MusicBrainz's share of it: requests, refusals, time waiting (client.ts).
+  const mbBefore = { ...mbStats };
   const plan = await planFromMusicBrainz(payload.target);
   lap('plan');
   const result = await writePlan(plan);
@@ -202,6 +204,10 @@ async function importRelease(job: JobRow): Promise<void> {
   lap('art');
   const filesAttached = payload.files?.length ? await attachFiles(result.releaseId, payload.files) : undefined;
   await enrichImportedArtists(result.releaseGroupId, timing);
+  timing.mb_requests = mbStats.requests - mbBefore.requests;
+  timing.mb_remembered = mbStats.remembered - mbBefore.remembered;
+  timing.mb_refused = mbStats.refused - mbBefore.refused;
+  timing.mb_waited = mbStats.waitedMs - mbBefore.waitedMs;
   console.log('Import timing (ms)', JSON.stringify(timing));
 
   // The file list has done its job; keep the payload small.
