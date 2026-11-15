@@ -133,6 +133,52 @@ export async function playedNotRated(userId: string, limit = 10): Promise<TrackC
   return withCredits(results);
 }
 
+/**
+ * Songs rated by gut only that most deserve a full rating: the ones rated
+ * highest and played most (15 Nov: "recommend stuff that's either high rated
+ * or has a lot of streams for deeper considered ratings"). Their gut score
+ * out of 100 and plays decide it, a log of plays so 300 plays is not worth
+ * ten times 30. Picked from the gut-rated songs' ids and plays alone, then
+ * the cards worked out for the few shown.
+ */
+export async function worthRatingInFull(userId: string, limit = 10): Promise<(TrackCard & { gut: number })[]> {
+  const { results: gut } = await env.DB.prepare(
+    `WITH latest AS (
+       SELECT entity_id AS id, depth, gut_score, max(rated_at) FROM rating
+       WHERE user_id = ?1 AND entity_type = 'recording' GROUP BY entity_id
+     )
+     SELECT l.id, l.gut_score AS gut,
+            (SELECT count(*) FROM play p WHERE p.recording_id = l.id AND p.user_id = ?1 AND p.counted = 1) AS plays
+     FROM latest l
+     WHERE l.depth = 'gut' AND l.gut_score IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM recording_kind k WHERE k.recording_id = l.id AND k.kind = 'skit')`,
+  )
+    .bind(userId)
+    .all<{ id: string; gut: number; plays: number }>();
+  const most = Math.max(1, ...gut.map((g) => g.plays));
+  const top = gut
+    .map((g) => ({ ...g, worth: g.gut * 10 + 20 * (Math.log1p(g.plays) / Math.log1p(most)) }))
+    .sort((a, b) => b.worth - a.worth)
+    .slice(0, limit);
+  if (top.length === 0) return [];
+  const { results } = await env.DB.prepare(
+    `SELECT r.id, r.title, ${FIRST_ART} AS art_key, g.id AS album_id, g.title AS album_title, NULL AS quality_score, NULL AS personal_score
+     FROM json_each(?1) j JOIN recording r ON r.id = j.value
+     LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
+     LEFT JOIN release_group g ON g.id = ra.release_group_id
+     LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
+     LEFT JOIN release x ON x.id = gc.release_id`,
+  )
+    .bind(JSON.stringify(top.map((t) => t.id)))
+    .all<Omit<TrackCard, 'credits'>>();
+  const byId = new Map(results.map((r) => [r.id, r]));
+  const cards = top.flatMap((t) => {
+    const card = byId.get(t.id);
+    return card ? [{ ...card, plays: t.plays, gut: t.gut }] : [];
+  });
+  return withCredits(cards);
+}
+
 export interface LovedArtist {
   id: string;
   name: string;

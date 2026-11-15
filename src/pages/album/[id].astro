@@ -11,7 +11,7 @@ import CreditLine from '../../components/CreditLine.astro';
 import Backdrop from '../../components/Backdrop.astro';
 import Score from '../../components/Score.astro';
 import ScorePanel from '../../components/ScorePanel.astro';
-import { ratingHistory } from '../../lib/ratings';
+import { ratingDepths, ratingHistory } from '../../lib/ratings';
 import { similarAlbums } from '../../lib/pages';
 import AlbumCard from '../../components/AlbumCard.astro';
 import Shelf from '../../components/Shelf.astro';
@@ -137,9 +137,11 @@ const editionHref = (e: Edition) =>
   e.id === standardId ? `${Astro.url.pathname}#tracklist-heading` : `${Astro.url.pathname}?edition=${e.id}#tracklist-heading`;
 
 // Listening history is private too: play counts only for the signed-in listener.
-const [plays, kinds] = await Promise.all([
+const [plays, kinds, depths] = await Promise.all([
   user ? playCounts(user.id, tracks.map((t) => t.recording_id)) : Promise.resolve(new Map<string, number>()),
   kindsOf(tracks.map((t) => t.recording_id)),
+  // Which scores are by gut only, or borrowed from a version: marked under the title.
+  ratingDepths(viewerId, tracks.map((t) => t.recording_id)),
 ]);
 const totalPlays = [...plays.values()].reduce((a, b) => a + b, 0);
 
@@ -367,9 +369,12 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
                             <CreditLine credits={track.credits} />
                           </span>
                         )}
-                        {plays.has(track.recording_id) && (
+                        {(plays.has(track.recording_id) || depths.has(track.recording_id)) && (
                           <span class="plays tabular">
-                            {plays.get(track.recording_id)} {plays.get(track.recording_id) === 1 ? 'play' : 'plays'}
+                            {depths.get(track.recording_id) === 'gut' && <span class="depth">Gut score</span>}
+                            {depths.get(track.recording_id) === 'borrowed' && <span class="depth">Score from another version</span>}
+                            {depths.has(track.recording_id) && plays.has(track.recording_id) && ' · '}
+                            {plays.has(track.recording_id) && `${plays.get(track.recording_id)} ${plays.get(track.recording_id) === 1 ? 'play' : 'plays'}`}
                           </span>
                         )}
                       </div>
@@ -750,6 +755,12 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
   .length {
     color: var(--text-muted);
     font-size: var(--step--1);
+  }
+
+  /* A score by gut alone, or borrowed: said quietly, in the score's colour family. */
+  .depth {
+    color: var(--accent);
+    font-weight: 600;
   }
 
   .track-score {

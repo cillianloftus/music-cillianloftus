@@ -23,7 +23,7 @@ import { recentReleaseGroups, releaseGroupsByIds, type ReleaseGroupSummary } fro
 import { yearOf } from '../lib/dates';
 import { formatRelative, typeLabel } from '../lib/format';
 import { libraryStats, recentRatings } from '../lib/overview';
-import { inProgress, lovedArtists, lovedGenres, playedNotRated, topByType, topTracks } from '../lib/home';
+import { inProgress, lovedArtists, lovedGenres, playedNotRated, topByType, topTracks, worthRatingInFull } from '../lib/home';
 import { encodeDefinition } from '../lib/query/builder';
 import { spotifyLink } from '../lib/spotify/links';
 import { ordinal, todayIn, todayPicks, whenText, type Pick } from '../lib/today';
@@ -36,8 +36,8 @@ const isOwner = Boolean(Astro.locals.user);
 // Everything here changes only when the library does (or, for the picks, the
 // day), so it is worked out once per change and kept: a dozen queries that
 // D1 runs one after another, about 0.7s, become one cache read.
-const [[recent, top, ratings, stats, picks, topSingles, topEps, topMixtapes, favourites, started, artistsLoved, genresLoved, unplayed], facts] = await Promise.all([
-  byLibrary(`home:v2:${todayIn()}:${isOwner ? 'owner' : 'public'}`, viewerId, () =>
+const [[recent, top, ratings, stats, picks, topSingles, topEps, topMixtapes, favourites, started, artistsLoved, genresLoved, unplayed, inFull], facts] = await Promise.all([
+  byLibrary(`home:v3:${todayIn()}:${isOwner ? 'owner' : 'public'}`, viewerId, () =>
     Promise.all([
       recentReleaseGroups(viewerId, 12),
       topByType(viewerId, ['album'], 10),
@@ -52,6 +52,7 @@ const [[recent, top, ratings, stats, picks, topSingles, topEps, topMixtapes, fav
       lovedArtists(viewerId, 10),
       lovedGenres(viewerId, 12),
       isOwner && viewerId ? playedNotRated(viewerId, 10) : Promise.resolve([]),
+      isOwner && viewerId ? worthRatingInFull(viewerId, 10) : Promise.resolve([]),
     ]),
   ),
   viewerId ? libraryFacts(viewerId) : Promise.resolve([]),
@@ -427,6 +428,37 @@ const statItems = [
               </li>
             ))}
           </ul>
+        </section>
+      )
+    }
+
+    {
+      /* Rated by gut, and loved or played a lot: the ones a full rating would settle. */
+      inFull.length > 0 && (
+        <section aria-labelledby="in-full-heading">
+          <div class="section-head">
+            <h2 id="in-full-heading">Worth rating in full</h2>
+          </div>
+          <Shelf label="songs rated by gut, worth a full rating" item="min(11rem, 42vw)">
+            <ul role="list">
+              {inFull.map((t) => (
+                <li class="track-card">
+                  <a class="track-art" href={`/track/${t.id}`} tabindex="-1" aria-hidden="true">
+                    <CoverArt artKey={t.art_key} title={t.title} sizes="11rem" />
+                  </a>
+                  <a class="track-title" href={`/track/${t.id}`}>{t.title}</a>
+                  <span class="muted small"><CreditLine credits={t.credits} /></span>
+                  <span class="track-foot">
+                    <span class="muted small tabular">
+                      Gut {t.gut}
+                      {t.plays ? ` · ${t.plays} ${t.plays === 1 ? 'play' : 'plays'}` : ''}
+                    </span>
+                    <a class="small rate-link" href={`/edit/rate/recording/${t.id}?return_to=/`}>Rate in full</a>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Shelf>
         </section>
       )
     }

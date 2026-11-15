@@ -199,3 +199,28 @@ export function safeReturnPath(value: unknown, fallback: string): string {
   // "//host" and "/\host" are both read by browsers as another origin.
   return typeof value === 'string' && /^\/(?![/\\])/.test(value) ? value : fallback;
 }
+
+/**
+ * How each of some songs is rated by a user, for the marks beside their
+ * scores: by gut only (the latest rating has no craft axes), or borrowed
+ * from another version (inherited.ts). Rated in full, or not at all, they
+ * are left out. Ratings are append-only, so the latest is the one that
+ * counts.
+ */
+export async function ratingDepths(userId: string | null, recordingIds: string[]): Promise<Map<string, 'gut' | 'borrowed'>> {
+  if (!userId || recordingIds.length === 0) return new Map();
+  const ids = JSON.stringify([...new Set(recordingIds)]);
+  const [own, borrowed] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT r.entity_id AS id, r.depth FROM rating r
+       WHERE r.user_id = ?1 AND r.entity_type = 'recording' AND r.entity_id IN (SELECT value FROM json_each(?2))
+         AND r.rated_at = (SELECT max(l.rated_at) FROM rating l
+                           WHERE l.entity_type = 'recording' AND l.entity_id = r.entity_id AND l.user_id = ?1)`,
+    ).bind(userId, ids),
+    env.DB.prepare(`SELECT recording_id AS id FROM inherited_score WHERE user_id = ?1 AND recording_id IN (SELECT value FROM json_each(?2))`).bind(userId, ids),
+  ]);
+  const depths = new Map<string, 'gut' | 'borrowed'>();
+  for (const row of own!.results as { id: string; depth: string }[]) if (row.depth === 'gut') depths.set(row.id, 'gut');
+  for (const row of borrowed!.results as { id: string }[]) if (!depths.has(row.id)) depths.set(row.id, 'borrowed');
+  return depths;
+}

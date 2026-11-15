@@ -71,10 +71,12 @@ const NOW = `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
  * refresh, one import, a push) goes ahead of bulk work (whole
  * discographies, the whole library refreshed), however long that is.
  */
-export const PRIORITY = { asked: 1, bulk: 0 } as const;
+// Upkeep (a backup) goes ahead of everything: a backup waiting behind 70 imports asked for first
+// could miss its night (15 Nov).
+export const PRIORITY = { upkeep: 2, asked: 1, bulk: 0 } as const;
 export type Priority = (typeof PRIORITY)[keyof typeof PRIORITY];
 
-/** One job, asked for directly unless said otherwise, in a batch if given. */
+/** One job, asked for directly unless said otherwise (a backup always first), in a batch if given. */
 export async function enqueue<K extends keyof JobPayloads>(
   kind: K,
   payload: JobPayloads[K],
@@ -83,7 +85,7 @@ export async function enqueue<K extends keyof JobPayloads>(
 ): Promise<string> {
   const id = crypto.randomUUID();
   await env.DB.prepare('INSERT INTO job (id, kind, payload_json, priority, batch_id) VALUES (?, ?, ?, ?, ?)')
-    .bind(id, kind, JSON.stringify(payload), priority, batchId)
+    .bind(id, kind, JSON.stringify(payload), kind === 'backup' ? PRIORITY.upkeep : priority, batchId)
     .run();
   return id;
 }
