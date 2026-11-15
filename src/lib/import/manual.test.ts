@@ -149,6 +149,33 @@ describe('a release made from songs already here', () => {
   });
 });
 
+describe('an artist’s songs for the builder', () => {
+  it('lists every one with the release it is on, and a release of them keeps them as they are', async () => {
+    const { seedLibrary } = await import('../../test/db');
+    const { artistSongs, fittingChoices } = await import('./manual');
+    const db = migratedDb();
+    seedLibrary(db);
+    (env as { DB: D1Database }).DB = d1(db);
+    // Titles numbered in roman (Quadeca's "i. finale") must survive the tracklist's own numbering.
+    db.prepare(`UPDATE recording SET title = 'i. finale' WHERE id = 'a1'`).run();
+    db.prepare(`UPDATE recording SET title = 'ii. à noite' WHERE id = 'a2'`).run();
+    const songs = await artistSongs('Xavier');
+    expect(songs.map((s) => s.id)).toEqual(expect.arrayContaining(['a1', 'a2']));
+    expect(songs.find((s) => s.id === 'a1')?.album).toBeTruthy();
+    expect(await artistSongs('nobody at all')).toEqual([]);
+
+    // As the builder sends it: numbered lines, a song picked for each.
+    const tracklist = '1. i. finale\n2. ii. à noite';
+    const existing = await fittingChoices({ '1-1': 'a1', '1-2': 'a2' }, parseTracklist(tracklist));
+    expect(existing).toEqual({ '1-1': 'a1', '1-2': 'a2' });
+    const before = (db.prepare(`SELECT count(*) n FROM recording`).get() as { n: number }).n;
+    const result = await writePlan(buildManualPlan({ artist: 'Xavier', title: 'i. ii. iii.', type: 'ep', date: '', genres: '', tracklist, existing }));
+    const placed = db.prepare(`SELECT recording_id FROM track WHERE release_id = ? ORDER BY position`).all(result.releaseId) as { recording_id: string }[];
+    expect(placed.map((p) => p.recording_id)).toEqual(['a1', 'a2']);
+    expect((db.prepare(`SELECT count(*) n FROM recording`).get() as { n: number }).n).toBe(before);
+  });
+});
+
 describe('songs picked for lines', () => {
   it('are kept while their line still has their title, by any artist, and dropped when it changed', async () => {
     const { seedLibrary } = await import('../../test/db');

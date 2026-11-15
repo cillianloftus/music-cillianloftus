@@ -156,46 +156,86 @@ const { form, rows, max } = Astro.props;
       q.focus();
     }
 
-    // Searching: the site's own search; the chosen artist's songs first; and always the typed title as a new song.
+    // The chosen artist's songs, fetched once per artist and searched here:
+    // the site's search returns six songs across everything, so a common
+    // word ("finale") never reached the artist's own (15 Nov).
+    type Song = { id: string; title: string; album: string | null };
+    const fold = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    let artistSongs: { name: string; songs: (Song & { key: string })[] } = { name: '', songs: [] };
+    async function loadArtist() {
+      const name = artistField?.value.trim() ?? '';
+      if (name.toLowerCase() === artistSongs.name) return;
+      artistSongs = { name: name.toLowerCase(), songs: [] };
+      if (!name) return;
+      const response = await fetch(`/api/artist-songs?${new URLSearchParams({ artist: name })}`).catch(() => null);
+      if (!response?.ok || artistSongs.name !== name.toLowerCase()) return;
+      const { songs } = (await response.json()) as { songs: Song[] };
+      artistSongs.songs = songs.map((s) => ({ ...s, key: fold(s.title) }));
+      if (q.value.trim()) search();
+    }
+    artistField?.addEventListener('change', loadArtist);
+    artistField?.addEventListener('blur', loadArtist);
+    void loadArtist();
+
+    const option = (title: string, detail: string, onclick: () => void, className = 'pick') =>
+      element('li', {}, element('button', { type: 'button', className, onclick }, element('strong', {}, title), detail ? element('span', { className: 'muted small' }, detail) : ''));
+
+    // Searching: the artist's songs first (every word typed in the title,
+    // accents aside), then the site's search for anyone else's, and always
+    // the typed title as a new song.
     let timer: number | undefined;
+    let asked = 0;
+    async function search() {
+      const text = q.value.trim();
+      if (!text) return found.replaceChildren();
+      const ask = ++asked;
+      const chosen = new Set(rows.map((r) => r.existing?.id).filter(Boolean));
+      const words = fold(text).split(' ').filter(Boolean);
+      const own = artistSongs.songs
+        .filter((s) => !chosen.has(s.id) && words.every((w) => s.key.includes(w)))
+        // A title starting with what was typed first, then shorter titles.
+        .sort((a, b) => Number(b.key.startsWith(words[0]!)) - Number(a.key.startsWith(words[0]!)) || a.key.length - b.key.length)
+        .slice(0, 8);
+      const render = (others: Track[]) => {
+        if (ask !== asked) return;
+        const ownIds = new Set(own.map((s) => s.id));
+        found.replaceChildren(
+          ...own.map((s) => {
+            const detail = [artistField?.value.trim(), s.album].filter(Boolean).join(' · ');
+            return option(s.title, detail, () => add({ kind: 'song', text: s.title, existing: { id: s.id, detail } }), 'pick own');
+          }),
+          ...others
+            .map((t) => ({ ...t, id: t.href.split('/').pop()! }))
+            .filter((t) => !chosen.has(t.id) && !ownIds.has(t.id))
+            .map((t) => {
+              const detail = [t.detail, t.score !== null ? `rated ${t.score}` : null].filter(Boolean).join(' · ');
+              return option(t.title, detail, () => add({ kind: 'song', text: t.title, existing: { id: t.id, detail } }));
+            }),
+          option(`Add “${text}” as a new song`, '', () => add({ kind: 'song', text, existing: null }), 'pick new'),
+        );
+      };
+      // The artist's own at once; everyone else's when the search answers.
+      render([]);
+      if (text.length < 2) return;
+      const response = await fetch(`/api/search?${new URLSearchParams({ q: text })}`).catch(() => null);
+      render(response?.ok ? ((await response.json()) as { tracks: Track[] }).tracks : []);
+    }
+    q.addEventListener('focus', () => void loadArtist());
     q.addEventListener('input', () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(async () => {
-        const text = q.value.trim();
-        if (!text) return found.replaceChildren();
-        let tracks: Track[] = [];
-        if (text.length >= 2) {
-          const response = await fetch(`/api/search?${new URLSearchParams({ q: text })}`).catch(() => null);
-          tracks = response?.ok ? ((await response.json()) as { tracks: Track[] }).tracks : [];
-          const artist = artistField?.value.trim().toLowerCase();
-          if (artist) tracks.sort((a, b) => Number(b.detail.toLowerCase().includes(artist)) - Number(a.detail.toLowerCase().includes(artist)));
-        }
-        const chosen = new Set(rows.map((r) => r.existing?.id).filter(Boolean));
-        found.replaceChildren(
-          ...tracks
-            .filter((t) => !chosen.has(t.href.split('/').pop()!))
-            .map((t) =>
-              element(
-                'li',
-                {},
-                element(
-                  'button',
-                  { type: 'button', className: 'pick', onclick: () => add({ kind: 'song', text: t.title, existing: { id: t.href.split('/').pop()!, detail: [t.detail, t.score !== null ? `rated ${t.score}` : null].filter(Boolean).join(' · ') } }) },
-                  element('strong', {}, t.title),
-                  element('span', { className: 'muted small' }, [t.detail, t.score !== null ? `rated ${t.score}` : null].filter(Boolean).join(' · ')),
-                ),
-              ),
-            ),
-          element('li', {}, element('button', { type: 'button', className: 'pick new', onclick: () => add({ kind: 'song', text, existing: null }) }, element('strong', {}, `Add “${text}” as a new song`))),
-        );
-      }, 250);
+      timer = window.setTimeout(search, 150);
     });
-    // Enter adds the typed title as a new song, rather than sending the form.
-    q.addEventListener('keydown', (event) => {
+    // Enter takes the top result: the artist's own song when one matches
+    // (typing "finale" and pressing Enter made a new "finale" rather than
+    // picking "i. finale"), else the typed title as a new song. Never the form.
+    q.addEventListener('keydown', async (event) => {
       if (event.key !== 'Enter') return;
       event.preventDefault();
-      const text = q.value.trim();
-      if (text) add({ kind: 'song', text, existing: null });
+      if (!q.value.trim()) return;
+      window.clearTimeout(timer);
+      await search();
+      // The artist's own top match, never someone else's song by surprise.
+      (found.querySelector<HTMLButtonElement>('.own') ?? found.querySelector<HTMLButtonElement>('.new'))?.click();
     });
 
     // Pasting: each line a new song ("Disc 2" lines between discs); the preview then offers library songs by the same title.

@@ -273,6 +273,40 @@ export async function existingSongs(artistName: string, tracks: ParsedTrack[], v
   return out;
 }
 
+/**
+ * All of an artist's songs (by name, or an alias), each with the release it
+ * is on (an edition named for itself, "Vanisher, Horizon Scraper · The
+ * Extended Cut"), for the builder to search on the device. The site's
+ * search returns six songs across everything, so "finale" found Rent's and
+ * never Quadeca's "i. finale" (15 Nov). No scores: reading them for a whole
+ * catalogue builds the score view whole.
+ */
+export async function artistSongs(artistName: string): Promise<{ id: string; title: string; album: string | null }[]> {
+  const name = artistName.trim();
+  if (!name) return [];
+  const { results } = await env.DB.prepare(
+    `WITH who AS (
+       SELECT id FROM artist WHERE name = ?1 COLLATE NOCASE
+       UNION SELECT artist_id FROM artist_alias WHERE name = ?1
+     ),
+     songs AS (
+       SELECT DISTINCT r.id, r.title FROM who
+       JOIN artist_credit c ON c.artist_id = who.id AND c.entity_type = 'recording' AND c.role = 'primary'
+       JOIN recording r ON r.id = c.entity_id
+     )
+     SELECT s.id, s.title,
+            -- An edition without a name of its own first: only a song on a named one alone says which.
+            (SELECT g.title || coalesce(' · ' || x.note, '')
+             FROM track t JOIN release x ON x.id = t.release_id JOIN release_group g ON g.id = x.release_group_id
+             WHERE t.recording_id = s.id ORDER BY g.first_release_date, x.note IS NOT NULL LIMIT 1) AS album
+     FROM songs s
+     LIMIT 3000`,
+  )
+    .bind(name)
+    .all<{ id: string; title: string; album: string | null }>();
+  return results;
+}
+
 /** Songs by id, as a line's choices show them: for songs picked in the builder by search, by any artist. */
 export async function songsByIds(ids: string[], viewerId: string | null): Promise<Map<string, ExistingSong>> {
   if (ids.length === 0) return new Map();
