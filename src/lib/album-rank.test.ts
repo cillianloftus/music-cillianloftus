@@ -15,6 +15,16 @@ describe('album ranking', () => {
     expect(rankScore(90, 3, null, 70)).toBe(90);
   });
 
+  it('puts a fully considered album above one scored about the same mostly by gut, and never lowers one', () => {
+    // I Didn't Mean To Haunt You: every song in full. Ants From Up There: two of ten.
+    const haunt = rankScore(97.5, 11, 11, 80, 1);
+    const ants = rankScore(97.9, 10, 10, 80, 0.2);
+    expect(haunt).toBeGreaterThan(ants);
+    expect(ants).toBeGreaterThanOrEqual(97.9);
+    // Not past one clearly higher: a 99 by gut still ranks above a considered 97.5.
+    expect(rankScore(99, 10, 10, 80, 0)).toBeGreaterThan(haunt);
+  });
+
   it('orders by rank, then score, then id', () => {
     const a = (rank: number, quality: number) => ({ quality, personal: quality, rated: 1, tracks: 1, type: 'album', released: null, rank });
     const scores: AlbumScores = { x: a(80, 90), y: a(85, 85), z: a(80, 95) };

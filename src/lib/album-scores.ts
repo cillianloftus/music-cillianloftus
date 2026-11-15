@@ -34,28 +34,56 @@ export type AlbumScores = Record<string, ScoredAlbum>;
  * track rated outranks a 100 on one song. The square root lets a few
  * tracks count for a fair amount. An album rated only as a whole counts as
  * half rated. Scores shown are never changed; only the order. Pure.
+ *
+ * Then, for albums scored about the same, the more fully considered one
+ * first: up to CONSIDERED points more for the share of its songs rated in
+ * full rather than by gut. A fully considered 98 is more of a 98 than one
+ * mostly by gut (I Didn't Mean To Haunt You, every song in full, 97.5;
+ * Ants From Up There, two of ten, 97.9; 15 Nov). Never less: an album
+ * rated by gut keeps its score and its place against everything not as
+ * close.
  */
-export function rankScore(score: number, rated: number, tracks: number | null, average: number): number {
+export const CONSIDERED = 1;
+
+export function rankScore(score: number, rated: number, tracks: number | null, average: number, considered = 0): number {
   const share = rated === 0 ? 0.5 : !tracks || tracks <= 0 ? 1 : Math.min(1, rated / tracks);
   const anchor = rankAnchor(average);
-  return anchor + (score - anchor) * Math.sqrt(share);
+  return anchor + (score - anchor) * Math.sqrt(share) + CONSIDERED * Math.max(0, Math.min(1, considered));
 }
 
 export async function albumScores(userId: string | null): Promise<AlbumScores> {
   if (!userId) return {};
   // (Not 'album-scores': standing.ts keeps its own list under that name.)
   // By the scores stamp, not the library's: an import changes no score.
-  return byScores('album-score-map:v4', userId, async () => {
-    const { results } = await env.DB.prepare(
-      `SELECT s.release_group_id AS id, s.quality_score AS quality, s.personal_score AS personal,
-              s.rated_track_count AS rated, s.track_count AS tracks, g.type, g.first_release_date AS released
-       FROM v_release_score s JOIN release_group g ON g.id = s.release_group_id
-       WHERE s.user_id = ?1`,
-    )
-      .bind(userId)
-      .all<Omit<ScoredAlbum, 'rank'> & { id: string }>();
+  return byScores('album-score-map:v5', userId, async () => {
+    const [{ results }, { results: detailed }] = await Promise.all([
+      env.DB.prepare(
+        `SELECT s.release_group_id AS id, s.quality_score AS quality, s.personal_score AS personal,
+                s.rated_track_count AS rated, s.track_count AS tracks, g.type, g.first_release_date AS released
+         FROM v_release_score s JOIN release_group g ON g.id = s.release_group_id
+         WHERE s.user_id = ?1`,
+      )
+        .bind(userId)
+        .all<Omit<ScoredAlbum, 'rank'> & { id: string }>(),
+      // Each album's songs rated in full (a detailed rating), from the ratings outward: a few
+      // thousand rows, where the canonical-edition view would be built whole (98,000).
+      env.DB.prepare(
+        `SELECT x.release_group_id AS id, count(DISTINCT r.entity_id) AS n
+         FROM rating r JOIN track t ON t.recording_id = r.entity_id JOIN release x ON x.id = t.release_id
+         WHERE r.user_id = ?1 AND r.entity_type = 'recording' AND r.depth = 'detailed'
+         GROUP BY x.release_group_id`,
+      )
+        .bind(userId)
+        .all<{ id: string; n: number }>(),
+    ]);
+    const inFull = new Map(detailed.map((d) => [d.id, d.n]));
     const average = results.length ? results.reduce((sum, r) => sum + r.quality, 0) / results.length : 0;
-    return Object.fromEntries(results.map(({ id, ...score }) => [id, { ...score, rank: rankScore(score.quality, score.rated, score.tracks, average) }]));
+    return Object.fromEntries(
+      results.map(({ id, ...score }) => {
+        const considered = score.tracks ? (inFull.get(id) ?? 0) / score.tracks : 0;
+        return [id, { ...score, rank: rankScore(score.quality, score.rated, score.tracks, average, considered) }];
+      }),
+    );
   });
 }
 
