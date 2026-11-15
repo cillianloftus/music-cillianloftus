@@ -1,0 +1,225 @@
+---
+/**
+ * Every section of an edit or manage page (a .form-card with a heading)
+ * folds away: its heading becomes a button, and what is under it hides.
+ * Pages stay a list of headings to open, not a wall (15 Nov). Which ones
+ * are folded is kept on this device for each kind of page, so folding
+ * "Track credits, in bulk" on one album folds it on every album. "Collapse
+ * all" and "Expand all" sit above the first. A section a link points to
+ * (#cover, #credits) opens.
+ *
+ * Inline, at the end of the page, so the page paints already folded.
+ * Without JavaScript every section is simply open.
+ */
+const path = Astro.url.pathname;
+const on = path.startsWith('/edit/') || path.startsWith('/manage/');
+---
+
+{
+  on && (
+    <script is:inline>
+      (() => {
+        // Each kind of page its own memory: /edit/album/… shares one, /manage/spotify another.
+        const parts = location.pathname.split('/').filter(Boolean);
+        const storeKey = `folded:${parts[0] === 'edit' ? parts.slice(0, 2).join('/') : location.pathname}`;
+        let folded = [];
+        try {
+          folded = JSON.parse(localStorage.getItem(storeKey) || '[]');
+        } catch {}
+        const remember = () => {
+          try {
+            localStorage.setItem(storeKey, JSON.stringify(folded));
+          } catch {}
+        };
+
+        const sections = [];
+        for (const card of document.querySelectorAll('main .form-card')) {
+          // Its heading: a direct h2, or one in a heading row (CreditEditor's).
+          const heading = [...card.querySelectorAll('h2')].find((h) => h.parentElement === card || h.parentElement?.parentElement === card);
+          if (!heading || card.closest('[data-no-fold]')) continue;
+          const head = heading.parentElement === card ? heading : heading.parentElement;
+          const name = heading.id || heading.textContent.trim();
+          const body = document.createElement('div');
+          body.className = 'fold-body';
+          body.id = `fold-${sections.length}`;
+          // Everything after the heading (or its row) goes in the body.
+          let next = head.nextSibling;
+          while (next) {
+            const after = next.nextSibling;
+            body.append(next);
+            next = after;
+          }
+          // Anything before the heading (hidden inputs) stays where it is.
+          card.append(body);
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'fold-toggle';
+          button.setAttribute('aria-controls', body.id);
+          button.append(...heading.childNodes);
+          button.insertAdjacentHTML('beforeend', '<svg class="fold-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>');
+          heading.append(button);
+          const section = { card, body, button, name };
+          const set = (open) => {
+            body.hidden = !open;
+            card.classList.toggle('is-folded', !open);
+            button.setAttribute('aria-expanded', String(open));
+          };
+          section.set = set;
+          button.addEventListener('click', () => {
+            const open = body.hidden;
+            set(open);
+            folded = open ? folded.filter((n) => n !== name) : [...new Set([...folded, name])];
+            remember();
+            syncAll();
+          });
+          set(!folded.includes(name));
+          sections.push(section);
+        }
+        if (sections.length === 0) return;
+
+        // A link to something inside a folded section opens it (not remembered).
+        const reveal = () => {
+          if (!location.hash) return;
+          let target = null;
+          try {
+            target = document.querySelector(decodeURIComponent(location.hash));
+          } catch {}
+          const section = target && sections.find((s) => s.card === target || s.card.contains(target));
+          if (section && section.body.hidden) {
+            section.set(true);
+            syncAll();
+          }
+        };
+
+        // Collapse all / Expand all, above the first section, when there are a few.
+        let all = null;
+        function syncAll() {
+          if (!all) return;
+          const anyOpen = sections.some((s) => !s.body.hidden);
+          all.textContent = anyOpen ? 'Collapse all' : 'Expand all';
+          all.setAttribute('aria-pressed', String(!anyOpen));
+        }
+        if (sections.length >= 3) {
+          all = document.createElement('button');
+          all.type = 'button';
+          all.className = 'fold-all';
+          all.addEventListener('click', () => {
+            const open = !sections.some((s) => !s.body.hidden);
+            for (const s of sections) s.set(open);
+            folded = open ? folded.filter((n) => !sections.some((s) => s.name === n)) : [...new Set([...folded, ...sections.map((s) => s.name)])];
+            remember();
+            syncAll();
+          });
+          const bar = document.createElement('div');
+          bar.className = 'fold-bar';
+          bar.append(all);
+          sections[0].card.before(bar);
+        }
+        reveal();
+        syncAll();
+        addEventListener('hashchange', reveal);
+      })();
+    </script>
+  )
+}
+
+<style is:global>
+  /* A section's heading is its fold button: the whole line, the chevron at the end. */
+  .form-card .fold-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: var(--target);
+    margin: calc(var(--space-2) * -1) 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .form-card .fold-toggle:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 4px;
+    border-radius: var(--radius-s);
+  }
+
+  .fold-chevron {
+    flex: none;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin-left: auto;
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: rotate 0.2s ease;
+  }
+
+  .fold-toggle:hover .fold-chevron {
+    stroke: var(--text);
+  }
+
+  .form-card.is-folded .fold-chevron {
+    rotate: -90deg;
+  }
+
+  /* The body keeps the card's own spacing between its parts. */
+  .fold-body {
+    display: grid;
+    gap: inherit;
+    min-width: 0;
+  }
+
+  .fold-body[hidden] {
+    display: none;
+  }
+
+  /* Folded: just the heading, a slimmer card. */
+  .form-card.is-folded {
+    padding-block: var(--space-4);
+  }
+
+  .form-card.is-folded h2 {
+    margin-bottom: 0;
+  }
+
+  .form-card .section-head:has(.fold-toggle) {
+    min-width: 0;
+  }
+
+  .fold-bar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: calc(var(--space-2) * -1);
+  }
+
+  .fold-all {
+    min-height: var(--target);
+    padding: 0 var(--space-3);
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--step--1);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .fold-all:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fold-chevron {
+      transition: none;
+    }
+  }
+</style>

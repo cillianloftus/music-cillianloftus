@@ -3,6 +3,7 @@ import JobTray from '../components/JobTray.astro';
 import NowBar from '../components/NowBar.astro';
 import SearchOverlay from '../components/SearchOverlay.astro';
 import SoftForms from '../components/SoftForms.astro';
+import CollapsibleSections from '../components/CollapsibleSections.astro';
 import '../styles/global.css';
 import SiteHeader from '../components/SiteHeader.astro';
 import { THEME_COOKIE, themeFrom } from '../lib/theme';
@@ -62,6 +63,8 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     <main id="main" tabindex="-1">
       <slot />
     </main>
+    {/* Straight after the page: its sections fold before it paints. */}
+    <CollapsibleSections />
     {Astro.locals.user && <JobTray />}
     {Astro.locals.user && <NowBar />}
     <SearchOverlay />
