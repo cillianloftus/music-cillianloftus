@@ -62,7 +62,14 @@ async function albumsToLink(limit: number, only?: string): Promise<Album[]> {
      LEFT JOIN v_release_group_canonical c ON c.release_group_id = g.id
      WHERE g.spotify_id IS NULL AND g.status = 'released' AND ${which}
          AND NOT EXISTS (SELECT 1 FROM field_override fo WHERE fo.entity_type = 'release_group' AND fo.entity_id = g.id AND fo.field = 'spotify_id')
-     ORDER BY g.created_at DESC
+         -- Not found within the month: asked again only after (spotify_link_miss, 0077), so the
+         -- nightly run moves on through the rest rather than asking about the same few each night.
+         AND (?2 IS NOT NULL OR NOT EXISTS (SELECT 1 FROM spotify_link_miss m WHERE m.release_group_id = g.id
+                                            AND m.looked_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')))
+     -- What you rate or play first: its songs read "Not on streaming" until it is linked.
+     ORDER BY EXISTS (SELECT 1 FROM track t JOIN rating r ON r.entity_type = 'recording' AND r.entity_id = t.recording_id
+                      WHERE t.release_id = c.release_id) DESC,
+              g.created_at DESC
      LIMIT ?1`,
   )
     .bind(limit, only ?? null)
@@ -121,8 +128,15 @@ export async function linkAlbumsToSpotify(spotify: SpotifyClient, { limit = 20, 
     const pick = pickAlbum(album, hits);
     if (!pick) {
       report.missed.push(album.title);
+      await env.DB.prepare(
+        `INSERT INTO spotify_link_miss (release_group_id) VALUES (?)
+         ON CONFLICT (release_group_id) DO UPDATE SET looked_at = excluded.looked_at`,
+      )
+        .bind(album.id)
+        .run();
       continue;
     }
+    await env.DB.prepare(`DELETE FROM spotify_link_miss WHERE release_group_id = ?`).bind(album.id).run();
     const set = await env.DB.prepare(
       `UPDATE release_group SET spotify_id = ?1 WHERE id = ?2 AND spotify_id IS NULL
          AND NOT EXISTS (SELECT 1 FROM field_override fo WHERE fo.entity_type = 'release_group' AND fo.entity_id = ?2 AND fo.field = 'spotify_id')

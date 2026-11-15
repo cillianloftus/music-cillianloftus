@@ -24,6 +24,8 @@ export async function refreshAlbum(albumId: string, priority: Priority = PRIORIT
 
   // Spotify gets asked again on the next pass (after the imports land).
   await env.DB.prepare(`DELETE FROM lookup_log WHERE source IN ('spotify', 'deezer') AND entity_id = ?`).bind(albumId).run();
+  // Asked about on Spotify again, though it was not found within the month.
+  await env.DB.prepare(`DELETE FROM spotify_link_miss WHERE release_group_id = ?`).bind(albumId).run();
   // Tracks looked up on Genius before get another go.
   await env.DB.prepare(
     `DELETE FROM lookup_log WHERE source = 'genius' AND entity_id IN (

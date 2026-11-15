@@ -75,7 +75,8 @@ async function picturesForArtistsWithout(): Promise<void> {
 async function linkSpotifyAlbums(): Promise<void> {
   const owner = await ownerId();
   if (!owner || !(await connection(owner))) return;
-  await linkAlbumsToSpotify(spotifyFor(owner), { limit: 25 });
+  // Sixty a night, misses remembered (0077): the 5,700 unlinked on 15 Nov in about three months, rated ones first.
+  await linkAlbumsToSpotify(spotifyFor(owner), { limit: 60 });
   // Then what Spotify knows about them: dates, lengths, ISRCs.
   await fillAlbumsFromSpotify(spotifyFor(owner), { budgetMs: 15_000 });
 }

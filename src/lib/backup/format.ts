@@ -46,7 +46,9 @@ export function isExcluded(table: string): boolean {
     // Worked out from the ratings (gut-calibration.ts), and again each night.
     table === 'gut_conversion' ||
     // The same: scores versions borrow (inherited.ts).
-    table === 'inherited_score'
+    table === 'inherited_score' ||
+    // When Spotify was last asked about an album and had nothing: only a note to wait.
+    table === 'spotify_link_miss'
   );
 }
 
