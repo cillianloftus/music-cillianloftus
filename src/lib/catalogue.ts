@@ -375,15 +375,26 @@ export interface ArtistTrack {
  * How much of a favourite a track is: the rating, balanced against how
  * often it is played, each out of 100. Plays count on a log scale against
  * the artist's most played track, so the hundredth play adds less than the
- * tenth. Until there is any listening history for the artist it is the
- * rating alone; a track played a lot but not yet rated still makes the list.
+ * tenth. A track played a lot but not yet rated still makes the list.
+ *
+ * Plays have a say only as far as there is listening to go on: none until
+ * the artist's most played track has more than a handful, their full 40%
+ * from 50. With little history, 1 play against 4 was worth 15 points and
+ * put a 96 below 82s (Logic, 15 Nov).
  */
 export function favouriteScore(rating: number | null, plays: number, mostPlays: number): number {
-  if (mostPlays <= 0) return rating ?? 0;
+  const evidence = Math.min(1, Math.max(0, (mostPlays - FEW_PLAYS) / (FULL_PLAYS - FEW_PLAYS)));
+  if (evidence === 0) return rating ?? 0;
   const played = (Math.log1p(plays) / Math.log1p(mostPlays)) * 100;
-  if (rating === null) return played * 0.85;
-  return rating * 0.6 + played * 0.4;
+  if (rating === null) return played * 0.85 * evidence;
+  const weight = 0.4 * evidence;
+  return rating * (1 - weight) + played * weight;
 }
+
+/** Below this many plays on an artist's most played track, plays do not move favourites. */
+const FEW_PLAYS = 5;
+/** From this many, plays carry their full weight. */
+const FULL_PLAYS = 50;
 
 /** How many favourite tracks an artist page shows at a time. */
 export const TRACKS_PER_PAGE = 10;

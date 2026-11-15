@@ -127,6 +127,12 @@ describe('favouriteScore', () => {
     expect(favouriteScore(90, 200, most)).toBeGreaterThan(favouriteScore(95, 3, most));
   });
 
+  it('does not let a few plays outweigh the rating while history is thin', () => {
+    // Logic on 15 Nov: a 96 played once below 82s played four times.
+    expect(favouriteScore(96, 1, 10)).toBeGreaterThan(favouriteScore(82, 4, 10));
+    expect(favouriteScore(96, 1, 4)).toBe(96);
+  });
+
   it('keeps an unrated but much played track in the running', () => {
     expect(favouriteScore(null, 150, 200)).toBeGreaterThan(favouriteScore(70, 0, 200));
   });
