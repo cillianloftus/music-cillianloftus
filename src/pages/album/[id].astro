@@ -240,7 +240,8 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     <Backdrop artKey={album.art_key} />
     {added && (
       <p class="added" role="status">
-        Added to your library. <a href="/manage/import/manual">Add another by hand</a>
+        Added to your library.{!album.art_key && ' Its cover is being looked for: reload in a moment, or add one.'}{' '}
+        <a href="/manage/import/manual">Add another by hand</a>
       </p>
     )}
     <EntityHero artWidth="20rem">
@@ -252,6 +253,12 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
           sizes="(min-width: 48rem) 20rem, calc(100vw - 32px)"
           priority
         />
+        {/* No cover yet: where to set one (found online, from a link, or a file). */}
+        {user && !album.art_key && (
+          <a class="add-cover" href={`/edit/album/${album.id}#cover`}>
+            Add a cover
+          </a>
+        )}
       </Fragment>
 
         <Fragment slot="titles">
@@ -886,6 +893,24 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     border-radius: var(--radius-s);
     background: var(--surface-1);
     font-weight: 600;
+  }
+
+  .add-cover {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    margin-top: var(--space-3);
+    padding: 0 var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .add-cover:hover {
+    border-color: var(--accent);
   }
 
   .holding-error {

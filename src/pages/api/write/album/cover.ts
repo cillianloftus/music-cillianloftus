@@ -1,24 +1,45 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { ART_SIZES, artKeyFor } from '../../../../lib/import/coverart';
+import { CoverError, storeCoverFromImage } from '../../../../lib/covers';
 
 const MAX_BYTES = 3 * 1024 * 1024;
 const isJpeg = (bytes: Uint8Array) => bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 
 /**
- * A cover chosen by hand for one edition. The page resizes it in the
- * browser to the stored widths (250, 500, 1200) as JPEG; without
- * JavaScript one JPEG arrives and stands in at every size. Marked as an
- * override so no lookup replaces it.
+ * A cover chosen by hand for one edition: a link to an image (a Genius or
+ * Bandcamp cover, say), or a file. A file is resized in the browser to the
+ * stored widths (250, 500, 1200) as JPEG; without JavaScript one JPEG
+ * arrives and stands in at every size. Marked as an override so no lookup
+ * replaces it.
  */
 export const POST: APIRoute = async ({ request, redirect, locals }) => {
   const form = await request.formData();
   const id = form.get('id')?.toString() ?? '';
   const edition = form.get('edition')?.toString() ?? '';
-  const back = (params: Record<string, string>) => redirect(`/edit/album/${id}?${new URLSearchParams(params)}`, 303);
+  const back = (params: Record<string, string>) => redirect(`/edit/album/${id}?${new URLSearchParams(params)}#cover`, 303);
 
   const owned = await env.DB.prepare(`SELECT 1 AS yes FROM release WHERE id = ? AND release_group_id = ?`).bind(edition, id).first();
   if (!owned) return back({ error: 'That edition is not one of this album’s.' });
+
+  const override = () =>
+    // Art chosen by hand cannot be put back, so the override has no original to return to.
+    env.DB.prepare(
+      `INSERT INTO field_override (entity_type, entity_id, field, value_json, user_id) VALUES ('release', ?, 'art_key', '"manual"', ?)
+       ON CONFLICT (entity_type, entity_id, field) DO UPDATE SET user_id = excluded.user_id, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).bind(edition, locals.user!.id);
+
+  const link = form.get('link')?.toString().trim();
+  if (link) {
+    try {
+      await storeCoverFromImage(edition, link);
+    } catch (error) {
+      if (error instanceof CoverError) return back({ error: error.message });
+      throw error;
+    }
+    await override().run();
+    return back({ done: 'Cover saved.' });
+  }
 
   const files = new Map<number, Uint8Array>();
   for (const size of ART_SIZES) {
@@ -38,11 +59,7 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
   );
   await env.DB.batch([
     env.DB.prepare(`UPDATE release SET art_key = ? WHERE id = ?`).bind(key, edition),
-    // Uploaded art cannot be put back, so the override has no original to return to.
-    env.DB.prepare(
-      `INSERT INTO field_override (entity_type, entity_id, field, value_json, user_id) VALUES ('release', ?, 'art_key', '"manual"', ?)
-       ON CONFLICT (entity_type, entity_id, field) DO UPDATE SET user_id = excluded.user_id, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
-    ).bind(edition, locals.user!.id),
+    override(),
   ]);
   return back({ done: 'Cover saved.' });
 };

@@ -176,6 +176,28 @@ describe('an artist’s songs for the builder', () => {
   });
 });
 
+describe('an album’s cover on Genius', () => {
+  it('is found through its songs, when the album they are on there has its title', async () => {
+    const { geniusAlbumCover } = await import('../genius');
+    const asked: string[] = [];
+    const fetcher = (async (url: string) => {
+      asked.push(url);
+      const path = new URL(url).pathname + new URL(url).search;
+      const body = path.startsWith('/search')
+        ? decodeURIComponent(path).includes('finale')
+          ? { hits: [{ result: { id: 7, title: 'i. finale', primary_artist: { name: 'Quadeca' } } }, { result: { id: 8, title: 'finale', primary_artist: { name: 'Someone Else' } } }] }
+          : { hits: [{ result: { id: 9, title: 'Listening Log', primary_artist: { name: 'Toxi' } } }] }
+        : { song: { album: { name: 'i.ii.iii', cover_art_url: 'https://images.genius.com/cover.png' } } };
+      return new Response(JSON.stringify({ response: body }));
+    }) as typeof fetch;
+    // The album's own title finds nothing; its first song leads to the album, "i.ii.iii" being "i. ii. iii.".
+    expect(await geniusAlbumCover('t', { artist: 'Quadeca', title: 'i. ii. iii.', tracks: ['i. finale', 'ii. à noite'] }, fetcher)).toBe('https://images.genius.com/cover.png');
+    expect(asked.some((u) => u.includes('/songs/7'))).toBe(true);
+    // Another album's song is not this album's cover.
+    expect(await geniusAlbumCover('t', { artist: 'Quadeca', title: 'Something Else', tracks: ['i. finale'] }, fetcher)).toBeNull();
+  });
+});
+
 describe('songs picked for lines', () => {
   it('are kept while their line still has their title, by any artist, and dropped when it changed', async () => {
     const { seedLibrary } = await import('../../test/db');

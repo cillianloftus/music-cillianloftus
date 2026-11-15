@@ -2,7 +2,7 @@ import type { APIRoute } from 'astro';
 import { deriveAlbumGenres } from '../../../../lib/genres';
 import { batchCredit } from '../../../../lib/credits';
 import { createEdition, newEdition } from '../../../../lib/editions';
-import { findCover } from '../../../../lib/covers';
+import { COVER_SOURCE_NAMES, findCover } from '../../../../lib/covers';
 import { mergeAlbums } from '../../../../lib/merge';
 import { ReviewError } from '../../../../lib/review';
 import { editEdition, editionEdit, albumEdit, creditWriter, editAlbum, EditError } from '../../../../lib/edits';
@@ -13,7 +13,7 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
   const form = Object.fromEntries(data) as Record<string, string>;
   const tracks = data.getAll('track').map(String);
   const id = form.id ?? '';
-  const back = (params: Record<string, string>) => redirect(`/edit/album/${id}?${new URLSearchParams(params)}`, 303);
+  const back = (params: Record<string, string>, at = '') => redirect(`/edit/album/${id}?${new URLSearchParams(params)}${at}`, 303);
   try {
     if (form.intent === 'batch_credit') {
       const n = await batchCredit(locals.user!.id, id, {
@@ -36,8 +36,9 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
       const found = await findCover(form.edition ?? '', { replace: true });
       return back(
         found
-          ? { done: `Cover replaced, from ${found === 'spotify' ? 'Spotify' : found === 'itunes' ? 'Apple Music' : 'the Cover Art Archive'}.` }
-          : { error: 'No cover of its own was found for that edition. The old one is kept.' },
+          ? { done: `Cover found on ${COVER_SOURCE_NAMES[found]}.` }
+          : { error: 'No cover was found on the Cover Art Archive, Apple Music, Spotify or Genius. Paste a link to one, or upload a file.' },
+        '#cover',
       );
     }
     if (form.intent === 'edition') {

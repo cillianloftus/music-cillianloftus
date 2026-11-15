@@ -16,6 +16,8 @@ import ReleaseBuilder, { type BuilderRow } from '../../../components/ReleaseBuil
 
 import type { ReleaseGroupType } from '../../../lib/import/plan';
 import { writePlan } from '../../../lib/import/write';
+import { findCover } from '../../../lib/covers';
+import { waitUntilOf } from '../../../lib/art-serve';
 
 const TYPES: [ReleaseGroupType, string][] = [
   ['album', 'Album'],
@@ -57,6 +59,11 @@ if (Astro.request.method === 'POST') {
     // A song chosen for a line is used only while it still is that line's (the tracklist may have changed since the preview).
     input.existing = await fittingChoices(input.existing ?? {}, parseTracklist(input.tracklist));
     const result = await writePlan(buildManualPlan(input));
+    // Its cover, looked for after the answer (Apple Music, then Genius through its songs, which knows most releases made by hand).
+    const cover = findCover(result.releaseId, { replace: false }).catch((error) => console.warn('Cover for a release by hand failed', error));
+    const waitUntil = waitUntilOf(Astro.locals);
+    if (waitUntil) waitUntil(cover);
+    else await cover;
     // The release, saying it was just added: the page itself is the proof.
     return Astro.redirect(`/album/${result.releaseGroupId}?added=1`, 303);
   }

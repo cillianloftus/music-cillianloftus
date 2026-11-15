@@ -191,6 +191,41 @@ export async function geniusCredits(
 }
 
 /**
+ * An album's cover on Genius, through its songs: Genius's search finds
+ * songs, not albums (searching "Quadeca i. ii. iii." finds listening logs),
+ * so each of a few of its tracks is looked up by artist and title and the
+ * album it is on there taken when that album has this one's title
+ * ("i.ii.iii" for "i. ii. iii."). Null when none matches, or Genius has
+ * only its placeholder.
+ */
+export async function geniusAlbumCover(
+  token: string,
+  query: { artist: string; title: string; tracks: string[] },
+  fetcher: typeof fetch = fetch,
+): Promise<string | null> {
+  const get = async <T>(path: string): Promise<T> => {
+    const res = await fetcher(`${API}${path}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/json' } });
+    if (!res.ok) throw new Error(`Genius ${res.status} for ${path}`);
+    return ((await res.json()) as { response: T }).response;
+  };
+  const albumKey = normaliseTitle(query.title);
+  const artistKey = normaliseName(query.artist);
+  const tried = new Set<number>();
+  // A single's song is named as the single; an album's songs are its own.
+  for (const title of [...new Set([query.title, ...query.tracks.slice(0, 3)])]) {
+    const { hits } = await get<{ hits: Hit[] }>(`/search?q=${encodeURIComponent(`${query.artist} ${title}`)}`);
+    const key = geniusTitleKey(title);
+    const hit = hits.find((h) => !tried.has(h.result.id) && geniusTitleKey(h.result.title) === key && h.result.primary_artist && normaliseName(h.result.primary_artist.name) === artistKey);
+    if (!hit) continue;
+    tried.add(hit.result.id);
+    const { song } = await get<{ song: { album?: { name: string; cover_art_url?: string | null } | null } }>(`/songs/${hit.result.id}?text_format=plain`);
+    const cover = song.album?.cover_art_url;
+    if (song.album && normaliseTitle(song.album.name) === albumKey && cover && !/default_cover/i.test(cover)) return cover;
+  }
+  return null;
+}
+
+/**
  * A credit_role for a Genius label: an existing role by label or synonym,
  * or a new one named as Genius names it.
  */

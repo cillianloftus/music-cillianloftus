@@ -106,6 +106,8 @@ const editionEdits = new Map<string, Map<string, boolean>>();
 for (const e of allEditions) editionEdits.set(e.id, await editsOf('release', e.id));
 const primaryArtist = album.credits[0]?.name ?? '';
 const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
+// Covers, the standard edition's first: its cover is the album's.
+const coverEditions = [...allEditions].sort((a, b) => Number(b.id === album.canonical_release_id) - Number(a.id === album.canonical_release_id));
 ---
 
 <Base title={`Edit ${album.title}`}>
@@ -121,6 +123,51 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
 
     {params.get('error') && <p class="notice notice--error" role="alert">{params.get('error')}</p>}
     {params.get('done') && <p class="notice" role="status">{params.get('done')}</p>}
+
+    {/* The cover first, where it is found: it was a file box inside each edition's folded form, and could not be found (15 Nov). */}
+    <section aria-labelledby="cover-heading" class="form-card" id="cover">
+      <h2 id="cover-heading">{coverEditions.length > 1 ? 'Covers' : 'Cover'}</h2>
+      <ul role="list" class="covers">
+        {coverEditions.map((e) => (
+          <li class="cover-row">
+            <span class="cover-big"><CoverArt artKey={e.art_key} title={e.title} sizes="8rem" /></span>
+            <div class="cover-ways">
+              {coverEditions.length > 1 && (
+                <p class="cover-edition">
+                  {e.note ?? e.title}
+                  {e.id === album.canonical_release_id && <span class="muted small"> · the album's cover</span>}
+                </p>
+              )}
+              <form method="post" action="/api/write/album/edit" class="cover-way">
+                <input type="hidden" name="id" value={id} />
+                <input type="hidden" name="intent" value="cover" />
+                <input type="hidden" name="edition" value={e.id} />
+                <button class="button" type="submit">{e.art_key ? 'Find a cover again' : 'Find a cover'}</button>
+                <span class="hint">Looks on the Cover Art Archive, Apple Music, Spotify and Genius.</span>
+              </form>
+              <form method="post" action="/api/write/album/cover" class="cover-way cover-link">
+                <input type="hidden" name="id" value={id} />
+                <input type="hidden" name="edition" value={e.id} />
+                <label for={`link-${e.id}`}>Or paste a link to the image</label>
+                <span class="cover-inline">
+                  <input class="input" id={`link-${e.id}`} name="link" type="url" inputmode="url" required placeholder="https://images.genius.com/…" {...IGNORE} />
+                  <button class="button" type="submit">Use it</button>
+                </span>
+              </form>
+              <form method="post" action="/api/write/album/cover" enctype="multipart/form-data" class="cover-way cover-form" data-cover-form>
+                <input type="hidden" name="id" value={id} />
+                <input type="hidden" name="edition" value={e.id} />
+                <label for={`cover-${e.id}`}>Or upload one</label>
+                <span class="cover-inline">
+                  <input id={`cover-${e.id}`} name="cover" type="file" accept="image/*" required />
+                  <button class="button" type="submit">Upload</button>
+                </span>
+              </form>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
 
     <form method="post" action="/api/write/album/edit" class="form">
       <input type="hidden" name="id" value={id} />
@@ -248,20 +295,7 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
                 </div>
                 <div class="buttons">
                   <button class="button" type="submit">Save edition</button>
-                  <button class="button button--quiet" type="submit" name="intent" value="cover" formnovalidate>
-                    Look for its cover again
-                  </button>
                 </div>
-              </form>
-              <form method="post" action="/api/write/album/cover" enctype="multipart/form-data" class="cover-form" data-cover-form>
-                <input type="hidden" name="id" value={id} />
-                <input type="hidden" name="edition" value={e.id} />
-                <span class="cover-thumb"><CoverArt artKey={e.art_key} title={e.title} sizes="4rem" /></span>
-                <div class="field">
-                  <label for={`cover-${e.id}`}>Use your own cover</label>
-                  <input id={`cover-${e.id}`} name="cover" type="file" accept="image/*" required />
-                </div>
-                <button class="button" type="submit">Upload</button>
               </form>
             </details>
           </li>
@@ -601,30 +635,66 @@ const missingWriters = writers ? writers.total - (writers.credited ?? 0) : 0;
     padding-bottom: var(--space-4);
   }
 
-  .cover-form {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: end;
-    gap: var(--space-3);
-    padding: var(--space-3) 0 var(--space-4);
-    border-top: 1px dashed var(--border);
-  }
-
-  .cover-thumb {
-    width: 4rem;
-    overflow: hidden;
-    border-radius: var(--radius-s);
-  }
-
-  .cover-form .field {
+  /* Cover: the picture large, the three ways to set it beside it (under it on phones). */
+  .covers {
     display: grid;
-    flex: 1 1 12rem;
-    gap: var(--space-1);
+    gap: var(--space-5);
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
-  .cover-form label {
+  .cover-row {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  @media (min-width: 36rem) {
+    .cover-row {
+      grid-template-columns: 8rem minmax(0, 1fr);
+      align-items: start;
+    }
+  }
+
+  .cover-big {
+    width: 8rem;
+    overflow: hidden;
+    border-radius: var(--radius-m);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.3);
+  }
+
+  .cover-ways {
+    display: grid;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+
+  .cover-edition {
+    margin: 0;
+    font-weight: 650;
+  }
+
+  .cover-way {
+    display: grid;
+    gap: var(--space-2);
+    justify-items: start;
+  }
+
+  .cover-way label {
     font-size: var(--step--1);
     font-weight: 600;
+  }
+
+  .cover-inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    width: 100%;
+  }
+
+  .cover-inline input {
+    flex: 1 1 12rem;
+    min-width: 0;
   }
 
   .bulk {
