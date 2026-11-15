@@ -55,10 +55,13 @@ async function queueImports(items: { key: string; title: string; payload: Import
     .all<{ id: string; key: string }>();
   const already = new Map(waiting.map((w) => [w.key, w.id]));
   const fresh = items.filter((i) => !already.has(i.key));
-  const ids = await enqueueMany('import_release', fresh.map((i) => i.payload), priority, batchId);
-  const freshIds = new Map(fresh.map((i, n) => [i.key, ids[n]!]));
+  // Those already waiting move up before the new ones are queued, so they
+  // go first whatever the clock says (both stamp created_at with now; in
+  // the other order, the same millisecond or not decided which went first).
   const promoting = priority > PRIORITY.bulk;
   const moved = promoting ? await promote([...already.values()], batchId) : 0;
+  const ids = await enqueueMany('import_release', fresh.map((i) => i.payload), priority, batchId);
+  const freshIds = new Map(fresh.map((i, n) => [i.key, ids[n]!]));
   return {
     // In the order asked, with the ones moved up, for the tray to follow.
     queued: items
