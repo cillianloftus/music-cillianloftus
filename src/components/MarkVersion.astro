@@ -1,0 +1,203 @@
+---
+/**
+ * On a track's page, for Cillian: mark another song as a version of this
+ * one (one song, sharing a rating until each has its own), or as the same
+ * recording (merged). Its artist's likely versions are offered first (the
+ * same song once "Remix", "Live" and the like are set aside); anything else
+ * is a search away. src/lib/mark-versions.ts does the marking.
+ */
+import Disclosure from './Disclosure.astro';
+import type { VersionCandidate } from '../lib/mark-versions';
+
+interface Props {
+  id: string;
+  title: string;
+  candidates: VersionCandidate[];
+}
+
+const { id, title, candidates } = Astro.props;
+---
+
+<Disclosure heading="Mark a version" note={candidates.length ? `${candidates.length} likely` : undefined} class="mark-version">
+  <div class="mark" data-mark-version={id}>
+    <p class="muted small">
+      A version is the same song another way (a remix, a live take, a demo): versions show together, and an unrated one takes the rated one’s score. The same recording entered twice is merged instead.
+    </p>
+    {
+      candidates.length > 0 && (
+        <>
+          <h3>Likely versions of “{title}”</h3>
+          <ul role="list" class="found">
+            {candidates.map((c) => (
+              <li>
+                <span class="what">
+                  <a href={`/track/${c.id}`}>{c.title}</a>
+                  <span class="muted small">{[c.album_title, c.year].filter(Boolean).join(' · ')}</span>
+                </span>
+                <form method="post" action="/api/write/track/version" class="actions">
+                  <input type="hidden" name="id" value={id} />
+                  <input type="hidden" name="of" value={c.id} />
+                  <button class="button small button--primary" type="submit" name="intent" value="version">
+                    A version
+                  </button>
+                  <button class="button small" type="submit" name="intent" value="same">
+                    Same recording
+                  </button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        </>
+      )
+    }
+    <h3>Find another</h3>
+    <label class="visually-hidden" for={`mark-q-${id}`}>Search for a song</label>
+    <input id={`mark-q-${id}`} type="search" placeholder="A song’s title, or its artist" autocomplete="off" data-mark-q />
+    <ul role="list" class="found" data-mark-results aria-live="polite"></ul>
+    <p class="muted small" role="status" data-mark-status></p>
+  </div>
+</Disclosure>
+
+<script>
+  type Track = { href: string; title: string; detail: string };
+  for (const root of document.querySelectorAll<HTMLElement>('[data-mark-version]')) {
+    const id = root.dataset.markVersion!;
+    const input = root.querySelector<HTMLInputElement>('[data-mark-q]')!;
+    const list = root.querySelector<HTMLUListElement>('[data-mark-results]')!;
+    const status = root.querySelector<HTMLElement>('[data-mark-status]')!;
+
+    // Marking: in place, then the page again with the versions it now has.
+    root.addEventListener('submit', async (event) => {
+      const form = event.target as HTMLFormElement;
+      event.preventDefault();
+      const body = new FormData(form);
+      body.set('intent', (event.submitter as HTMLButtonElement | null)?.value ?? 'version');
+      for (const b of form.querySelectorAll('button')) b.disabled = true;
+      status.textContent = 'Marking…';
+      const response = await fetch(form.action, { method: 'POST', body, headers: { Accept: 'application/json' } });
+      const result = (await response.json().catch(() => ({ ok: false }))) as { ok: boolean; error?: string; href?: string };
+      if (!result.ok) {
+        status.textContent = result.error ?? 'That did not work.';
+        for (const b of form.querySelectorAll('button')) b.disabled = false;
+        return;
+      }
+      location.assign(result.href ?? location.href);
+    });
+
+    // Searching: the site's own search, its tracks only, this one left out.
+    let timer: number | undefined;
+    input.addEventListener('input', () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        const q = input.value.trim();
+        if (q.length < 2) {
+          list.replaceChildren();
+          return;
+        }
+        const response = await fetch(`/api/search?${new URLSearchParams({ q })}`);
+        const found = ((await response.json()) as { tracks: Track[] }).tracks.filter((t) => t.href !== `/track/${id}`);
+        list.replaceChildren(
+          ...found.map((t) => {
+            const li = document.createElement('li');
+            const what = document.createElement('span');
+            what.className = 'what';
+            const a = document.createElement('a');
+            a.href = t.href;
+            a.textContent = t.title;
+            const detail = document.createElement('span');
+            detail.className = 'muted small';
+            detail.textContent = t.detail;
+            what.replaceChildren(a, detail);
+            const form = document.createElement('form');
+            form.method = 'post';
+            form.action = '/api/write/track/version';
+            form.className = 'actions';
+            const hidden = (name: string, value: string) => {
+              const h = document.createElement('input');
+              h.type = 'hidden';
+              h.name = name;
+              h.value = value;
+              return h;
+            };
+            const button = (label: string, value: string, primary: boolean) => {
+              const b = document.createElement('button');
+              b.type = 'submit';
+              b.name = 'intent';
+              b.value = value;
+              b.className = `button small${primary ? ' button--primary' : ''}`;
+              b.textContent = label;
+              return b;
+            };
+            form.replaceChildren(hidden("id", id), hidden("of", t.href.split("/").pop()!), button("A version", "version", true), button("Same recording", "same", false));
+            li.replaceChildren(what, form);
+            return li;
+          }),
+        );
+        status.textContent = found.length ? '' : 'No songs found.';
+      }, 250);
+    });
+  }
+</script>
+
+<style>
+  .mark {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .mark p {
+    margin: 0;
+    max-width: 60ch;
+  }
+
+  h3 {
+    margin: var(--space-2) 0 0;
+    font-size: var(--step-0);
+  }
+
+  input[type='search'] {
+    min-height: var(--target);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+    color: var(--text);
+    font: inherit;
+  }
+
+  .found {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .found :global(li) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-3);
+    padding-block: var(--space-2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .found :global(.what) {
+    display: grid;
+    min-width: 0;
+  }
+
+  .found :global(.what a) {
+    font-weight: 650;
+  }
+
+  .found :global(.actions) {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .found :global(.small) {
+    min-height: 2.25rem;
+    font-size: var(--step--1);
+  }
+</style>
