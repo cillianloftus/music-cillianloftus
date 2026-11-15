@@ -139,6 +139,9 @@ describe('favourites', () => {
   it('are the best rated until there are plays, then plays count too', async () => {
     const top3 = async () => (await artistTracks('art-x', 'u-owner', 0, 3)).tracks;
     expect((await top3()).map((t) => t.id)).toEqual(['a4', 'a1', 'b1']);
+    // All on Spotify, so their missing plays are their own (a song on no
+    // streaming service is ranked apart: rankFavourites).
+    db.exec(`UPDATE recording SET spotify_id = 'sp-' || id`);
     // b2 (rated 60) played far more than anything else.
     insertPlays(
       db,

@@ -5,7 +5,7 @@
 
 import { env } from 'cloudflare:workers';
 import { albumScores, withScores, type Completeness } from './album-scores';
-import { byLibrary, byLibraryMap } from './library-cache';
+import { byLibrary, byLibraryMap, byScoresAndPlays } from './library-cache';
 import { splitVersion } from './versions';
 import type { DatePrecision } from './dates';
 import type { CreditEntity, CreditRole, ReleaseGroupType } from './import/plan';
@@ -369,6 +369,8 @@ export interface ArtistTrack {
   art_key: string | null;
   /** Plays from listening history (Spotify export, Last.fm, ListenBrainz). */
   plays: number;
+  /** On no streaming service and never played (a mixtape's song): ranked without plays counting against it. */
+  off_streaming: boolean;
 }
 
 /**
@@ -383,12 +385,54 @@ export interface ArtistTrack {
  * put a 96 below 82s (Logic, 15 Nov).
  */
 export function favouriteScore(rating: number | null, plays: number, mostPlays: number): number {
-  const evidence = Math.min(1, Math.max(0, (mostPlays - FEW_PLAYS) / (FULL_PLAYS - FEW_PLAYS)));
-  if (evidence === 0) return rating ?? 0;
-  const played = (Math.log1p(plays) / Math.log1p(mostPlays)) * 100;
+  return favouriteFrom(rating, playedShare(plays, mostPlays), playsEvidence(mostPlays));
+}
+
+/** How much plays may say, 0 to 1, from the artist's most played track. */
+function playsEvidence(mostPlays: number): number {
+  return Math.min(1, Math.max(0, (mostPlays - FEW_PLAYS) / (FULL_PLAYS - FEW_PLAYS)));
+}
+
+/** Plays out of 100, on a log scale against the most played. */
+function playedShare(plays: number, mostPlays: number): number {
+  return mostPlays > 0 ? (Math.log1p(plays) / Math.log1p(mostPlays)) * 100 : 0;
+}
+
+/** The blend, from a played share out of 100 (or none: the rating alone). */
+function favouriteFrom(rating: number | null, played: number | null, evidence: number): number {
+  if (evidence === 0 || played === null) return rating ?? 0;
   if (rating === null) return played * 0.85 * evidence;
   const weight = 0.4 * evidence;
   return rating * (1 - weight) + played * weight;
+}
+
+/**
+ * A song on no streaming service could not have been played there, so its
+ * missing plays say nothing: Griptape, a 93 on a 2009 mixtape, would have
+ * ranked as 56 once plays counted. It takes instead the played share of
+ * the artist's streamed songs rated near it (within 7.5 points, else 15),
+ * from at least 3 of them; with fewer, its rating alone.
+ */
+export function rankFavourites<T extends { title: string; quality_score: number | null; personal_score: number | null; plays: number; off_streaming: boolean }>(
+  tracks: T[],
+): T[] {
+  const most = Math.max(0, ...tracks.map((t) => t.plays));
+  const evidence = playsEvidence(most);
+  const streamed = tracks.filter((t) => !t.off_streaming && t.personal_score !== null);
+  const like = (rating: number): number | null => {
+    for (const within of [7.5, 15]) {
+      const near = streamed.filter((t) => Math.abs(t.personal_score! - rating) <= within);
+      if (near.length >= 3) return near.reduce((sum, t) => sum + playedShare(t.plays, most), 0) / near.length;
+    }
+    return null;
+  };
+  return tracks
+    .map((t) => {
+      const played = t.off_streaming ? (t.personal_score === null ? null : like(t.personal_score)) : playedShare(t.plays, most);
+      return { t, favour: favouriteFrom(t.personal_score, played, evidence) };
+    })
+    .sort((a, b) => b.favour - a.favour || (b.t.quality_score ?? 0) - (a.t.quality_score ?? 0) || a.t.title.localeCompare(b.t.title))
+    .map(({ t }) => t);
 }
 
 /** Below this many plays on an artist's most played track, plays do not move favourites. */
@@ -399,7 +443,7 @@ const FULL_PLAYS = 50;
 /** How many favourite tracks an artist page shows at a time. */
 export const TRACKS_PER_PAGE = 10;
 
-type RankedTrack = Pick<ArtistTrack, 'id' | 'title' | 'quality_score' | 'personal_score' | 'plays'>;
+type RankedTrack = Pick<ArtistTrack, 'id' | 'title' | 'quality_score' | 'personal_score' | 'plays' | 'off_streaming'>;
 export type TrackPlace = Pick<ArtistTrack, 'album_id' | 'album_title' | 'art_key'>;
 
 /**
@@ -418,7 +462,8 @@ export async function artistTracks(
   from: number,
   limit: number,
 ): Promise<{ tracks: ArtistTrack[]; total: number }> {
-  const ranked = await byLibrary(`artist-ranking:v1:${artistId}`, viewerId, () => rankArtistTracks(artistId, viewerId));
+  // Ratings and plays decide it, not imports (byScoresAndPlays).
+  const ranked = await byScoresAndPlays(`artist-ranking:v2:${artistId}`, viewerId, () => rankArtistTracks(artistId, viewerId));
   const stretch = ranked.slice(from, from + limit);
   if (stretch.length === 0) return { tracks: [], total: ranked.length };
   const places = await trackPlaces(stretch.map((t) => t.id));
@@ -432,7 +477,11 @@ async function rankArtistTracks(artistId: string, viewerId: string | null): Prom
   const { results } = await env.DB.prepare(
     `SELECT * FROM (
        SELECT r.id, r.title, s.quality_score, s.personal_score,
-              (SELECT count(*) FROM play p WHERE p.user_id = ?1 AND p.recording_id = r.id AND p.counted = 1) AS plays
+              (SELECT count(*) FROM play p WHERE p.user_id = ?1 AND p.recording_id = r.id AND p.counted = 1) AS plays,
+              -- On streaming: Spotify knows the song, or an edition or album it is on.
+              r.spotify_id IS NOT NULL OR EXISTS (
+                SELECT 1 FROM track t JOIN release x ON x.id = t.release_id JOIN release_group g ON g.id = x.release_group_id
+                WHERE t.recording_id = r.id AND (x.spotify_id IS NOT NULL OR g.spotify_id IS NOT NULL)) AS streamable
        FROM artist_credit c
        JOIN recording r ON r.id = c.entity_id
        LEFT JOIN v_recording_score s ON s.recording_id = r.id AND s.user_id = ?1
@@ -440,12 +489,9 @@ async function rankArtistTracks(artistId: string, viewerId: string | null): Prom
      ) WHERE quality_score IS NOT NULL OR plays > 0`,
   )
     .bind(viewerId, artistId)
-    .all<RankedTrack>();
-  const most = Math.max(0, ...results.map((t) => t.plays));
-  return results
-    .map((t) => ({ t, favour: favouriteScore(t.personal_score, t.plays, most) }))
-    .sort((a, b) => b.favour - a.favour || (b.t.quality_score ?? 0) - (a.t.quality_score ?? 0) || a.t.title.localeCompare(b.t.title))
-    .map(({ t }) => t);
+    .all<Omit<RankedTrack, 'off_streaming'> & { streamable: number }>();
+  // Played anyway (a local file, scrobbled): its plays are real and count.
+  return rankFavourites(results.map(({ streamable, ...t }) => ({ ...t, off_streaming: !streamable && t.plays === 0 })));
 }
 
 /**

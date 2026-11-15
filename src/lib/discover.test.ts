@@ -250,3 +250,27 @@ describe('the odd one out on a compilation', () => {
     expect(odd({ albumId: 'compilation' })).not.toContain('odd:c0');
   });
 });
+
+describe('favourites with songs not on streaming', () => {
+  it('ranks a song that could not be played by the plays of songs rated like it, not by none', async () => {
+    const { rankFavourites } = await import('./catalogue');
+    const song = (title: string, score: number, plays: number, off_streaming = false) => ({ title, quality_score: score, personal_score: score, plays, off_streaming });
+    const tracks = [
+      // A full history: songs rated in the 90s are played a lot.
+      song('Top A', 95, 80),
+      song('Top B', 92, 70),
+      song('Top C', 90, 60),
+      song('Middling', 75, 40),
+      song('Fine', 78, 45),
+      song('Okay', 72, 30),
+      song('Griptape', 93, 0, true),
+    ];
+    const order = rankFavourites(tracks).map((t) => t.title);
+    // Judged on none, a 93 with 0 plays would sit below every 70-something played 30 times.
+    expect(order.indexOf('Griptape')).toBeLessThan(order.indexOf('Middling'));
+    expect(order.slice(0, 4)).toContain('Griptape');
+    // A streamable song never played is still judged on that.
+    const unplayed = rankFavourites([...tracks.slice(0, 6), song('Skipped', 93, 0)]).map((t) => t.title);
+    expect(unplayed.indexOf('Skipped')).toBeGreaterThan(unplayed.indexOf('Middling'));
+  });
+});

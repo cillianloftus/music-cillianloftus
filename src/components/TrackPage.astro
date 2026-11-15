@@ -29,10 +29,13 @@ const { tracks, from } = Astro.props;
         ranked
       >
         {t.album_title && (t.album_id ? <a class="album-link" href={`/album/${t.album_id}`}>{t.album_title}</a> : <span>{t.album_title}</span>)}
-        {t.plays > 0 && (
+        {t.plays > 0 ? (
           <span class="tabular">
             {t.plays.toLocaleString('en-GB')} {t.plays === 1 ? 'play' : 'plays'}
           </span>
+        ) : (
+          // Why it is not judged on plays (catalogue.ts, rankFavourites).
+          t.off_streaming && <span class="off">Not on streaming</span>
         )}
       </MediaRow>
     ))
@@ -46,5 +49,9 @@ const { tracks, from } = Astro.props;
 
   .album-link:hover {
     text-decoration: underline;
+  }
+
+  .off {
+    color: var(--text-subtle);
   }
 </style>

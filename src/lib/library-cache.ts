@@ -135,6 +135,19 @@ export async function byScores<T>(name: string, userId: string | null, work: () 
 }
 
 /**
+ * The value under name while scores stand and no play is added: for
+ * rankings that blend the two (an artist's favourite tracks, 150,000 rows
+ * to work out for Logic), which an import, adding only unrated and
+ * unplayed songs, cannot move. And by the day: plays heard before their
+ * song was imported join it in the nightly rematch, in place.
+ */
+export async function byScoresAndPlays<T>(name: string, userId: string | null, work: () => Promise<T>, now = new Date()): Promise<T> {
+  const plays = await perRequest('plays-stamp', async () => String((await env.DB.prepare(`SELECT max(rowid) AS n FROM play`).first<number>('n')) ?? 0));
+  const day = now.toISOString().slice(0, 10);
+  return keptOrWorkedOut(`scores-plays:${BUILD}:${name}:${userId ?? '-'}:${await scoresStamp()}:${plays}:${day}`, 2, work);
+}
+
+/**
  * The value under name for a stamp the caller reads itself, when neither
  * the library nor the scores is the right thing to follow: the review
  * queue's index moves only when new items are raised (anomaly rowids).
