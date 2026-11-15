@@ -159,3 +159,37 @@ export async function findCover(releaseId: string, { replace }: { replace: boole
   }
   return null;
 }
+
+/**
+ * Which sources a cover look-up for this edition asks, and which it cannot
+ * and why, so a look-up that finds nothing says so truthfully: "not found
+ * on Genius" when Genius was never asked (no key on the live site) misled
+ * (15 Nov).
+ */
+export async function coverSources(releaseId: string): Promise<{ asked: string[]; skipped: string[] }> {
+  const row = await env.DB.prepare(
+    `SELECT x.mbid, x.spotify_id, g.spotify_id AS group_spotify_id,
+            (SELECT c.release_id FROM v_release_group_canonical c WHERE c.release_group_id = g.id) AS standard_id
+     FROM release x JOIN release_group g ON g.id = x.release_group_id WHERE x.id = ?`,
+  )
+    .bind(releaseId)
+    .first<{ mbid: string | null; spotify_id: string | null; group_spotify_id: string | null; standard_id: string }>();
+  const asked: string[] = [];
+  const skipped: string[] = [];
+  if (row?.mbid) asked.push('the Cover Art Archive');
+  else skipped.push('the Cover Art Archive (not on MusicBrainz)');
+  asked.push('Apple Music');
+  const spotifyId = row?.spotify_id ?? (row?.standard_id === releaseId ? row?.group_spotify_id : null);
+  const owner = await ownerId();
+  if (!spotifyId) skipped.push('Spotify (no Spotify album linked)');
+  else if (!owner || !(await connection(owner))) skipped.push('Spotify (not connected)');
+  else asked.push('Spotify');
+  if (await geniusToken()) asked.push('Genius');
+  else skipped.push('Genius (no key on Connections)');
+  return { asked, skipped };
+}
+
+/** "Apple Music, Spotify and Genius". */
+export function listOf(items: string[]): string {
+  return items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : (items[0] ?? '');
+}

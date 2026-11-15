@@ -2,7 +2,7 @@ import type { APIRoute } from 'astro';
 import { deriveAlbumGenres } from '../../../../lib/genres';
 import { batchCredit } from '../../../../lib/credits';
 import { createEdition, newEdition } from '../../../../lib/editions';
-import { COVER_SOURCE_NAMES, findCover } from '../../../../lib/covers';
+import { COVER_SOURCE_NAMES, coverSources, findCover, listOf } from '../../../../lib/covers';
 import { mergeAlbums } from '../../../../lib/merge';
 import { ReviewError } from '../../../../lib/review';
 import { editEdition, editionEdit, albumEdit, creditWriter, editAlbum, EditError } from '../../../../lib/edits';
@@ -34,10 +34,20 @@ export const POST: APIRoute = async ({ request, redirect, locals }) => {
     }
     if (form.intent === 'cover') {
       const found = await findCover(form.edition ?? '', { replace: true });
+      // Not found: where it looked, and where it could not.
+      const sources = found ? null : await coverSources(form.edition ?? '');
       return back(
         found
           ? { done: `Cover found on ${COVER_SOURCE_NAMES[found]}.` }
-          : { error: 'No cover was found on the Cover Art Archive, Apple Music, Spotify or Genius. Paste a link to one, or upload a file.' },
+          : {
+              error: [
+                `No cover found on ${listOf(sources!.asked)}.`,
+                sources!.skipped.length ? `Not asked: ${listOf(sources!.skipped)}.` : null,
+                'Paste a link to one, or upload a file.',
+              ]
+                .filter(Boolean)
+                .join(' '),
+            },
         '#cover',
       );
     }
