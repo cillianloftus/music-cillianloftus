@@ -65,6 +65,12 @@ export interface Appearance {
   position: number | null;
   disc: number | null;
   standard: boolean;
+  /**
+   * Not on the standard edition: the edition it is on, named ("The Extended
+   * Cut"), with its place there. "Appears on Vanisher, Horizon Scraper" for
+   * a bonus track of the Extended Cut alone was misleading (Melissa, 15 Nov).
+   */
+  edition: { id: string; name: string; position: number | null; disc: number | null } | null;
 }
 
 /** Every release the recording is on, earliest first. */
@@ -85,10 +91,30 @@ export async function trackAppearances(id: string, viewerId: string | null): Pro
   )
     .bind(id)
     .all<{ album_id: string; standard: number; position: number | null; disc: number | null }>();
-  const albums = new Map((await releaseGroupsByIds(results.map((r) => r.album_id), viewerId)).map((a) => [a.id, a]));
+  const [summaries, others] = await Promise.all([
+    releaseGroupsByIds(results.map((r) => r.album_id), viewerId),
+    // The editions it is on, for the albums whose standard edition it is not on.
+    results.some((r) => r.standard !== 1)
+      ? env.DB.prepare(
+          `SELECT x.release_group_id AS album_id, x.id, x.title, x.note, x.format, substr(x.date, 1, 4) AS year, t.position, t.disc
+           FROM track t JOIN release x ON x.id = t.release_id
+           WHERE t.recording_id = ?
+           -- One with a name of its own first, then the earliest.
+           ORDER BY x.note IS NULL, x.date IS NULL, x.date`,
+        )
+          .bind(id)
+          .all<{ album_id: string; id: string; title: string; note: string | null; format: string | null; year: string | null; position: number | null; disc: number | null }>()
+          .then((r) => r.results)
+      : Promise.resolve([]),
+  ]);
+  const albums = new Map(summaries.map((a) => [a.id, a]));
   return results.flatMap((r) => {
     const album = albums.get(r.album_id);
-    return album ? [{ album, position: r.position, disc: r.disc, standard: r.standard === 1 }] : [];
+    if (!album) return [];
+    const on = r.standard === 1 ? undefined : others.find((e) => e.album_id === r.album_id);
+    // Its name: MusicBrainz's word for it, else its own title when not the album's, else format and year.
+    const name = on ? on.note || (on.title !== album.title ? on.title : null) || [on.format, on.year].filter(Boolean).join(' · ') || 'Another edition' : null;
+    return [{ album, position: r.position, disc: r.disc, standard: r.standard === 1, edition: on && name ? { id: on.id, name, position: on.position, disc: on.disc } : null }];
   });
 }
 
