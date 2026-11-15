@@ -45,10 +45,24 @@ async function musicBrainzReleaseFor(album: SpotifyAlbum): Promise<string | null
   }
 }
 
-/** An album already here with this title by this artist, if exactly one. */
+/** Short releases, which are never an edition of an album of the same name (or the other way). */
+const SHORT = new Set(['single', 'ep']);
+
+/**
+ * An album already here with this title by this artist and of the same
+ * kind, if exactly one. A title track's single shares its album's name: on
+ * 9 Nov the one-track "The Ballad of Rooster Jenkins" single from Spotify
+ * became an edition of the 31-track album, so singles and EPs only match
+ * singles and EPs, and albums only albums.
+ */
+export function sameKind(album: Pick<SpotifyAlbum, 'album_type'>, groupType: string | null): boolean {
+  // Spotify calls EPs singles too.
+  return (album.album_type === 'single') === SHORT.has(groupType ?? 'album');
+}
+
 async function existingAlbum(album: SpotifyAlbum): Promise<string | null> {
   const { results } = await env.DB.prepare(
-    `SELECT g.id, g.title, a.name
+    `SELECT g.id, g.title, g.type, a.name
      FROM release_group g
      JOIN artist_credit c ON c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary' AND c.position = 1
      JOIN artist a ON a.id = c.artist_id
@@ -56,10 +70,10 @@ async function existingAlbum(album: SpotifyAlbum): Promise<string | null> {
      WHERE a.name = ? COLLATE NOCASE`,
   )
     .bind(album.artists[0]?.name ?? '')
-    .all<{ id: string; title: string; name: string }>();
+    .all<{ id: string; title: string; type: string | null; name: string }>();
   const title = normaliseTitle(album.name);
   const artist = normaliseName(album.artists[0]?.name ?? '');
-  const matches = results.filter((r) => normaliseTitle(r.title) === title && normaliseName(r.name) === artist);
+  const matches = results.filter((r) => normaliseTitle(r.title) === title && normaliseName(r.name) === artist && sameKind(album, r.type));
   return matches.length === 1 ? matches[0]!.id : null;
 }
 

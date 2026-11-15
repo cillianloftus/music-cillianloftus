@@ -247,3 +247,14 @@ describe('without the deluxe match', () => {
     expect(count('release_group')).toBe(groups + 1);
   });
 });
+
+describe('joining an album already here', () => {
+  it('only as the same kind: a title track’s single is not an edition of its album', async () => {
+    const { sameKind } = await import('./spotify');
+    expect(sameKind({ album_type: 'single' }, 'album')).toBe(false);
+    expect(sameKind({ album_type: 'album' }, 'single')).toBe(false);
+    expect(sameKind({ album_type: 'single' }, 'ep')).toBe(true);
+    expect(sameKind({ album_type: 'album' }, 'album')).toBe(true);
+    expect(sameKind({ album_type: 'compilation' }, 'compilation')).toBe(true);
+  });
+});
