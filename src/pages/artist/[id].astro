@@ -473,33 +473,6 @@ import { splitVersion } from '../../lib/versions';
       })();
     </script>
 
-    {
-      features.length > 0 && (
-        <section aria-labelledby="featured-heading" class="featured">
-          <h2 id="featured-heading">
-            Featured on <span class="count tabular">{features.length}</span>
-          </h2>
-          <RowList labelledby="featured-heading">
-            {features.slice(0, FEATURES_SHOWN).map((t) => (
-              <MediaRow href={`/track/${t.id}`} title={withoutFeaturing(t.title)} artKey={t.art_key} artTitle={t.album_title ?? t.title} score={{ quality: t.quality_score, personal: t.personal_score }}>
-                <span>{[t.lead, t.album_title].filter(Boolean).join(' · ')}</span>
-              </MediaRow>
-            ))}
-          </RowList>
-          {features.length > FEATURES_SHOWN && (
-            <Disclosure heading={`The other ${features.length - FEATURES_SHOWN}`} ruled={false}>
-              <RowList>
-                {features.slice(FEATURES_SHOWN).map((t) => (
-                  <MediaRow href={`/track/${t.id}`} title={withoutFeaturing(t.title)} artKey={t.art_key} artTitle={t.album_title ?? t.title} score={{ quality: t.quality_score, personal: t.personal_score }}>
-                    <span>{[t.lead, t.album_title].filter(Boolean).join(' · ')}</span>
-                  </MediaRow>
-                ))}
-              </RowList>
-            </Disclosure>
-          )}
-        </section>
-      )
-    }
 
     {
       (topTracks.length > 0 || roleFamilies.length > 0) && (
@@ -554,6 +527,35 @@ import { splitVersion } from '../../lib/versions';
             )
           }
         </div>
+      )
+    }
+
+    {/* After their own favourites: songs they are a guest on come second. */}
+    {
+      features.length > 0 && (
+        <section aria-labelledby="featured-heading" class="featured">
+          <h2 id="featured-heading">
+            Featured on <span class="count tabular">{features.length}</span>
+          </h2>
+          <RowList labelledby="featured-heading">
+            {features.slice(0, FEATURES_SHOWN).map((t) => (
+              <MediaRow href={`/track/${t.id}`} title={withoutFeaturing(t.title)} artKey={t.art_key} artTitle={t.album_title ?? t.title} score={{ quality: t.quality_score, personal: t.personal_score }}>
+                <span>{[t.lead, t.album_title].filter(Boolean).join(' · ')}</span>
+              </MediaRow>
+            ))}
+          </RowList>
+          {features.length > FEATURES_SHOWN && (
+            <Disclosure heading={`The other ${features.length - FEATURES_SHOWN}`} ruled={false}>
+              <RowList>
+                {features.slice(FEATURES_SHOWN).map((t) => (
+                  <MediaRow href={`/track/${t.id}`} title={withoutFeaturing(t.title)} artKey={t.art_key} artTitle={t.album_title ?? t.title} score={{ quality: t.quality_score, personal: t.personal_score }}>
+                    <span>{[t.lead, t.album_title].filter(Boolean).join(' · ')}</span>
+                  </MediaRow>
+                ))}
+              </RowList>
+            </Disclosure>
+          )}
+        </section>
       )
     }
 
