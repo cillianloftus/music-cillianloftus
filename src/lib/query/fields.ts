@@ -69,6 +69,8 @@ export interface EntitySpec {
    * leaves out.
    */
   lean?: { from: string; aliases: string[] };
+  /** Common table expressions the FROM clause reads (after params). */
+  ctes?: string[];
   /** Predicate on artist_credit `c` matching credits on this entity itself. */
   ownCredit?: string;
   /** As ownCredit, but also its editions and the recordings on its standard edition. */
@@ -86,6 +88,25 @@ export interface EntitySpec {
 }
 
 const USER = '(SELECT user_id FROM params)';
+
+/**
+ * Every row of an entity with its score, scored or not, as `s`. Joining a
+ * score view to each row worked the view out again for every one (or,
+ * kept as a table, scanned it for every one: D1 builds no index on it):
+ * 11.5 million rows for "tracks since 2024, best first" over 44,000
+ * recordings. Here the view is worked out once; the scored rows find
+ * theirs by key, and the rest are every other row (NOT IN, which SQLite
+ * does index). 15 Nov: 13.6 million rows to 660,000.
+ */
+const scored = (name: string, view: string, key: string, table: string, columns: string[]) => [
+  `${name}_scores AS MATERIALIZED (SELECT ${key}, user_id, ${columns.join(', ')} FROM ${view} WHERE user_id = ${USER})`,
+  `${name}_all AS (
+      SELECT * FROM ${name}_scores
+      UNION ALL
+      SELECT id, NULL, ${columns.map(() => 'NULL').join(', ')} FROM ${table} WHERE id NOT IN (SELECT ${key} FROM ${name}_scores))`,
+];
+const RECORDING_SCORES = scored('rec', 'v_recording_score', 'recording_id', 'recording', ['quality_score', 'personal_score', 'depth']);
+const RELEASE_SCORES = scored('rel', 'v_release_score', 'release_group_id', 'release_group', ['quality_score', 'personal_score', 'rated_track_count', 'track_count']);
 
 const DATE_PADDED = (expr: string) => `substr(${expr} || '-01-01', 1, 10)`;
 
@@ -113,17 +134,18 @@ const RELEASE_GROUP_TYPES = ['album', 'ep', 'single', 'compilation', 'mixtape', 
 export const ENTITIES: Record<Entity, EntitySpec> = {
   recording: {
     label: 'Tracks',
+    ctes: RECORDING_SCORES,
     from: `
-      FROM recording e
-      LEFT JOIN v_recording_score s ON s.recording_id = e.id AND s.user_id = ${USER}
+      FROM rec_all s
+      JOIN recording e ON e.id = s.recording_id
       LEFT JOIN v_recording_album ra ON ra.recording_id = e.id
       LEFT JOIN release_group ag ON ag.id = ra.release_group_id`,
     // Each track's album is a lookup per track (8 rows or so): over the
     // whole library that was most of a query that never showed an album.
     lean: {
       from: `
-      FROM recording e
-      LEFT JOIN v_recording_score s ON s.recording_id = e.id AND s.user_id = ${USER}`,
+      FROM rec_all s
+      JOIN recording e ON e.id = s.recording_id`,
       aliases: ['ra', 'ag'],
     },
     ownCredit: `c.entity_type = 'recording' AND c.entity_id = e.id`,
@@ -196,9 +218,10 @@ export const ENTITIES: Record<Entity, EntitySpec> = {
 
   release_group: {
     label: 'Albums',
+    ctes: RELEASE_SCORES,
     from: `
-      FROM release_group e
-      LEFT JOIN v_release_score s ON s.release_group_id = e.id AND s.user_id = ${USER}`,
+      FROM rel_all s
+      JOIN release_group e ON e.id = s.release_group_id`,
     ownCredit: `c.entity_type = 'release_group' AND c.entity_id = e.id`,
     deepCredit: `(
       (c.entity_type = 'release_group' AND c.entity_id = e.id)

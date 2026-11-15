@@ -208,6 +208,7 @@ export function compile(definition: Definition, options: CompileOptions): Compil
     spec.lean && !spec.lean.aliases.some((alias) => new RegExp(`\\b${alias}\\.`).test(named)) ? spec.lean.from : spec.from;
   const ctes = [
     `params AS (SELECT ${userParam} AS user_id)`,
+    ...(spec.ctes ?? []),
     `base AS (SELECT ${columns.join(', ')} ${from} WHERE ${filter})`,
   ];
 

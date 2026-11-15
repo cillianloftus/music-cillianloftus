@@ -474,9 +474,12 @@ export async function artistTracks(
 }
 
 async function rankArtistTracks(artistId: string, viewerId: string | null): Promise<RankedTrack[]> {
-  const { results } = await env.DB.prepare(
-    `SELECT * FROM (
-       SELECT r.id, r.title, s.quality_score, s.personal_score,
+  // The artist's songs, and every score of the viewer's, apart, then
+  // matched here. Joined, the score view was worked out again for each of
+  // the artist's songs: 153,000 rows for Logic's 502. Apart: about 7,000.
+  const [songs, scores] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT r.id, r.title,
               (SELECT count(*) FROM play p WHERE p.user_id = ?1 AND p.recording_id = r.id AND p.counted = 1) AS plays,
               -- On streaming: Spotify knows the song, or an edition or album it is on.
               r.spotify_id IS NOT NULL OR EXISTS (
@@ -484,14 +487,21 @@ async function rankArtistTracks(artistId: string, viewerId: string | null): Prom
                 WHERE t.recording_id = r.id AND (x.spotify_id IS NOT NULL OR g.spotify_id IS NOT NULL)) AS streamable
        FROM artist_credit c
        JOIN recording r ON r.id = c.entity_id
-       LEFT JOIN v_recording_score s ON s.recording_id = r.id AND s.user_id = ?1
-       WHERE c.entity_type = 'recording' AND c.artist_id = ?2 AND c.role = 'primary'
-     ) WHERE quality_score IS NOT NULL OR plays > 0`,
-  )
-    .bind(viewerId, artistId)
-    .all<Omit<RankedTrack, 'off_streaming'> & { streamable: number }>();
-  // Played anyway (a local file, scrobbled): its plays are real and count.
-  return rankFavourites(results.map(({ streamable, ...t }) => ({ ...t, off_streaming: !streamable && t.plays === 0 })));
+       WHERE c.entity_type = 'recording' AND c.artist_id = ?2 AND c.role = 'primary'`,
+    ).bind(viewerId, artistId),
+    env.DB.prepare(`SELECT recording_id, quality_score, personal_score FROM v_recording_score WHERE user_id = ?1`).bind(viewerId),
+  ]);
+  const scored = new Map(
+    (scores!.results as { recording_id: string; quality_score: number | null; personal_score: number | null }[]).map((s) => [s.recording_id, s]),
+  );
+  const tracks = (songs!.results as { id: string; title: string; plays: number; streamable: number }[])
+    .map(({ streamable, ...t }) => {
+      const s = scored.get(t.id);
+      // Played anyway (a local file, scrobbled): its plays are real and count.
+      return { ...t, quality_score: s?.quality_score ?? null, personal_score: s?.personal_score ?? null, off_streaming: !streamable && t.plays === 0 };
+    })
+    .filter((t) => t.quality_score !== null || t.plays > 0);
+  return rankFavourites(tracks);
 }
 
 /**

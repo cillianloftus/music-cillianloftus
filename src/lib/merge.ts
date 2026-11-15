@@ -15,6 +15,25 @@ import { ReviewError } from './review';
 import { normaliseTitle } from './text';
 
 /** The redirect from a merged-away id, carrying the row as it was. */
+/**
+ * Takes one album's or song's entry out of the search index. By entity_id
+ * alone, FTS5 reads every entry (82,000): 61 million rows on 15 Nov, when
+ * merging editions merged 737 songs. Its name's words find it through the
+ * index instead, as the index stores them (apostrophes taken out, 0009),
+ * and the id picks it from those. A name with no words to search by falls
+ * back to the scan.
+ */
+export function dropFromSearch(kind: 'release_group' | 'recording', id: string, name: unknown): D1PreparedStatement {
+  const words = String(name ?? '').replace(/['’‘ʼ]/g, '');
+  if (!/[\p{L}\p{N}]/u.test(words)) {
+    return env.DB.prepare(`DELETE FROM search_index WHERE kind = ?1 AND entity_id = ?2`).bind(kind, id);
+  }
+  return env.DB.prepare(
+    `DELETE FROM search_index WHERE rowid IN (
+       SELECT rowid FROM search_index WHERE search_index MATCH ?3 AND kind = ?1 AND entity_id = ?2)`,
+  ).bind(kind, id, `name : "${words.replace(/"/g, '""')}"`);
+}
+
 function redirect(type: string, goneId: string, keepId: string, row: Record<string, unknown>): D1PreparedStatement {
   return env.DB.prepare(
     `INSERT OR REPLACE INTO entity_redirect (entity_type, old_id, new_id, snapshot_json, merged_at)
@@ -170,7 +189,7 @@ export async function mergeAlbums(keepId: string, goneId: string): Promise<void>
        WHERE status = 'open' AND entity_type = 'release_group' AND (entity_a = ?1 OR entity_b = ?1)`,
     ).bind(goneId),
     db.prepare(`DELETE FROM confirmed_distinct WHERE entity_type = 'release_group' AND (id_a = ?1 OR id_b = ?1)`).bind(goneId),
-    db.prepare(`DELETE FROM search_index WHERE kind = 'release_group' AND entity_id = ?`).bind(goneId),
+    dropFromSearch('release_group', goneId, gone.title),
     db.prepare(`DELETE FROM release_group WHERE id = ?`).bind(goneId),
   ]);
   await foldDuplicateEditions(keepId, arriving);
@@ -388,7 +407,7 @@ export async function mergeRecordings(keepId: string, goneId: string): Promise<v
        WHERE status = 'open' AND entity_type = 'recording' AND (entity_a = ?1 OR entity_b = ?1)`,
     ).bind(goneId),
     db.prepare(`DELETE FROM confirmed_distinct WHERE entity_type = 'recording' AND (id_a = ?1 OR id_b = ?1)`).bind(goneId),
-    db.prepare(`DELETE FROM search_index WHERE kind = 'recording' AND entity_id = ?`).bind(goneId),
+    dropFromSearch('recording', goneId, gone.title),
     db.prepare(`DELETE FROM recording WHERE id = ?`).bind(goneId),
   ]);
 }
