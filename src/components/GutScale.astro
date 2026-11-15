@@ -27,7 +27,7 @@ const {
 } = Astro.props;
 const scores = Array.from({ length: 11 }, (_, n) => n);
 // The scale's anchors, in one small line under the buttons.
-const anchors = [5, 7, 8, 9].map((n) => `${n} ${scoreWord(n * 10)}`).join(' · ');
+const anchors = [4, 5, 7, 9, 10].map((n) => `${n} ${scoreWord(n * 10)}`).join(' · ');
 ---
 
 <form method="post" action="/api/write/rating" data-gut-scale>

@@ -95,20 +95,22 @@ const HUE_STOPS: [number, number][] = [
 
 /**
  * What a score means, in a word or two, on the scale it is given by
- * (0 to 100; an axis's 7.5 is 75): a word for each step, as strong below
- * the middle as above it. 50 okay; above it liked, enjoyed, great,
- * amazing; below it meh, disliked, bad, awful, can't stand.
+ * (0 to 100; an axis's 7.5 is 75): a word for each step. Cillian's scale
+ * (15 Nov): 100 is perfect, the 90s amazing, the 60s liked, the 50s meh,
+ * and from the 40s down he actively dislikes it: dislike, bad, awful,
+ * hate, can't stand.
  */
 export const SCORE_BANDS: [number, string][] = [
+  [100, 'perfect'],
   [90, 'amazing'],
   [80, 'great'],
   [70, 'enjoy'],
   [60, 'like'],
-  [50, 'okay'],
-  [40, 'meh'],
-  [30, 'dislike'],
-  [20, 'bad'],
-  [10, 'awful'],
+  [50, 'meh'],
+  [40, 'dislike'],
+  [30, 'bad'],
+  [20, 'awful'],
+  [10, 'hate'],
   [0, 'can’t stand'],
 ];
 
