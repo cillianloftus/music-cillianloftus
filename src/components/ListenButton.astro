@@ -14,9 +14,14 @@ interface Props extends Omit<HTMLAttributes<'a'>, 'href'> {
   spotifyId?: string | null;
   /** What it plays in place: set only where the in-page player should take it. */
   kind?: 'track' | 'album' | undefined;
+  /**
+   * An album edition (release id) with no Spotify id yet: pressed, it is
+   * found on Spotify first (api/write/album/edition-spotify), kept, and played.
+   */
+  findEdition?: string | null | undefined;
 }
 
-const { href, spotifyId = null, kind, class: className, ...rest } = Astro.props;
+const { href, spotifyId = null, kind, findEdition = null, class: className, ...rest } = Astro.props;
 const known = spotifyId != null;
 ---
 
@@ -28,16 +33,43 @@ const known = spotifyId != null;
   data-play={kind && known ? '' : undefined}
   data-track={kind === 'track' && known ? spotifyId : undefined}
   data-album={kind === 'album' && known ? spotifyId : undefined}
+  data-find-edition={!known && findEdition ? findEdition : undefined}
   {...rest}
 >
   <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
     <circle cx="12" cy="12" r="9"></circle>
     <path d="M7.5 10c3-1 6.3-.7 9 .8M8.2 13.2c2.4-.7 5-.5 7.2.6M8.8 16.2c1.8-.4 3.6-.3 5.3.4"></path>
   </svg>
-  {known || !kind ? 'Listen' : 'Search'}
+  {known || !kind || findEdition ? 'Listen' : 'Search'}
   <span class="visually-hidden">{known || !kind ? ' on Spotify' : ' for it on Spotify'} (opens in a new tab)</span>
   <slot />
 </a>
+
+<script>
+  // An edition not yet linked to Spotify: find it, then play it as any
+  // Listen link plays (NowBar's a[data-play] handler); not found, Spotify's search.
+  document.addEventListener('click', async (event) => {
+    const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('a[data-find-edition]');
+    if (!link || link.dataset.play !== undefined || event.metaKey || event.ctrlKey || event.shiftKey) return;
+    event.preventDefault();
+    link.setAttribute('aria-busy', 'true');
+    const body = new FormData();
+    body.set('release', link.dataset.findEdition!);
+    const found = (await fetch('/api/write/album/edition-spotify', { method: 'POST', body })
+      .then((r) => r.json())
+      .catch(() => ({ spotifyId: null }))) as { spotifyId: string | null };
+    link.removeAttribute('aria-busy');
+    if (!found.spotifyId) {
+      window.open(link.href, '_blank', 'noopener');
+      return;
+    }
+    link.href = `https://open.spotify.com/album/${found.spotifyId}`;
+    link.dataset.album = found.spotifyId;
+    link.dataset.play = '';
+    delete link.dataset.findEdition;
+    link.click();
+  });
+</script>
 
 <style>
   .listen {

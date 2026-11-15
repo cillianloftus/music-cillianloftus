@@ -85,6 +85,8 @@ export interface PlanRelease {
   spotify_id?: string | null;
   /** UPC/EAN, digits only. */
   barcode?: string | null;
+  /** What tells the edition apart, from its source ("The Extended Cut"): its note, when it has none. */
+  note?: string | null;
 }
 
 export interface PlanTrack {

@@ -42,6 +42,8 @@ interface MoreRecording {
 
 interface MoreRelease {
   packaging?: string | null;
+  /** What tells this edition apart ("The Extended Cut"). */
+  disambiguation?: string;
   /** Credits on the release itself (a mastering engineer), which are every track's. */
   relations?: MoreRelation[];
   'label-info'?: {
@@ -152,6 +154,10 @@ export async function fillMoreFromMusicBrainz(
 
   if (row?.release_mbid) {
     const release = await lookups.release(row.release_mbid);
+    // What tells the edition apart, for its name on the album page, when it has no note of its own.
+    if (release.disambiguation?.trim()) {
+      statements.push(db.prepare(`UPDATE release SET note = ?1 WHERE id = ?2 AND note IS NULL`).bind(release.disambiguation.trim(), row.release_id));
+    }
     const recordings = release.media.flatMap((m) => (m.tracks ?? []).map((t) => t.recording));
     const { results: ours } = await db
       .prepare(`SELECT r.id, r.mbid FROM recording r WHERE r.mbid IN (SELECT value FROM json_each(?))`)

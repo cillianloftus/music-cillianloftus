@@ -297,9 +297,10 @@ export async function writePlan(plan: ImportPlan, options: WriteOptions = {}): P
                        SELECT 1 FROM field_override o WHERE o.entity_type = 'release' AND o.entity_id = ?1 AND o.field = 'label')
                      THEN ?3 ELSE label END,
            format  = coalesce(format, ?4),
-           barcode = coalesce(barcode, ?5)
+           barcode = coalesce(barcode, ?5),
+           note    = coalesce(note, ?6)
        WHERE id = ?1`,
-    ).bind(releaseId, plan.release.country, plan.release.label, plan.release.format, plan.release.barcode ?? null),
+    ).bind(releaseId, plan.release.country, plan.release.label, plan.release.format, plan.release.barcode ?? null, plan.release.note ?? null),
 
     // Recordings
     db.prepare(

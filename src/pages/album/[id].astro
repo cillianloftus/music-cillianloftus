@@ -68,13 +68,19 @@ const albumLinks = await env.DB.prepare('SELECT spotify_id, genius_url FROM rele
   .bind(album.id)
   .first<{ spotify_id: string | null; genius_url: string | null }>();
 const albumSpotifyId = albumLinks?.spotify_id ?? null;
+// Listen plays the edition shown: its own Spotify album when it has one,
+// the album's for the standard edition. Another edition with none yet is
+// found on Spotify when Listen is pressed (edition-spotify.ts).
+const shownSpotifyId = shown?.spotify_id ?? (isStandard ? albumSpotifyId : null);
+const findEdition = Boolean(user && shown && !isStandard && !shownSpotifyId);
 // Pages elsewhere about this album, only those that exist.
 const links = [
   albumSpotifyId ? { label: 'Spotify', href: `https://open.spotify.com/album/${albumSpotifyId}`, icon: 'spotify' } : null,
   albumLinks?.genius_url ? { label: 'Genius', href: albumLinks.genius_url, icon: 'genius' } : null,
   album.mbid ? { label: 'MusicBrainz', href: `https://musicbrainz.org/release-group/${album.mbid}`, icon: 'musicbrainz' } : null,
 ].filter((l): l is { label: string; href: string; icon: string } => l !== null);
-const listenHref = spotifyLink('album', albumSpotifyId, `${album.credits[0]?.name ?? ''} ${album.title}`);
+// Not found on Spotify: a search that names the edition ("… The Extended Cut").
+const listenHref = spotifyLink('album', shownSpotifyId, `${album.credits[0]?.name ?? ''} ${album.title}${!isStandard && shown?.note ? ` ${shown.note}` : ''}`);
 
 // The latest album rating, for the axes on the score panel.
 const albumRating = viewerId ? ((await ratingHistory(viewerId, 'release_group', album.id))[0] ?? null) : null;
@@ -121,7 +127,9 @@ const shortTitle = (e: Edition) => {
   const rest = e.title.startsWith(album.title) ? e.title.slice(album.title.length).replace(/^[\s:–—-]+|[()[\]]/g, '').trim() : e.title;
   return rest || 'Original';
 };
-const plainLabel = (e: Edition) => [e.format, yearOf(e.date), e.country].filter(Boolean).join(' · ') || e.title;
+// Editions alike in name go by what tells them apart, MusicBrainz's word for it
+// ("The Extended Cut") when there is one, else format, year and country.
+const plainLabel = (e: Edition) => e.note || [e.format, yearOf(e.date), e.country].filter(Boolean).join(' · ') || e.title;
 const editionLabel = (e: Edition) => (ownTitles ? shortTitle(e) : plainLabel(e));
 const editionHref = (e: Edition) =>
   e.id === standardId ? `${Astro.url.pathname}#tracklist-heading` : `${Astro.url.pathname}?edition=${e.id}#tracklist-heading`;
@@ -284,7 +292,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
           )
         }
 
-        <PageActions listenHref={listenHref} spotifyId={albumSpotifyId} kind="album" editHref={user ? `/edit/album/${album.id}` : null} links={links} />
+        <PageActions listenHref={listenHref} spotifyId={shownSpotifyId} kind="album" findEdition={findEdition ? shown!.id : null} editHref={user ? `/edit/album/${album.id}` : null} links={links} />
 
         <GenreChips genres={genres} />
 

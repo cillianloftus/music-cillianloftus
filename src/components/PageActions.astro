@@ -17,14 +17,16 @@ interface Props {
   editHref?: string | null;
   /** Pages elsewhere; a Spotify one is left out, as Listen is it. */
   links?: { label: string; href: string; icon: string }[];
+  /** An album edition with no Spotify id yet: Listen finds it first (ListenButton). */
+  findEdition?: string | null;
 }
 
-const { listenHref, spotifyId, kind, editHref = null, links = [] } = Astro.props;
+const { listenHref, spotifyId, kind, editHref = null, links = [], findEdition = null } = Astro.props;
 const elsewhere = links.filter((l) => l.icon !== 'spotify');
 ---
 
 <p class="actions">
-  <ListenButton href={listenHref} spotifyId={spotifyId} kind={kind} />
+  <ListenButton href={listenHref} spotifyId={spotifyId} kind={kind} findEdition={findEdition} />
   {
     editHref && (
       <a class="button button--quiet" href={editHref}>

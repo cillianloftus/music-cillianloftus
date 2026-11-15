@@ -220,12 +220,14 @@ export interface Edition {
   track_count: number;
   /** "Pulled from streaming in 2024": anything about it no field holds. */
   note: string | null;
+  /** Its own album on Spotify, when found (an Extended Cut is one apart from the album). */
+  spotify_id: string | null;
 }
 
 /** Ordered the same way v_release_group_canonical chooses, so the standard edition comes first. */
 export async function editions(releaseGroupId: string): Promise<Edition[]> {
   const { results } = await env.DB.prepare(
-    `SELECT r.id, r.title, r.date, r.date_precision, r.country, r.label, r.format, r.mbid, r.art_key, r.note,
+    `SELECT r.id, r.title, r.date, r.date_precision, r.country, r.label, r.format, r.mbid, r.art_key, r.note, r.spotify_id,
             (SELECT count(*) FROM track t WHERE t.release_id = r.id) AS track_count
      FROM release r
      WHERE r.release_group_id = ?

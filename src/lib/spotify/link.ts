@@ -135,3 +135,60 @@ export async function linkAlbumsToSpotify(spotify: SpotifyClient, { limit = 20, 
   }
   return report;
 }
+
+/**
+ * One edition of an album, found on Spotify by itself: "Listen" on an
+ * edition other than the standard one played the standard album, and an
+ * edition with no Spotify id could not be played at all (Vanisher, Horizon
+ * Scraper's Extended Cut, 15 Nov). Spotify names such an edition after the
+ * album with its words added ("… (The Extended Cut)"), so a hit is the same
+ * album by the same artist whose name holds the edition's MusicBrainz note
+ * when it has one, else whose track count is the edition's. Never an id
+ * another edition or album already holds. Returns the id, kept, or null.
+ */
+export async function findEditionOnSpotify(spotify: SpotifyClient, releaseId: string): Promise<string | null> {
+  const edition = await env.DB.prepare(
+    `SELECT r.id, r.spotify_id, r.note, r.release_group_id, g.title,
+            (SELECT a.name FROM artist_credit ac JOIN artist a ON a.id = ac.artist_id
+             WHERE ac.entity_type = 'release_group' AND ac.entity_id = g.id AND ac.role = 'primary' ORDER BY ac.position LIMIT 1) AS artist,
+            (SELECT count(*) FROM track t WHERE t.release_id = r.id) AS track_count
+     FROM release r JOIN release_group g ON g.id = r.release_group_id WHERE r.id = ?`,
+  )
+    .bind(releaseId)
+    .first<{ id: string; spotify_id: string | null; note: string | null; release_group_id: string; title: string; artist: string | null; track_count: number }>();
+  if (!edition) return null;
+  if (edition.spotify_id) return edition.spotify_id;
+  if (!edition.artist) return null;
+
+  const { results: taken } = await env.DB.prepare(
+    `SELECT spotify_id AS id FROM release WHERE release_group_id = ?1 AND spotify_id IS NOT NULL
+     UNION SELECT spotify_id FROM release_group WHERE id = ?1 AND spotify_id IS NOT NULL`,
+  )
+    .bind(edition.release_group_id)
+    .all<{ id: string }>();
+  const held = new Set(taken.map((t) => t.id));
+  const queries = [edition.note ? `${edition.title} ${edition.note}` : null, edition.title].filter((q): q is string => Boolean(q));
+  const artist = normaliseName(edition.artist);
+  const album = normaliseTitle(edition.title);
+  const note = edition.note ? normaliseTitle(edition.note).replace(/^the\s+/, '') : null;
+  for (const q of queries) {
+    const params = new URLSearchParams({ q: `album:${term(q)} artist:${term(edition.artist)}`, type: 'album', limit: '10', market: MARKET });
+    const hits = (await spotify.get<{ albums: { items: SpotifyAlbumHit[] } }>(`/search?${params}`)).albums.items.filter(
+      (h) => !held.has(h.id) && h.artists.some((a) => normaliseName(a.name) === artist) && normaliseTitle(h.name).startsWith(album),
+    );
+    const pick =
+      (note ? hits.find((h) => normaliseTitle(h.name).includes(note)) : undefined) ??
+      hits.find((h) => h.total_tracks === edition.track_count);
+    if (!pick) continue;
+    const set = await env.DB.prepare(
+      `UPDATE release SET spotify_id = ?1 WHERE id = ?2 AND spotify_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM release o WHERE o.spotify_id = ?1)`,
+    )
+      .bind(pick.id, edition.id)
+      .run();
+    if (!set.meta.changes) return null;
+    await linkTracks(spotify, { id: edition.release_group_id, title: edition.title, first_release_date: null, artist: edition.artist, release_id: edition.id, track_count: edition.track_count }, pick.id).catch(() => 0);
+    return pick.id;
+  }
+  return null;
+}

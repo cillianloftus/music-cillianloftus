@@ -92,6 +92,8 @@ export interface MbRelease {
   'release-group': MbReleaseGroup;
   'label-info'?: { label: { name: string } | null }[];
   barcode?: string | null;
+  /** What tells this edition apart ("The Extended Cut"). */
+  disambiguation?: string;
   media: MbMedium[];
   relations?: MbRelation[];
 }

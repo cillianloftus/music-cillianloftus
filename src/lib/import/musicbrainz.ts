@@ -422,6 +422,7 @@ export function buildPlan(release: MbRelease, group: MbReleaseGroup): ImportPlan
       label,
       format: formatSummary(release.media),
       barcode: release.barcode && /^\d{8,14}$/.test(release.barcode) ? release.barcode : null,
+      note: release.disambiguation?.trim() || null,
     },
     tracks,
     releaseGroupGenres: genresFrom(group),
