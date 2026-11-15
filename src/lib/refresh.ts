@@ -7,9 +7,10 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { enqueue } from './jobs/queue';
+import { enqueue, PRIORITY, type Priority } from './jobs/queue';
 
-export async function refreshAlbum(albumId: string): Promise<string[]> {
+/** Asked for by hand (an album, an artist), it goes ahead of bulk imports; the whole library is bulk itself. */
+export async function refreshAlbum(albumId: string, priority: Priority = PRIORITY.asked): Promise<string[]> {
   const album = await env.DB.prepare(`SELECT title, spotify_id FROM release_group WHERE id = ?`).bind(albumId).first<{ title: string; spotify_id: string | null }>();
   if (!album) return [];
   const { results } = await env.DB.prepare(`SELECT mbid FROM release WHERE release_group_id = ? AND mbid IS NOT NULL`)
@@ -28,10 +29,10 @@ export async function refreshAlbum(albumId: string): Promise<string[]> {
 
   const jobs: string[] = [];
   for (const { mbid } of results) {
-    jobs.push(await enqueue('import_release', { source: 'musicbrainz', target: { entity: 'release', mbid }, label: album.title }));
+    jobs.push(await enqueue('import_release', { source: 'musicbrainz', target: { entity: 'release', mbid }, label: album.title }, priority));
   }
   if (album.spotify_id) {
-    jobs.push(await enqueue('import_release', { source: 'spotify', target: { kind: 'album', id: album.spotify_id }, label: album.title }));
+    jobs.push(await enqueue('import_release', { source: 'spotify', target: { kind: 'album', id: album.spotify_id }, label: album.title }, priority));
   }
   return jobs;
 }
@@ -66,7 +67,7 @@ export async function refreshArtist(artistId: string): Promise<{ title: string; 
 export async function refreshEverything(): Promise<number> {
   const { results } = await env.DB.prepare(`SELECT id FROM release_group ORDER BY created_at`).all<{ id: string }>();
   let queued = 0;
-  for (const { id } of results) queued += (await refreshAlbum(id)).length;
+  for (const { id } of results) queued += (await refreshAlbum(id, PRIORITY.bulk)).length;
   await env.DB.batch([
     env.DB.prepare(`UPDATE artist SET enriched_at = NULL`),
     env.DB.prepare(`DELETE FROM lookup_log`),

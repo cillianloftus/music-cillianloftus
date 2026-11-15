@@ -36,7 +36,7 @@
 <script>
   type Item = { id: string; label: string; status: string; error?: string | null; albumId?: string | null; albumTitle?: string | null; doneAt?: number };
   /** The whole queue, from the server (queueProgress in src/lib/jobs/queue.ts). */
-  type Queue = { counts: { queued: number; running: number; done: number; failed: number }; perHour: number | null; current: string | null };
+  type Queue = { counts: { queued: number; running: number; done: number; failed: number }; perHour: number | null; current: string | null; first?: number };
   /** Where the queue stood when this device first saw the current batch, for the bar. */
   type Batch = { done: number; at: number };
   const KEY = 'job-tray';
@@ -485,6 +485,8 @@
       const pace = !this.paused && perHour ? `${number.format(Math.round(perHour))} an hour, ${timeLeft(toGo / perHour)} left` : null;
       this.querySelector('[data-summary-line]')!.textContent = [
         counts.running ? `${counts.running} importing` : null,
+        // Refreshes and single imports, ahead of the bulk (0071).
+        this.queue!.first ? `${number.format(this.queue!.first)} going first` : null,
         pace ?? (this.paused ? 'Resume on the Jobs page' : 'Working out the pace'),
         failed ? `${failed} failed` : null,
       ]

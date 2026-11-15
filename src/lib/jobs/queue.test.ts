@@ -95,3 +95,23 @@ describe('pace', () => {
     expect(pace([20, 22, 24].map(at), now)).toBeNull();
   });
 });
+
+describe('the priority lane (0071)', () => {
+  it('runs what was asked for ahead of a long bulk queue, oldest first within each', async () => {
+    const bulk = await enqueueMany('import_release', [{ label: 'Bulk 1' }, { label: 'Bulk 2' }] as never);
+    const refreshA = await enqueue('import_release', { label: 'Refresh A' } as never);
+    const refreshB = await enqueue('import_release', { label: 'Refresh B' } as never);
+    const order: string[] = [];
+    for (let job = await claimNext(); job; job = await claimNext()) {
+      order.push(job.id);
+      await complete(job.id, {});
+    }
+    expect(order).toEqual([refreshA, refreshB, ...bulk]);
+  });
+
+  it('counts what is going first', async () => {
+    await enqueueMany('import_release', [{ label: 'Bulk' }] as never);
+    await enqueue('import_release', { label: 'Refresh' } as never);
+    expect((await queueProgress()).first).toBe(1);
+  });
+});

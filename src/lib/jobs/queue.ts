@@ -61,24 +61,38 @@ const MAX_ATTEMPTS = 3;
 
 const NOW = `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
 
-export async function enqueue<K extends keyof JobPayloads>(kind: K, payload: JobPayloads[K]): Promise<string> {
+/**
+ * Which lane a job waits in (0071): what Cillian asked for directly (a
+ * refresh, one import, a push) goes ahead of bulk work (whole
+ * discographies, the whole library refreshed), however long that is.
+ */
+export const PRIORITY = { asked: 1, bulk: 0 } as const;
+export type Priority = (typeof PRIORITY)[keyof typeof PRIORITY];
+
+/** One job, asked for directly unless said otherwise. */
+export async function enqueue<K extends keyof JobPayloads>(kind: K, payload: JobPayloads[K], priority: Priority = PRIORITY.asked): Promise<string> {
   const id = crypto.randomUUID();
-  await env.DB.prepare('INSERT INTO job (id, kind, payload_json) VALUES (?, ?, ?)')
-    .bind(id, kind, JSON.stringify(payload))
+  await env.DB.prepare('INSERT INTO job (id, kind, payload_json, priority) VALUES (?, ?, ?, ?)')
+    .bind(id, kind, JSON.stringify(payload), priority)
     .run();
   return id;
 }
 
 /**
  * Queues many jobs of one kind in a few round trips (a whole discography
- * is hundreds). Jobs inserted in the same instant still run in the order
- * given: the claim breaks created_at ties by rowid.
+ * is hundreds), as bulk work unless said otherwise. Jobs inserted in the
+ * same instant still run in the order given: the claim breaks created_at
+ * ties by rowid.
  */
-export async function enqueueMany<K extends keyof JobPayloads>(kind: K, payloads: JobPayloads[K][]): Promise<string[]> {
+export async function enqueueMany<K extends keyof JobPayloads>(
+  kind: K,
+  payloads: JobPayloads[K][],
+  priority: Priority = PRIORITY.bulk,
+): Promise<string[]> {
   const ids = payloads.map(() => crypto.randomUUID());
-  const statement = env.DB.prepare('INSERT INTO job (id, kind, payload_json) VALUES (?, ?, ?)');
+  const statement = env.DB.prepare('INSERT INTO job (id, kind, payload_json, priority) VALUES (?, ?, ?, ?)');
   for (let i = 0; i < ids.length; i += 100) {
-    await env.DB.batch(ids.slice(i, i + 100).map((id, n) => statement.bind(id, kind, JSON.stringify(payloads[i + n]))));
+    await env.DB.batch(ids.slice(i, i + 100).map((id, n) => statement.bind(id, kind, JSON.stringify(payloads[i + n]), priority)));
   }
   return ids;
 }
@@ -102,12 +116,13 @@ export async function claimNext(): Promise<JobRow | null> {
     `UPDATE job
      SET status = 'running', started_at = ${NOW}, error = NULL, attempts = attempts + 1
      WHERE id = (
-       -- The oldest queued job: one seek of job_queue (status, created_at).
+       -- What was asked for first, then the oldest: one seek of
+       -- job_queue (status, priority DESC, created_at), 0071.
        SELECT id FROM job
        WHERE status = 'queued'
          -- Nothing starts while the queue is paused; what is running finishes.
          AND NOT EXISTS (SELECT 1 FROM app_setting WHERE key = 'jobs_paused' AND value = '1')
-       ORDER BY created_at, rowid
+       ORDER BY priority DESC, created_at, rowid
        LIMIT 1
      )
      RETURNING *`,
@@ -222,6 +237,8 @@ export interface QueueProgress {
   perHour: number | null;
   /** What is being worked on now, by its label. */
   current: string | null;
+  /** Waiting in the priority lane (asked for directly), ahead of the bulk. */
+  first: number;
 }
 
 /** How many finished jobs the pace is taken over. */
@@ -233,14 +250,16 @@ const PACE_SAMPLE = 20;
  * finished_at index, the running job by the status index).
  */
 export async function queueProgress(): Promise<QueueProgress> {
-  const [counts, recent, running] = await Promise.all([
+  const [counts, recent, running, first] = await Promise.all([
     jobCounts(),
     env.DB.prepare(`SELECT finished_at FROM job WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT ?`)
       .bind(PACE_SAMPLE)
       .all<{ finished_at: string }>(),
     env.DB.prepare(`SELECT payload_json FROM job WHERE status = 'running' ORDER BY created_at LIMIT 1`).first<{ payload_json: string }>(),
+    // Only the priority lane's rows, by job_queue.
+    env.DB.prepare(`SELECT count(*) AS n FROM job WHERE status = 'queued' AND priority > 0`).first<number>('n'),
   ]);
-  return { counts, perHour: pace(recent.results.map((r) => r.finished_at), Date.now()), current: labelOf(running?.payload_json) };
+  return { counts, perHour: pace(recent.results.map((r) => r.finished_at), Date.now()), current: labelOf(running?.payload_json), first: first ?? 0 };
 }
 
 /**
