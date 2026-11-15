@@ -310,35 +310,6 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
 
         <GenreChips genres={genres} />
 
-        {
-          extras.lists.length > 0 && (
-            <div class="lists">
-              <h2 class="lists-heading">On {extras.lists.length === 1 ? 'a list' : `${extras.lists.length} lists`}</h2>
-              <ul role="list">
-                {extras.lists.slice(0, LISTS_SHOWN).map((l) => (
-                  <li>
-                    <a href={`/list/${l.series_id}`}>{l.name}</a>
-                    {placeIn(l) && <span class="muted"> · {placeIn(l)}</span>}
-                  </li>
-                ))}
-              </ul>
-              {extras.lists.length > LISTS_SHOWN && (
-                <details>
-                  <summary>All {extras.lists.length}</summary>
-                  <ul role="list">
-                    {extras.lists.slice(LISTS_SHOWN).map((l) => (
-                      <li>
-                        <a href={`/list/${l.series_id}`}>{l.name}</a>
-                        {placeIn(l) && <span class="muted"> · {placeIn(l)}</span>}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          )
-        }
-
       </Fragment>
     </EntityHero>
 
@@ -576,6 +547,36 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     </section>
 
     </div>
+    {/* Lists and awards it is on: after the music and its credits, not in the header (15 Nov). */}
+    {
+      extras.lists.length > 0 && (
+        <section class="lists" aria-labelledby="lists-heading">
+          <h2 id="lists-heading">
+            On lists <span class="count tabular">{extras.lists.length}</span>
+          </h2>
+          <ul role="list">
+            {extras.lists.slice(0, LISTS_SHOWN).map((l) => (
+              <li>
+                <a href={`/list/${l.series_id}`}>{l.name}</a>
+                {placeIn(l) && <span class="muted"> · {placeIn(l)}</span>}
+              </li>
+            ))}
+          </ul>
+          {extras.lists.length > LISTS_SHOWN && (
+            <Disclosure heading={`Show ${extras.lists.length - LISTS_SHOWN} more`} quiet>
+              <ul role="list">
+                {extras.lists.slice(LISTS_SHOWN).map((l) => (
+                  <li>
+                    <a href={`/list/${l.series_id}`}>{l.name}</a>
+                    {placeIn(l) && <span class="muted"> · {placeIn(l)}</span>}
+                  </li>
+                ))}
+              </ul>
+            </Disclosure>
+          )}
+        </section>
+      )
+    }
     {
       allCreditsShown && (
         <Disclosure class="all-credits" id="all-credits" heading="All credits" note={`${people.length} credits · ${people_count} people`}>
@@ -1103,35 +1104,26 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
     font-size: 0.9em;
   }
 
-  /* Where it stands: a few quiet lines, each marked like a ranked score. */
-  /* Lists and awards it is on: a few quiet lines under the genres. */
+  /* Lists and awards it is on: a short list, the rest a tap away. */
   .lists {
     display: grid;
-    gap: var(--space-1);
-    font-size: var(--step--1);
+    gap: var(--space-3);
   }
 
-  .lists-heading {
+  .lists h2 {
     margin: 0;
-    color: var(--text-subtle);
-    font-size: var(--step--1);
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
   }
 
   .lists ul {
     display: grid;
-    gap: 2px;
+    gap: var(--space-1);
     margin: 0;
     padding: 0;
     list-style: none;
   }
 
-  .lists summary {
-    color: var(--text-muted);
+  .lists a {
     font-weight: 600;
-    cursor: pointer;
   }
 
   .community {
