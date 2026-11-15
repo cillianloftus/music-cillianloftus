@@ -3,7 +3,8 @@
  * A section that opens on request: its heading (and a quiet note beside
  * it) with a chevron at the far end that turns as it opens. "Rated 3
  * times" on track pages and "All credits" on album pages are both this.
- * Attributes such as id pass through to the details element.
+ * Attributes such as id pass through to the details element. Quiet, it is
+ * the rest of a list ("Show 6 more"): a small line, not a heading.
  */
 interface Props {
   heading: string;
@@ -14,14 +15,16 @@ interface Props {
   id?: string | undefined;
   /** A hairline above, to set it apart from what comes before. */
   ruled?: boolean;
+  /** The rest of a list rather than a section: a small muted line, no heading, no rule. */
+  quiet?: boolean;
 }
 
-const { heading, note, headingId, class: className, id, ruled = true } = Astro.props;
+const { heading, note, headingId, class: className, id, quiet = false, ruled = !quiet } = Astro.props;
 ---
 
-<details class:list={['disclosure', className, { ruled }]} id={id}>
+<details class:list={['disclosure', className, { ruled, quiet }]} id={id}>
   <summary>
-    <h2 id={headingId}>{heading}</h2>
+    {quiet ? <span class="quiet-label">{heading}</span> : <h2 id={headingId}>{heading}</h2>}
     {note && <span class="note">{note}</span>}
   </summary>
   <div class="body">
@@ -82,5 +85,31 @@ const { heading, note, headingId, class: className, id, ruled = true } = Astro.p
 
   .body {
     margin-top: var(--space-4);
+  }
+
+  .quiet > summary {
+    width: fit-content;
+    min-height: var(--target);
+    align-items: center;
+    gap: var(--space-3);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+  }
+
+  .quiet > summary:hover {
+    color: var(--text);
+  }
+
+  .quiet > summary::after {
+    margin-left: 0;
+  }
+
+  .quiet[open] > summary {
+    display: none;
+  }
+
+  .quiet > .body {
+    margin-top: 0;
   }
 </style>
