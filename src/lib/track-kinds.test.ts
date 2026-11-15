@@ -48,7 +48,7 @@ describe('track kinds', () => {
     insert(db, 'rating', [
       { id: 'r-sk', user_id: 'u-owner', entity_type: 'recording', entity_id: 'sk', depth: 'gut', gut_score: 1, rated_at: '2026-03-01T00:00:00.000Z' },
     ]);
-    db.exec(`INSERT INTO weights (id, user_id, version, payload_json, active) VALUES ('w1', 'u-owner', 1, '{"release":{"trim_lowest":0}}', 1)`);
+    db.exec(`INSERT INTO weights (id, user_id, version, payload_json, active) VALUES ('w1', 'u-owner', 1, '{"release":{"trim_lowest":0,"harshness":0}}', 1)`);
     const album = () => db.prepare(`SELECT quality_score q, track_count n FROM v_release_score WHERE release_group_id = 'rg-b' AND user_id = 'u-owner'`).get() as { q: number; n: number };
     // b1 80, b2 60, skit 10: (80 + 60 + 10) / 3 = 50.
     expect(album().q).toBeCloseTo(50, 9);

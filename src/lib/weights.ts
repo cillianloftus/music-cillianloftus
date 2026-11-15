@@ -20,6 +20,9 @@ import { genresOfRecordings } from './genres';
 /** How far from the rest makes a song an album's odd one out: 10–40 points in fives. */
 export const OUTLIER_GAP_RANGE = { min: 10, max: 40, step: 5 } as const;
 
+/** How much more a weak song counts in its album: 0 (no more) to 4, in halves. */
+export const HARSHNESS_RANGE = { min: 0, max: 4, step: 0.5 } as const;
+
 /** Songs rated both ways before an artist's, genre's or gut level's own gap counts half: 1–30. */
 export const EVIDENCE_RANGE = { min: 1, max: 30, step: 1 } as const;
 
@@ -45,6 +48,8 @@ export const weightsForm = z
     trim_lowest: z.preprocess((value) => value === 'on' || value === 'true' || value === true, z.boolean()),
     // Points from an album's middle song that make an odd one out (0066).
     outlier_gap: z.coerce.number().int().min(OUTLIER_GAP_RANGE.min).max(OUTLIER_GAP_RANGE.max).multipleOf(OUTLIER_GAP_RANGE.step).default(DEFAULT_WEIGHTS.release.outlier_gap),
+    // How much more weak songs count in their album (0073).
+    harshness: z.coerce.number().min(HARSHNESS_RANGE.min).max(HARSHNESS_RANGE.max).multipleOf(HARSHNESS_RANGE.step).default(DEFAULT_WEIGHTS.release.harshness),
     // Songs rated both ways before a group's own gut gap counts half (0067).
     evidence: z.coerce.number().int().min(EVIDENCE_RANGE.min).max(EVIDENCE_RANGE.max).default(DEFAULT_WEIGHTS.calibration.evidence),
   })
@@ -60,6 +65,7 @@ export const weightsForm = z
         outlier_gap: form.outlier_gap,
         interlude: form.interlude_share / 100,
         length: form.length_share / 100,
+        harshness: form.harshness,
       },
       calibration: { evidence: form.evidence },
     };
@@ -99,6 +105,7 @@ export function withDefaults(payload: unknown): Weights {
       outlier_gap: p.release?.outlier_gap ?? DEFAULT_WEIGHTS.release.outlier_gap,
       interlude: p.release?.interlude ?? DEFAULT_WEIGHTS.release.interlude,
       length: p.release?.length ?? DEFAULT_WEIGHTS.release.length,
+      harshness: p.release?.harshness ?? DEFAULT_WEIGHTS.release.harshness,
     },
     calibration: { evidence: p.calibration?.evidence ?? DEFAULT_WEIGHTS.calibration.evidence },
   };

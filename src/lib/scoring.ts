@@ -26,8 +26,9 @@ export interface Weights {
    * length: how much a track's length sets its weight in its album (0–1).
    * trim_lowest: whether an album's odd songs out are left out (the name is from when it was the lowest track).
    * outlier_gap: how many points from the album's middle song make a song an odd one out.
+   * harshness: how much more a weak song (under WEAK_BELOW) counts in its album, per 30 points under (0073).
    */
-  release: { tracks: number; album_axes: number; trim_lowest: boolean; outlier_gap: number; interlude: number; length: number };
+  release: { tracks: number; album_axes: number; trim_lowest: boolean; outlier_gap: number; interlude: number; length: number; harshness: number };
   /**
    * evidence: how many songs rated both ways a gut level, an artist or a
    * genre needs before its own gap counts half (src/lib/scoring.ts, calibrate).
@@ -39,7 +40,7 @@ export interface Weights {
 export const DEFAULT_WEIGHTS: Weights = {
   craft: { arrangement: 0.5, sound: 0.5, songwriting: 1, lyrics: 1, performance: 1, originality: 1 },
   album: { sequencing: 1, cohesion: 1, ambition: 1 },
-  release: { tracks: 0.7, album_axes: 0.3, trim_lowest: true, outlier_gap: 20, interlude: 0.5, length: 0 },
+  release: { tracks: 0.7, album_axes: 0.3, trim_lowest: true, outlier_gap: 20, interlude: 0.5, length: 0, harshness: 2 },
   calibration: { evidence: 5 },
 };
 
@@ -84,6 +85,19 @@ export interface ScoreInputs {
  */
 export const TRIM_MAX_SHARE = 0.15;
 export const OUTLIER_GAP = 20;
+
+/**
+ * Below this a song is weak, and counts for more in its album the further
+ * below it is: 1 + harshness × (70 − score) / 30, so at the default 2 a 40
+ * counts three times, a 10 five times. A bad album's few decent songs
+ * carried it (Confessions of a Dangerous Mind, 7 of 16 songs under 60, at
+ * 55); a good album has no weak songs, so it does not move. 0073.
+ */
+export const WEAK_BELOW = 70;
+
+export function weakWeight(q: number, harshness: number): number {
+  return 1 + (harshness * Math.max(0, WEAK_BELOW - q)) / 30;
+}
 
 /** Whether songs this long (lengths, or undefined where unknown) are a small enough part of the album to leave out. Pure. */
 export function smallPart(lengths: (number | undefined)[], runtime: { ms: number | null; tracks: number } | undefined): boolean {
@@ -338,8 +352,9 @@ export function computeScores(inputs: ScoreInputs, w: Weights): Scores {
       for (const r of kept) {
         const kind = kinds[r.id] === 'interlude' ? w.release.interlude : 1;
         const byLength = r.length === undefined || mean === null ? 1 : 1 - w.release.length + (w.release.length * r.length) / mean;
-        total += kind * byLength * r.q;
-        weight += kind * byLength;
+        const weak = weakWeight(r.q, w.release.harshness);
+        total += kind * byLength * weak * r.q;
+        weight += kind * byLength * weak;
       }
       tracks = weight > 0 ? total / weight : null;
     }

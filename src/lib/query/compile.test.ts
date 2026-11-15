@@ -153,8 +153,9 @@ describe('grouping', () => {
 
 describe('album scores', () => {
   it('trims the lowest track and ignores deluxe bonus tracks', () => {
-    // A: 90, 70, 50 -> drop 50 -> 80 (a4 is deluxe-only). B: 80, 60 -> 80. C: 95.
-    expect(run({ entity: 'release_group' })).toEqual(['rg-c', 'rg-a', 'rg-b']);
+    // A: 90, 70, 50 (a4 is deluxe-only), the 50 a third of the album so kept,
+    // and weak: counted 7/3 times (0073), 63.8. B: 80, 60, the 60 counted 5/3: 67.5. C: 95.
+    expect(run({ entity: 'release_group' })).toEqual(['rg-c', 'rg-b', 'rg-a']);
   });
 
   it('filters on coverage', () => {

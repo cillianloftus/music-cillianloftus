@@ -15,7 +15,7 @@ import CreditLine from '../../components/CreditLine.astro';
 import { releaseGroupsByIds, type CreditPart } from '../../lib/catalogue';
 import { hydrateTracks } from '../../lib/query/run';
 import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, computeScores, rank, type Weights } from '../../lib/scoring';
-import { AXIS_WEIGHT, EVIDENCE_RANGE, OUTLIER_GAP_RANGE, scoreInputs, weightsForm, weightsVersions } from '../../lib/weights';
+import { AXIS_WEIGHT, EVIDENCE_RANGE, HARSHNESS_RANGE, OUTLIER_GAP_RANGE, scoreInputs, weightsForm, weightsVersions } from '../../lib/weights';
 
 const evidenceLabel = (n: number) => `${n} ${n === 1 ? 'song' : 'songs'}`;
 
@@ -126,6 +126,10 @@ const clientData = {
   active,
   visible: VISIBLE,
 };
+// How the harshness reads: what a song of 40 counts as (scoring.ts, weakWeight).
+function harshLabel(n: number): string {
+  return n === 0 ? 'not at all' : `a 40 counts ×${1 + n}`;
+}
 ---
 
 <Base title="Weights">
@@ -203,6 +207,23 @@ const clientData = {
             />
             <span class="hint" id="gap-hint">
               Points above or below the album’s middle song. Such songs are left out only while they are under 15% of the songs rated.
+            </span>
+          </div>
+          <div class="slider slider--stacked">
+            <label for="harshness">How hard weak songs pull an album down</label>
+            <output for="harshness" id="harshness-value" class="tabular">{harshLabel(preview.release.harshness)}</output>
+            <input
+              type="range"
+              id="harshness"
+              name="harshness"
+              min={HARSHNESS_RANGE.min}
+              max={HARSHNESS_RANGE.max}
+              step={HARSHNESS_RANGE.step}
+              value={preview.release.harshness}
+              aria-describedby="harsh-hint"
+            />
+            <span class="hint" id="harsh-hint">
+              A song under 70 counts for more the further under it is, so a bad album’s few decent songs cannot carry it. Albums without weak songs do not move.
             </span>
           </div>
         </fieldset>
@@ -376,6 +397,8 @@ const clientData = {
 
   let list = field('list').value as 'albums' | 'tracks';
   let by = field('by').value as 'quality' | 'personal';
+  // As the page's own (frontmatter): what a song of 40 counts as.
+  const harshLabel = (n: number) => (n === 0 ? 'not at all' : `a 40 counts ×${1 + n}`);
 
   function read(): Weights | null {
     const number = (name: string) => Number(field(name).value);
@@ -394,6 +417,7 @@ const clientData = {
         outlier_gap: number('outlier_gap'),
         interlude: number('interlude_share') / 100,
         length: number('length_share') / 100,
+        harshness: number('harshness'),
       },
       calibration: { evidence: number('evidence') },
     };
@@ -417,6 +441,8 @@ const clientData = {
               ? n === 100 ? 'as a song' : n === 0 ? 'not at all' : `${n}% of a song`
               : input.name === 'outlier_gap'
                 ? `${n} points`
+                : input.name === 'harshness'
+                  ? harshLabel(n)
                 : input.name === 'evidence'
                   ? `${n} ${n === 1 ? 'song' : 'songs'}`
                   : `×${input.value}`;

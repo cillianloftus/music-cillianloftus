@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, calibrate, computeScores, convert, levelGap, outliers, rank, smallPart, type Weights } from './scoring';
+import { ALBUM_KEYS, CRAFT_KEYS, DEFAULT_WEIGHTS, calibrate, computeScores, convert, levelGap, outliers, rank, smallPart, type Weights, weakWeight } from './scoring';
 import { activateVersion, activeWeights, saveWeights, scoreInputs, weightsForm, weightsVersions } from './weights';
 import { rebuildGutConversions } from './gut-calibration';
 
@@ -78,6 +78,7 @@ function randomWeights(random: () => number): Weights {
       album_axes: 1 - tracks,
       trim_lowest: random() < 0.5,
       outlier_gap: 10 + 5 * Math.floor(random() * 7),
+      harshness: Math.floor(random() * 9) / 2,
       interlude: Math.round(random() * 20) / 20,
       length: random() < 0.3 ? 0 : Math.round(random() * 20) / 20,
     },
@@ -233,14 +234,16 @@ describe('ranking', () => {
 
   it('leaves out the lowest track only when it is a small part of the album', async () => {
     // Album A's canonical tracks: a1 90, a2 70, a3 50 (the deluxe-only a4 is excluded).
-    const untrimmed = { ...DEFAULT_WEIGHTS, release: { ...DEFAULT_WEIGHTS.release, trim_lowest: false } };
+    // Plain means, weak songs not counted harder, to see the leaving out alone.
+    const plain = { ...DEFAULT_WEIGHTS, release: { ...DEFAULT_WEIGHTS.release, harshness: 0 } };
+    const untrimmed = { ...plain, release: { ...plain.release, trim_lowest: false } };
     // Lengths unknown: each is a third of its three tracks, so none is left out.
     let inputs = await scoreInputs('u-owner');
-    expect(computeScores(inputs, DEFAULT_WEIGHTS).albums.get('rg-a')!.quality).toBeCloseTo(70);
+    expect(computeScores(inputs, plain).albums.get('rg-a')!.quality).toBeCloseTo(70);
     // A short a3 on a long album: 100 s of 1,300 s, under 15%, so left out.
     db.exec(`UPDATE recording SET length_ms = CASE id WHEN 'a3' THEN 100000 ELSE 600000 END WHERE id IN ('a1', 'a2', 'a3')`);
     inputs = await scoreInputs('u-owner');
-    const trimmed = computeScores(inputs, DEFAULT_WEIGHTS).albums.get('rg-a')!;
+    const trimmed = computeScores(inputs, plain).albums.get('rg-a')!;
     expect(trimmed.quality).toBeCloseTo(80);
     expect(trimmed.ratedTracks).toBe(3);
     expect(computeScores(inputs, untrimmed).albums.get('rg-a')!.quality).toBeCloseTo(70);
@@ -248,8 +251,23 @@ describe('ranking', () => {
     expect((db.prepare(`SELECT quality_score FROM v_release_score WHERE release_group_id = 'rg-a' AND user_id = 'u-owner'`).get() as { quality_score: number }).quality_score).toBeCloseTo(80);
     // Long enough to matter (a third of the album): kept.
     db.exec(`UPDATE recording SET length_ms = 600000 WHERE id = 'a3'`);
-    expect(computeScores(await scoreInputs('u-owner'), DEFAULT_WEIGHTS).albums.get('rg-a')!.quality).toBeCloseTo(70);
-    expect((db.prepare(`SELECT quality_score FROM v_release_score WHERE release_group_id = 'rg-a' AND user_id = 'u-owner'`).get() as { quality_score: number }).quality_score).toBeCloseTo(70);
+    expect(computeScores(await scoreInputs('u-owner'), plain).albums.get('rg-a')!.quality).toBeCloseTo(70);
+    // The view, at the default harshness, as the twin works it out.
+    expect((db.prepare(`SELECT quality_score FROM v_release_score WHERE release_group_id = 'rg-a' AND user_id = 'u-owner'`).get() as { quality_score: number }).quality_score).toBeCloseTo(
+      computeScores(await scoreInputs('u-owner'), DEFAULT_WEIGHTS).albums.get('rg-a')!.quality!,
+    );
+  });
+
+  it('pulls an album down harder for its weak songs, and leaves one without any alone', async () => {
+    // Album A: 90, 70, 50. The 50 is 20 under 70: at harshness 2 it counts 1 + 2 × 20 / 30 times.
+    const inputs = await scoreInputs('u-owner');
+    const at = (harshness: number) =>
+      computeScores(inputs, { ...DEFAULT_WEIGHTS, release: { ...DEFAULT_WEIGHTS.release, harshness } }).albums.get('rg-a')!.quality!;
+    expect(at(0)).toBeCloseTo(70);
+    expect(at(2)).toBeCloseTo((90 + 70 + (7 / 3) * 50) / (2 + 7 / 3));
+    expect(at(4)).toBeLessThan(at(2));
+    expect(weakWeight(85, 4)).toBe(1);
+    expect(weakWeight(40, 2)).toBe(3);
   });
 
   it('counts a track of unknown length as one of the album’s tracks', () => {
@@ -312,7 +330,7 @@ describe('weights versions', () => {
   it('parses the form, deriving the album share from the tracks share', () => {
     const parsed = weightsForm.parse(form({ lyrics: '2.5', tracks_share: '60', trim_lowest: '' }));
     expect(parsed.craft.lyrics).toBe(2.5);
-    expect(parsed.release).toEqual({ tracks: 0.6, album_axes: 0.4, trim_lowest: false, outlier_gap: 20, interlude: 0.5, length: 0 });
+    expect(parsed.release).toEqual({ tracks: 0.6, album_axes: 0.4, trim_lowest: false, outlier_gap: 20, interlude: 0.5, length: 0, harshness: 2 });
     expect(weightsForm.parse(form({ length_share: '40', interlude_share: '25' })).release).toMatchObject({ length: 0.4, interlude: 0.25 });
   });
 
