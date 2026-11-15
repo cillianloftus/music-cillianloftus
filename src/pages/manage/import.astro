@@ -161,14 +161,19 @@ const previous = Astro.url.searchParams.get('source') ?? '';
         }
         try {
           const res = await fetch(disco.action, { method: 'POST', body: new FormData(disco), headers: { accept: 'application/json' } });
-          const data = (await res.json()) as { error?: string; artist?: { name: string }; queued?: { id: string; title: string }[]; skipped?: number };
+          const data = (await res.json()) as { error?: string; artist?: { name: string }; queued?: { id: string; title: string }[]; skipped?: number; promoted?: number };
           if (!res.ok || data.error) throw new Error(data.error ?? 'That could not be done.');
           window.dispatchEvent(new CustomEvent('job:watch', { detail: { jobs: (data.queued ?? []).map((job) => ({ id: job.id, label: job.title })) } }));
-          const n = data.queued?.length ?? 0;
+          const moved = data.promoted ?? 0;
+          const n = (data.queued?.length ?? 0) - moved;
+          const first = disco.querySelector<HTMLInputElement>('input[name=first]')?.checked;
           if (status) {
-            status.textContent = n
-              ? `✓ Queued ${n} ${n === 1 ? 'release' : 'releases'}${data.artist?.name ? ` by ${data.artist.name}` : ''}${data.skipped ? `; ${data.skipped} already here` : ''}`
-              : `Nothing new: ${data.skipped ?? 0} already here`;
+            const parts = [
+              n ? `Queued ${n} ${n === 1 ? 'release' : 'releases'}${data.artist?.name ? ` by ${data.artist.name}` : ''}${first ? ', first' : ''}` : null,
+              moved ? `moved ${moved} already waiting to the front` : null,
+              data.skipped ? `${data.skipped} already here` : null,
+            ].filter(Boolean);
+            status.textContent = n || moved ? `✓ ${parts.join('; ')}` : `Nothing new: ${data.skipped ?? 0} already here`;
           }
         } catch (error) {
           if (status) status.textContent = error instanceof Error ? error.message : 'That could not be done.';
@@ -216,6 +221,14 @@ const previous = Astro.url.searchParams.get('source') ?? '';
             </label>
           ))}
         </fieldset>
+        <div class="first">
+          <label class="kind">
+            <input type="checkbox" name="first" />
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>
+            <span>Put first</span>
+          </label>
+          <span class="hint">Ahead of everything else waiting, including their albums already queued</span>
+        </div>
         {discographyError && (
           <p class="error" role="alert">
             {discographyError}
@@ -544,5 +557,31 @@ const previous = Astro.url.searchParams.get('source') ?? '';
   .kind:has(input:focus-visible) {
     outline: 3px solid var(--focus);
     outline-offset: 2px;
+  }
+
+  .first {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .first .kind {
+    gap: var(--space-2);
+  }
+
+  .first svg {
+    width: 0.9rem;
+    height: 0.9rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .first .hint {
+    color: var(--text-muted);
+    font-size: var(--step--1);
   }
 </style>

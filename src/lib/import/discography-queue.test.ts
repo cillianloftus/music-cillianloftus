@@ -42,3 +42,28 @@ describe('queueing a discography', () => {
     ]);
   });
 });
+
+describe('putting a discography first', () => {
+  it('jumps a bulk queue, and pulls their albums already waiting to the front without queueing them twice', async () => {
+    const { enqueueMany } = await import('../jobs/queue');
+    // A long bulk queue, with one of this artist's albums deep in it.
+    const [other] = await enqueueMany('import_release', [{ label: 'Someone else' }] as never);
+    await enqueueMany('import_release', [{ source: 'musicbrainz', target: { entity: 'release-group', mbid: 'rg-new-1' }, label: 'First Album' }] as never);
+
+    const result = await queueDiscography('artist-mbid', new Set(['album']), 1);
+    expect(result.promoted).toBe(1);
+    expect(result.queued.map((q) => q.title)).toEqual(['First Album', 'Second Album']);
+    expect(db.prepare(`SELECT count(*) AS n FROM job WHERE status = 'queued'`).get()).toEqual({ n: 3 });
+
+    const order = [await claimNext(), await claimNext(), await claimNext()].map((j) => JSON.parse(j!.payload_json).label);
+    expect(order).toEqual(['First Album', 'Second Album', 'Someone else']);
+    expect(other).toBeTruthy();
+  });
+
+  it('queued again without it, adds nothing already waiting', async () => {
+    await queueDiscography('artist-mbid', new Set(['album']));
+    const again = await queueDiscography('artist-mbid', new Set(['album']));
+    expect(again.queued).toEqual([]);
+    expect(db.prepare(`SELECT count(*) AS n FROM job WHERE status = 'queued'`).get()).toEqual({ n: 2 });
+  });
+});

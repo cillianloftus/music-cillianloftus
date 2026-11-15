@@ -16,7 +16,7 @@
 import { env } from 'cloudflare:workers';
 import { z } from 'zod';
 import { parsePartialDate } from '../dates';
-import { enqueue } from '../jobs/queue';
+import { createBatch, enqueue, PRIORITY } from '../jobs/queue';
 import { groupAlbums, splitArtist, type AlbumGroup, type FileRecord } from '../tags/albums';
 import { sortName } from './manual';
 import type { ImportPlan, PlanArtist, PlanCredit, PlanRecording, PlanTrack, ReleaseGroupType } from './plan';
@@ -200,6 +200,8 @@ export interface AlbumOutcome {
 export async function importFiles(input: z.infer<typeof filesPayload>): Promise<AlbumOutcome[]> {
   const albums = groupAlbums(input.files as FileRecord[]);
   const outcomes: AlbumOutcome[] = [];
+  // Imports from MusicBrainz tags: one batch on the Jobs page (0072), made when the first is queued.
+  let batch: string | null = null;
 
   for (const album of albums) {
     const files = attachmentsFor(album, input.root);
@@ -215,7 +217,8 @@ export async function importFiles(input: z.infer<typeof filesPayload>): Promise<
     }
 
     if (album.mbReleaseId) {
-      await enqueue('import_release', { source: 'musicbrainz', target: { entity: 'release', mbid: album.mbReleaseId }, files, label: album.title });
+      batch ??= await createBatch('From your files', 'files');
+      await enqueue('import_release', { source: 'musicbrainz', target: { entity: 'release', mbid: album.mbReleaseId }, files, label: album.title }, PRIORITY.asked, batch);
       outcomes.push({ ...base, status: 'queued', href: '/manage/jobs', note: 'Tagged by MusicBrainz, so imported from there.' });
       continue;
     }

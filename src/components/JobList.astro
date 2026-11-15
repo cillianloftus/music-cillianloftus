@@ -1,0 +1,235 @@
+---
+/**
+ * Jobs as rows: state, cover, what it is, when, and what can be done with
+ * it (retry a failure; move a waiting one to the front, or take it out).
+ * The Jobs page and a batch's page both list jobs with it.
+ */
+import CoverArt from './CoverArt.astro';
+import { formatRelative } from '../lib/format';
+import type { ShownJob } from '../lib/jobs/describe';
+import type { JobRow } from '../lib/jobs/queue';
+
+interface Props {
+  jobs: JobRow[];
+  shown: Map<string, ShownJob>;
+  paused: boolean;
+  /** The page the row's buttons come back to. */
+  back: string;
+}
+
+const { jobs, shown, paused, back } = Astro.props;
+---
+
+<ol role="list" class="jobs">
+  {
+    jobs.map((job) => {
+      const s = shown.get(job.id) ?? { title: job.kind, detail: '', href: null, artKey: null, hasArt: false };
+      return (
+        <li class="job" id={`job-${job.id}`} data-status={job.status}>
+          <span class="state" aria-hidden="true" />
+          {s.hasArt && (
+            <span class="thumb">
+              <CoverArt artKey={s.artKey} title={s.title} sizes="2.75rem" />
+            </span>
+          )}
+          <div class="what">
+            {s.href && job.status === 'done' ? (
+              <a class="title" href={s.href}>
+                {s.title}
+              </a>
+            ) : (
+              <span class="title">{s.title}</span>
+            )}
+            <span class="detail">
+              {s.detail}
+              {s.detail && ' · '}
+              <time datetime={job.created_at}>{formatRelative(job.created_at)}</time>
+              <span class="visually-hidden">, {job.status}</span>
+            </span>
+            {job.status === 'failed' && <span class="error">{job.error}</span>}
+          </div>
+          {job.status === 'failed' && (
+            <form method="post" action="/api/write/jobs/retry">
+              <input type="hidden" name="id" value={job.id} />
+              <button class="button small" type="submit">
+                Retry
+              </button>
+            </form>
+          )}
+          {job.status === 'running' && <span class="label">Importing</span>}
+          {job.status === 'queued' && (
+            <>
+              <span class="label">{paused ? 'Paused' : job.priority > 0 ? 'First' : 'Waiting'}</span>
+              {job.priority === 0 && (
+                <form method="post" action="/api/write/jobs/control">
+                  <input type="hidden" name="intent" value="first" />
+                  <input type="hidden" name="id" value={job.id} />
+                  <input type="hidden" name="back" value={back} />
+                  <button class="icon up" type="submit" aria-label={`Move ${s.title} to the front of the queue`} title="Move to the front">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" />
+                    </svg>
+                  </button>
+                </form>
+              )}
+              <form method="post" action="/api/write/jobs/control">
+                <input type="hidden" name="intent" value="remove" />
+                <input type="hidden" name="id" value={job.id} />
+                <input type="hidden" name="back" value={back} />
+                <button class="icon remove" type="submit" aria-label={`Remove ${s.title} from the queue`} title="Remove from the queue">
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M4 4l8 8M12 4l-8 8" />
+                  </svg>
+                </button>
+              </form>
+            </>
+          )}
+        </li>
+      );
+    })
+  }
+</ol>
+
+<style>
+  .jobs {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* One row: state, cover, what it is, then its actions. */
+  .job {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .state {
+    flex: none;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background: var(--text-subtle);
+  }
+
+  .job[data-status='done'] .state {
+    background: var(--accent);
+  }
+
+  .job[data-status='failed'] .state {
+    background: var(--danger);
+  }
+
+  .job[data-status='running'] .state {
+    width: 0.9rem;
+    height: 0.9rem;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    background: none;
+    animation: turn 0.9s linear infinite;
+  }
+
+  .thumb {
+    flex: none;
+    width: 2.75rem;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+  }
+
+  .what {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .title {
+    overflow: hidden;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  a.title {
+    text-decoration: none;
+  }
+
+  a.title:hover {
+    text-decoration: underline;
+  }
+
+  .detail {
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .error {
+    color: var(--danger);
+    font-size: var(--step--1);
+    overflow-wrap: anywhere;
+  }
+
+  .label {
+    flex: none;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 600;
+  }
+
+  .small {
+    min-height: 2.25rem;
+    font-size: var(--step--1);
+  }
+
+  .icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-subtle);
+    cursor: pointer;
+  }
+
+  .icon:hover {
+    background: var(--surface-2);
+  }
+
+  .remove:hover {
+    color: var(--danger);
+  }
+
+  .up:hover {
+    color: var(--accent);
+  }
+
+  .icon svg {
+    width: 0.9rem;
+    height: 0.9rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  @keyframes turn {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .job[data-status='running'] .state {
+      animation-duration: 3s;
+    }
+  }
+</style>

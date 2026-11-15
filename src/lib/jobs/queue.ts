@@ -52,10 +52,14 @@ export interface JobRow {
   finished_at: string | null;
   error: string | null;
   attempts: number;
+  /** 1 asked for directly (goes first), 0 bulk: PRIORITY, 0071. */
+  priority: number;
+  /** The import or refresh that queued it (0072); none for single imports, backups, pushes. */
+  batch_id: string | null;
 }
 
 /** A job left 'running' this long belongs to an invocation that died. */
-const STALE_AFTER_MINUTES = 15;
+const STALE_AFTER_MINUTES = 6;
 /** Starts a job gets before, cut off on each, it is failed (0064). */
 const MAX_ATTEMPTS = 3;
 
@@ -69,11 +73,16 @@ const NOW = `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
 export const PRIORITY = { asked: 1, bulk: 0 } as const;
 export type Priority = (typeof PRIORITY)[keyof typeof PRIORITY];
 
-/** One job, asked for directly unless said otherwise. */
-export async function enqueue<K extends keyof JobPayloads>(kind: K, payload: JobPayloads[K], priority: Priority = PRIORITY.asked): Promise<string> {
+/** One job, asked for directly unless said otherwise, in a batch if given. */
+export async function enqueue<K extends keyof JobPayloads>(
+  kind: K,
+  payload: JobPayloads[K],
+  priority: Priority = PRIORITY.asked,
+  batchId: string | null = null,
+): Promise<string> {
   const id = crypto.randomUUID();
-  await env.DB.prepare('INSERT INTO job (id, kind, payload_json, priority) VALUES (?, ?, ?, ?)')
-    .bind(id, kind, JSON.stringify(payload), priority)
+  await env.DB.prepare('INSERT INTO job (id, kind, payload_json, priority, batch_id) VALUES (?, ?, ?, ?, ?)')
+    .bind(id, kind, JSON.stringify(payload), priority, batchId)
     .run();
   return id;
 }
@@ -88,13 +97,107 @@ export async function enqueueMany<K extends keyof JobPayloads>(
   kind: K,
   payloads: JobPayloads[K][],
   priority: Priority = PRIORITY.bulk,
+  batchId: string | null = null,
 ): Promise<string[]> {
   const ids = payloads.map(() => crypto.randomUUID());
-  const statement = env.DB.prepare('INSERT INTO job (id, kind, payload_json, priority) VALUES (?, ?, ?, ?)');
+  const statement = env.DB.prepare('INSERT INTO job (id, kind, payload_json, priority, batch_id) VALUES (?, ?, ?, ?, ?)');
   for (let i = 0; i < ids.length; i += 100) {
-    await env.DB.batch(ids.slice(i, i + 100).map((id, n) => statement.bind(id, kind, JSON.stringify(payloads[i + n]), priority)));
+    await env.DB.batch(ids.slice(i, i + 100).map((id, n) => statement.bind(id, kind, JSON.stringify(payloads[i + n]), priority, batchId)));
   }
   return ids;
+}
+
+export type BatchKind = 'discography' | 'refresh' | 'library' | 'files' | 'other';
+
+export interface BatchRow {
+  id: string;
+  label: string;
+  kind: BatchKind;
+  href: string | null;
+  created_at: string;
+  queued: number;
+  running: number;
+  done: number;
+  failed: number;
+}
+
+/** A named batch for the jobs an import or refresh is about to queue (0072). */
+export async function createBatch(label: string, kind: BatchKind, href: string | null = null): Promise<string> {
+  const id = crypto.randomUUID();
+  await env.DB.prepare('INSERT INTO job_batch (id, label, kind, href) VALUES (?, ?, ?, ?)').bind(id, label, kind, href).run();
+  return id;
+}
+
+export async function renameBatch(id: string, label: string): Promise<void> {
+  await env.DB.prepare('UPDATE job_batch SET label = ? WHERE id = ?').bind(label, id).run();
+}
+
+/** A batch with nothing in it (everything was already here): not worth a card. */
+export async function deleteBatch(id: string): Promise<void> {
+  await env.DB.prepare(`DELETE FROM job_batch WHERE id = ? AND NOT EXISTS (SELECT 1 FROM job WHERE batch_id = ?1)`).bind(id).run();
+}
+
+/**
+ * Batches for the Jobs page: every one with work left, and the most
+ * recently started of the finished. Counts are kept on each (0072), so
+ * this reads a row a batch; which ones are going first is a seek of the
+ * priority lane.
+ */
+export async function jobBatches(finished = 8): Promise<(BatchRow & { first: boolean })[]> {
+  const [active, ended, first] = await env.DB.batch([
+    env.DB.prepare(`SELECT * FROM job_batch WHERE queued + running > 0 ORDER BY created_at`),
+    env.DB.prepare(`SELECT * FROM job_batch WHERE queued + running = 0 ORDER BY created_at DESC LIMIT ?`).bind(finished),
+    env.DB.prepare(`SELECT DISTINCT batch_id FROM job WHERE status = 'queued' AND priority > 0 AND batch_id IS NOT NULL`),
+  ]);
+  const going = new Set((first!.results as { batch_id: string }[]).map((r) => r.batch_id));
+  return [...(active!.results as BatchRow[]), ...(ended!.results as BatchRow[])].map((b) => ({ ...b, first: going.has(b.id) }));
+}
+
+/** Jobs in no batch (single imports, backups, pushes, older imports), newest first: by the job_loose index. */
+export async function looseJobs(limit = 40): Promise<JobRow[]> {
+  const { results } = await env.DB.prepare(`SELECT * FROM job WHERE batch_id IS NULL ORDER BY created_at DESC LIMIT ?`).bind(limit).all<JobRow>();
+  return results;
+}
+
+/** Every failed job, newest first (by job_queue). */
+export async function failedJobs(limit = 100): Promise<JobRow[]> {
+  const { results } = await env.DB.prepare(`SELECT * FROM job WHERE status = 'failed' ORDER BY finished_at DESC LIMIT ?`).bind(limit).all<JobRow>();
+  return results;
+}
+
+export async function jobBatch(id: string): Promise<BatchRow | null> {
+  return env.DB.prepare('SELECT * FROM job_batch WHERE id = ?').bind(id).first<BatchRow>();
+}
+
+/** A batch's jobs: failed, then running, then waiting in the order they will run, then done. */
+export async function batchJobs(batchId: string, limit = 400): Promise<JobRow[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM job WHERE batch_id = ?
+     ORDER BY CASE status WHEN 'failed' THEN 0 WHEN 'running' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END,
+              priority DESC, created_at, rowid
+     LIMIT ?`,
+  )
+    .bind(batchId, limit)
+    .all<JobRow>();
+  return results;
+}
+
+/** Everything still waiting in a batch to the front (in its order), or back in line. Returns how many moved. */
+export async function prioritiseBatch(batchId: string, first: boolean): Promise<number> {
+  const result = await env.DB.prepare(
+    first
+      ? `UPDATE job SET priority = ${PRIORITY.asked}, created_at = ${NOW} WHERE batch_id = ? AND status = 'queued' AND priority < ${PRIORITY.asked}`
+      : `UPDATE job SET priority = ${PRIORITY.bulk} WHERE batch_id = ? AND status = 'queued' AND priority > ${PRIORITY.bulk}`,
+  )
+    .bind(batchId)
+    .run();
+  return result.meta.changes ?? 0;
+}
+
+/** Takes everything still waiting in a batch out of the queue. Returns how many. */
+export async function removeBatchQueued(batchId: string): Promise<number> {
+  const result = await env.DB.prepare(`DELETE FROM job WHERE batch_id = ? AND status = 'queued'`).bind(batchId).run();
+  return result.meta.changes ?? 0;
 }
 
 /**
@@ -229,6 +332,14 @@ export async function recountJobs(): Promise<void> {
      WHERE true
      ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
   ).run();
+  // Each batch's too (0072), by the job_batch_member index.
+  await env.DB.prepare(
+    `UPDATE job_batch SET
+       queued = (SELECT count(*) FROM job WHERE batch_id = job_batch.id AND status = 'queued'),
+       running = (SELECT count(*) FROM job WHERE batch_id = job_batch.id AND status = 'running'),
+       done = (SELECT count(*) FROM job WHERE batch_id = job_batch.id AND status = 'done'),
+       failed = (SELECT count(*) FROM job WHERE batch_id = job_batch.id AND status = 'failed')`,
+  ).run();
 }
 
 export interface QueueProgress {
@@ -298,6 +409,22 @@ export async function setQueuePaused(paused: boolean): Promise<void> {
   )
     .bind(paused ? '1' : '0')
     .run();
+}
+
+/**
+ * Moves waiting jobs to the front: into the priority lane, at its back,
+ * so what was put first earlier still goes before them. Returns how many moved.
+ */
+export async function promote(ids: string[], batchId: string | null = null): Promise<number> {
+  if (ids.length === 0) return 0;
+  // Into the batch that asked for them, when one did (they count there now).
+  const result = await env.DB.prepare(
+    `UPDATE job SET priority = ${PRIORITY.asked}, created_at = ${NOW}, batch_id = coalesce(?2, batch_id)
+     WHERE status = 'queued' AND (priority < ${PRIORITY.asked} OR ?2 IS NOT NULL) AND id IN (SELECT value FROM json_each(?1))`,
+  )
+    .bind(JSON.stringify(ids), batchId)
+    .run();
+  return result.meta.changes ?? 0;
 }
 
 /** Takes a job out of the queue before it starts. Returns whether it was still waiting. */

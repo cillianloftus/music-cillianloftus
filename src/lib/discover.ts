@@ -799,7 +799,15 @@ function gutFindings(facts: TrackFact[], opts: Options, tally: Tally): Finding[]
 /** The track that doesn't fit its album: far below or above the rest of it. */
 function oddOnes(facts: TrackFact[], tally: Tally, opts: Options = {}): Finding[] {
   const byAlbum = new Map<string, TrackFact[]>();
-  for (const f of facts) if (f.albumId && !f.extra) byAlbum.set(f.albumId, [...(byAlbum.get(f.albumId) ?? []), f]);
+  // On an album's page, against every song on it: a song's home album
+  // (f.albumId) is where it first appeared, so on a compilation like Bobby
+  // Tarantino vs. Young Sinatra each was measured against the few from its
+  // own first album, and one 82 "towered" over an album holding a 98.
+  const home = (f: TrackFact) => (opts.albumId && !(f.albumId === opts.albumId && f.extra) ? opts.albumId : f.extra ? null : f.albumId);
+  for (const f of facts) {
+    const album = home(f);
+    if (album) byAlbum.set(album, [...(byAlbum.get(album) ?? []), f]);
+  }
   const out: Finding[] = [];
   for (const tracks of byAlbum.values()) {
     if (tracks.length < 5) continue;

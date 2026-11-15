@@ -1,0 +1,221 @@
+---
+/**
+ * One import or refresh on the Jobs page (a discography, an artist
+ * refreshed): its name, how far it has got, and what can be done with it:
+ * put first, back in line, or take out what is still waiting (0072).
+ */
+import { formatRelative } from '../lib/format';
+import type { BatchRow } from '../lib/jobs/queue';
+
+interface Props {
+  batch: BatchRow & { first: boolean };
+  paused: boolean;
+  /** The page the buttons come back to. */
+  back: string;
+  /** On the batch's own page the name is the heading, so it does not link to itself. */
+  linked?: boolean;
+  level?: 2 | 3;
+}
+
+const { batch, paused, back, linked = true, level = 3 } = Astro.props;
+const total = batch.queued + batch.running + batch.done + batch.failed;
+const waiting = batch.queued + batch.running;
+const share = total ? batch.done / total : 0;
+const KIND: Record<string, string> = {
+  discography: 'Discography',
+  refresh: 'Refresh',
+  library: 'Whole library',
+  files: 'From files',
+  other: 'Imports',
+};
+const Heading = `h${level}` as 'h2' | 'h3';
+const state = batch.failed > 0 && waiting === 0 ? 'failed' : waiting === 0 ? 'done' : batch.running > 0 ? 'running' : 'waiting';
+const number = new Intl.NumberFormat('en-GB');
+---
+
+<article class="batch" data-state={state} data-first={batch.first ? '' : undefined}>
+  <div class="head">
+    <Heading class="name">
+      {linked ? <a href={`/manage/jobs/batch/${batch.id}`}>{batch.label}</a> : batch.label}
+    </Heading>
+    <span class="tags">
+      <span class="tag">{KIND[batch.kind] ?? 'Imports'}</span>
+      {batch.first && waiting > 0 && <span class="tag first">First</span>}
+    </span>
+  </div>
+  <p class="line">
+    <span class="tabular">{number.format(batch.done)} of {number.format(total)} done</span>
+    {batch.running > 0 && <span> · importing now</span>}
+    {batch.queued > 0 && <span class="tabular"> · {number.format(batch.queued)} {paused ? 'paused' : 'waiting'}</span>}
+    {batch.failed > 0 && <span class="tabular alert"> · {number.format(batch.failed)} failed</span>}
+    <span>
+      {' · '}queued <time datetime={batch.created_at}>{formatRelative(batch.created_at)}</time>
+    </span>
+  </p>
+  <span class="bar" aria-hidden="true"><span style={`inline-size: ${Math.round(share * 100)}%`}></span></span>
+  {
+    (batch.queued > 0 || batch.href) && (
+      <div class="actions">
+        {batch.queued > 0 &&
+          (batch.first ? (
+            <form method="post" action="/api/write/jobs/control">
+              <input type="hidden" name="intent" value="batch-in-line" />
+              <input type="hidden" name="batch" value={batch.id} />
+              <input type="hidden" name="back" value={back} />
+              <button class="button small" type="submit">
+                Back in line
+              </button>
+            </form>
+          ) : (
+            <form method="post" action="/api/write/jobs/control">
+              <input type="hidden" name="intent" value="batch-first" />
+              <input type="hidden" name="batch" value={batch.id} />
+              <input type="hidden" name="back" value={back} />
+              <button class="button small button--primary" type="submit">
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" />
+                </svg>
+                Put first
+              </button>
+            </form>
+          ))}
+        {batch.queued > 0 && (
+          <form method="post" action="/api/write/jobs/control" data-confirm={`Take the ${batch.queued} still waiting in “${batch.label}” out of the queue?`}>
+            <input type="hidden" name="intent" value="batch-remove" />
+            <input type="hidden" name="batch" value={batch.id} />
+            <input type="hidden" name="back" value={back} />
+            <button class="button small button--quiet" type="submit">
+              Remove waiting
+            </button>
+          </form>
+        )}
+        {batch.href && (
+          <a class="button small button--quiet" href={batch.href}>
+            {batch.href.startsWith('/album/') ? 'Album' : 'Artist'}
+          </a>
+        )}
+      </div>
+    )
+  }
+</article>
+
+<script>
+  // Taking a whole batch out asks first.
+  document.addEventListener('submit', (event) => {
+    const form = event.target as HTMLFormElement;
+    const question = form.dataset.confirm;
+    if (question && !confirm(question)) event.preventDefault();
+  });
+</script>
+
+<style>
+  .batch {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+  }
+
+  .batch[data-first] {
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  }
+
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-1) var(--space-3);
+  }
+
+  .name {
+    margin: 0;
+    font-size: var(--step-0);
+    font-weight: 750;
+    overflow-wrap: anywhere;
+  }
+
+  .name a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .name a:hover {
+    text-decoration: underline;
+  }
+
+  .tags {
+    display: flex;
+    gap: var(--space-1);
+  }
+
+  .tag {
+    padding: 0.1rem var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+
+  .tag.first {
+    border-color: var(--accent);
+    color: var(--text);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface-1));
+  }
+
+  .line {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .alert {
+    color: var(--danger);
+  }
+
+  .bar {
+    display: block;
+    height: 5px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  .bar > span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--accent);
+  }
+
+  .batch[data-state='done'] .bar > span {
+    background: var(--text-subtle);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
+  }
+
+  .small {
+    min-height: 2.25rem;
+    font-size: var(--step--1);
+  }
+
+  .actions svg {
+    width: 0.85rem;
+    height: 0.85rem;
+    margin-right: var(--space-1);
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+</style>

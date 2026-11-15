@@ -227,3 +227,20 @@ describe('tempo and reach', () => {
     expect(labels.some((t) => t.includes('fewer than 1,000 people'))).toBe(true);
   });
 });
+
+describe('the odd one out on a compilation', () => {
+  it('measures each song against the whole album on its page, not the few from its own first album', () => {
+    // Twelve songs: six from another album (one of them the 82), six first
+    // out here (one of them a 98). Against its own five the 82 stands out;
+    // against all eleven others, with a 98 among them, it does not.
+    const base = library()[0]!;
+    const song = (i: number, score: number, albumId: string): TrackFact => ({ ...base, id: `c${i}`, title: `Song ${i}`, score, albumId, extra: albumId !== 'compilation' });
+    const facts = [
+      song(0, 82, 'older'),
+      ...[67, 66, 68, 67, 66].map((s, i) => song(i + 1, s, 'older')),
+      ...[98, 70, 85, 60, 75, 72].map((s, i) => song(i + 6, s, 'compilation')),
+    ];
+    const odd = (opts: { albumId?: string }) => discover(facts, { limit: 40, ...opts }).filter((f) => f.kind === 'odd').map((f) => f.key);
+    expect(odd({ albumId: 'compilation' })).not.toContain('odd:c0');
+  });
+});

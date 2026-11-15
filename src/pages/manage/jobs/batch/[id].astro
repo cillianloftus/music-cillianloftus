@@ -1,0 +1,76 @@
+---
+/**
+ * One import or refresh (0072): its progress and controls, then its jobs,
+ * failures first, then what is importing, then what waits in the order it
+ * will run, then what is done. Each waiting one can go to the front or out.
+ */
+import Base from '../../../../layouts/Base.astro';
+import PageHeader from '../../../../components/PageHeader.astro';
+import BatchCard from '../../../../components/BatchCard.astro';
+import JobList from '../../../../components/JobList.astro';
+import { describeJobs } from '../../../../lib/jobs/describe';
+import { batchJobs, jobBatch, queuePaused } from '../../../../lib/jobs/queue';
+
+const id = Astro.params.id ?? '';
+const batch = await jobBatch(id);
+if (!batch) return Astro.redirect('/manage/jobs', 303);
+const LIMIT = 400;
+const [jobs, paused] = await Promise.all([batchJobs(id, LIMIT), queuePaused()]);
+const first = jobs.some((j) => j.status === 'queued' && j.priority > 0);
+const shown = await describeJobs(jobs);
+const back = `/manage/jobs/batch/${id}`;
+const active = batch.queued + batch.running > 0 && !paused;
+const total = batch.queued + batch.running + batch.done + batch.failed;
+---
+
+<Base title={batch.label}>
+  <div class="wrap page" data-jobs data-active={active ? 'true' : undefined}>
+    <PageHeader title={batch.label} />
+    <p><a href="/manage/jobs">All jobs</a></p>
+    <div data-summary>
+      <BatchCard batch={{ ...batch, first }} paused={paused} back={back} linked={false} level={2} />
+    </div>
+    <section aria-label="Its jobs" data-groups>
+      <JobList jobs={jobs} shown={shown} paused={paused} back={back} />
+      {total > jobs.length && <p class="muted more">The first {LIMIT} of {total}.</p>}
+    </section>
+  </div>
+</Base>
+
+<script>
+  // While it is moving, re-fetch every few seconds and swap in the new card and list.
+  const root = document.querySelector<HTMLElement>('[data-jobs]');
+  async function poll() {
+    if (!root?.dataset.active) return;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    if (document.visibilityState === 'hidden') return poll();
+    const response = await fetch(location.href, { headers: { Accept: 'text/html' } });
+    if (!response.ok) return;
+    const next = new DOMParser().parseFromString(await response.text(), 'text/html').querySelector<HTMLElement>('[data-jobs]');
+    if (!next) return;
+    for (const part of ['[data-summary]', '[data-groups]']) {
+      const fresh = next.querySelector(part);
+      const old = root.querySelector(part);
+      if (fresh && old) old.replaceWith(fresh);
+    }
+    if (next.dataset.active) poll();
+    else delete root.dataset.active;
+  }
+  poll();
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+    --content-max: 52rem;
+  }
+
+  .page > p {
+    margin: 0;
+  }
+
+  .more {
+    margin-top: var(--space-3);
+  }
+</style>

@@ -7,12 +7,17 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { enqueue, PRIORITY, type Priority } from './jobs/queue';
+import { createBatch, deleteBatch, enqueue, PRIORITY, type Priority } from './jobs/queue';
 
-/** Asked for by hand (an album, an artist), it goes ahead of bulk imports; the whole library is bulk itself. */
-export async function refreshAlbum(albumId: string, priority: Priority = PRIORITY.asked): Promise<string[]> {
+/**
+ * Asked for by hand (an album, an artist), it goes ahead of bulk imports;
+ * the whole library is bulk itself. On its own, an album is a batch of its
+ * own on the Jobs page (0072); an artist's or the library's passes theirs.
+ */
+export async function refreshAlbum(albumId: string, priority: Priority = PRIORITY.asked, batchId?: string): Promise<string[]> {
   const album = await env.DB.prepare(`SELECT title, spotify_id FROM release_group WHERE id = ?`).bind(albumId).first<{ title: string; spotify_id: string | null }>();
   if (!album) return [];
+  const batch = batchId ?? (await createBatch(`Refresh: ${album.title}`, 'refresh', `/album/${albumId}`));
   const { results } = await env.DB.prepare(`SELECT mbid FROM release WHERE release_group_id = ? AND mbid IS NOT NULL`)
     .bind(albumId)
     .all<{ mbid: string }>();
@@ -29,11 +34,12 @@ export async function refreshAlbum(albumId: string, priority: Priority = PRIORIT
 
   const jobs: string[] = [];
   for (const { mbid } of results) {
-    jobs.push(await enqueue('import_release', { source: 'musicbrainz', target: { entity: 'release', mbid }, label: album.title }, priority));
+    jobs.push(await enqueue('import_release', { source: 'musicbrainz', target: { entity: 'release', mbid }, label: album.title }, priority, batch));
   }
   if (album.spotify_id) {
-    jobs.push(await enqueue('import_release', { source: 'spotify', target: { kind: 'album', id: album.spotify_id }, label: album.title }, priority));
+    jobs.push(await enqueue('import_release', { source: 'spotify', target: { kind: 'album', id: album.spotify_id }, label: album.title }, priority, batch));
   }
+  if (!batchId && jobs.length === 0) await deleteBatch(batch);
   return jobs;
 }
 
@@ -49,11 +55,14 @@ export async function refreshArtist(artistId: string): Promise<{ title: string; 
   )
     .bind(artistId)
     .all<{ id: string; title: string }>();
+  const name = await env.DB.prepare(`SELECT name FROM artist WHERE id = ?`).bind(artistId).first<string>('name');
+  const batch = await createBatch(`Refresh: ${name ?? 'an artist'}`, 'refresh', `/artist/${artistId}`);
   const out: { title: string; jobs: string[] }[] = [];
   for (const album of results) {
-    const jobs = await refreshAlbum(album.id);
+    const jobs = await refreshAlbum(album.id, PRIORITY.asked, batch);
     if (jobs.length) out.push({ title: album.title, jobs });
   }
+  if (out.length === 0) await deleteBatch(batch);
   return out;
 }
 
@@ -66,8 +75,9 @@ export async function refreshArtist(artistId: string): Promise<{ title: string; 
  */
 export async function refreshEverything(): Promise<number> {
   const { results } = await env.DB.prepare(`SELECT id FROM release_group ORDER BY created_at`).all<{ id: string }>();
+  const batch = await createBatch('Refresh: the whole library', 'library');
   let queued = 0;
-  for (const { id } of results) queued += (await refreshAlbum(id, PRIORITY.bulk)).length;
+  for (const { id } of results) queued += (await refreshAlbum(id, PRIORITY.bulk, batch)).length;
   await env.DB.batch([
     env.DB.prepare(`UPDATE artist SET enriched_at = NULL`),
     env.DB.prepare(`DELETE FROM lookup_log`),

@@ -6,7 +6,7 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { enqueueMany } from '../jobs/queue';
+import { enqueueMany, promote, PRIORITY, type Priority } from '../jobs/queue';
 import { removedMbids } from '../official';
 import { artistForSpotify, browseArtistReleaseGroups, searchArtists, type MbReleaseGroupSummary } from '../musicbrainz/client';
 import { normaliseName } from '../text';
@@ -24,6 +24,49 @@ export const KINDS = {
 export type Kind = keyof typeof KINDS;
 
 export class DiscographyError extends Error {}
+
+/** What a discography queued: each job with its album, and how many already waiting were moved up. */
+export interface Queued {
+  queued: { id: string; title: string }[];
+  promoted: number;
+}
+
+type ImportPayload =
+  | { source: 'musicbrainz'; target: { entity: 'release-group'; mbid: string }; label: string }
+  | { source: 'spotify'; target: { kind: 'album'; id: string }; label: string };
+
+/**
+ * Queues each import not already waiting. One already waiting (the same
+ * artist asked for twice) is not queued again; asked for first, it moves
+ * to the front instead, so an artist whose albums sit deep in a bulk
+ * queue can be pulled out of it.
+ */
+async function queueImports(items: { key: string; title: string; payload: ImportPayload }[], priority: Priority, batchId: string | null): Promise<Queued> {
+  if (items.length === 0) return { queued: [], promoted: 0 };
+  // Reads the waiting imports once (a few thousand rows at most): only when
+  // a discography is asked for, never per page.
+  const { results: waiting } = await env.DB.prepare(
+    `SELECT id, key FROM (
+       SELECT id, coalesce(json_extract(payload_json, '$.target.mbid'), json_extract(payload_json, '$.target.id')) AS key
+       FROM job WHERE status = 'queued' AND kind = 'import_release'
+     ) WHERE key IN (SELECT value FROM json_each(?))`,
+  )
+    .bind(JSON.stringify(items.map((i) => i.key)))
+    .all<{ id: string; key: string }>();
+  const already = new Map(waiting.map((w) => [w.key, w.id]));
+  const fresh = items.filter((i) => !already.has(i.key));
+  const ids = await enqueueMany('import_release', fresh.map((i) => i.payload), priority, batchId);
+  const freshIds = new Map(fresh.map((i, n) => [i.key, ids[n]!]));
+  const promoting = priority > PRIORITY.bulk;
+  const moved = promoting ? await promote([...already.values()], batchId) : 0;
+  return {
+    // In the order asked, with the ones moved up, for the tray to follow.
+    queued: items
+      .filter((i) => freshIds.has(i.key) || promoting)
+      .map((i) => ({ id: freshIds.get(i.key) ?? already.get(i.key)!, title: i.title })),
+    promoted: moved,
+  };
+}
 
 /**
  * The artist an input names: on MusicBrainz where it knows them, or, for a
@@ -72,7 +115,9 @@ export async function queueSpotifyDiscography(
   artistId: string,
   kinds: Set<Kind>,
   client?: Getter,
-): Promise<{ queued: { id: string; title: string }[]; skipped: number; found: number; name: string }> {
+  priority: Priority = PRIORITY.bulk,
+  batchId: string | null = null,
+): Promise<Queued & { skipped: number; found: number; name: string }> {
   let spotify = client;
   if (!spotify) {
     const owner = await ownerId();
@@ -102,11 +147,12 @@ export async function queueSpotifyDiscography(
     ).results.map((r) => r.spotify_id),
   );
   const fresh = wantedAlbums.filter((a) => !held.has(a.id)).sort((a, b) => a.release_date.localeCompare(b.release_date));
-  const jobIds = await enqueueMany(
-    'import_release',
-    fresh.map((a) => ({ source: 'spotify' as const, target: { kind: 'album' as const, id: a.id }, label: a.name })),
+  const queued = await queueImports(
+    fresh.map((a) => ({ key: a.id, title: a.name, payload: { source: 'spotify' as const, target: { kind: 'album' as const, id: a.id }, label: a.name } })),
+    priority,
+    batchId,
   );
-  return { queued: fresh.map((a, i) => ({ id: jobIds[i]!, title: a.name })), skipped: wantedAlbums.length - fresh.length, found: wantedAlbums.length, name: artist.name };
+  return { ...queued, skipped: wantedAlbums.length - fresh.length, found: wantedAlbums.length, name: artist.name };
 }
 
 /** Whether a release group is one of the kinds asked for. */
@@ -128,7 +174,9 @@ export function wanted(group: MbReleaseGroupSummary, kinds: Set<Kind>): boolean 
 export async function queueDiscography(
   artistMbid: string,
   kinds: Set<Kind>,
-): Promise<{ queued: { id: string; title: string }[]; skipped: number; found: number }> {
+  priority: Priority = PRIORITY.bulk,
+  batchId: string | null = null,
+): Promise<Queued & { skipped: number; found: number }> {
   const today = new Date().toISOString().slice(0, 10);
   const groups = (await browseArtistReleaseGroups(artistMbid)).filter(
     (g) => wanted(g, kinds) && g['first-release-date'] && g['first-release-date'] <= today,
@@ -145,10 +193,10 @@ export async function queueDiscography(
   const fresh = groups
     .filter((g) => !held.has(g.id) && !removed.has(g.id))
     .sort((a, b) => (a['first-release-date'] ?? '').localeCompare(b['first-release-date'] ?? ''));
-  const ids = await enqueueMany(
-    'import_release',
-    fresh.map((g) => ({ source: 'musicbrainz' as const, target: { entity: 'release-group' as const, mbid: g.id }, label: g.title })),
+  const queued = await queueImports(
+    fresh.map((g) => ({ key: g.id, title: g.title, payload: { source: 'musicbrainz' as const, target: { entity: 'release-group' as const, mbid: g.id }, label: g.title } })),
+    priority,
+    batchId,
   );
-  const queued = fresh.map((g, i) => ({ id: ids[i]!, title: g.title }));
-  return { queued, skipped: groups.length - queued.length, found: groups.length };
+  return { ...queued, skipped: groups.length - fresh.length, found: groups.length };
 }

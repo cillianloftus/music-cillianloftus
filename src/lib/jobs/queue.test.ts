@@ -115,3 +115,32 @@ describe('the priority lane (0071)', () => {
     expect((await queueProgress()).first).toBe(1);
   });
 });
+
+describe('batches (0072)', () => {
+  it('keep their own counts, and can be put first, sent back in line or emptied', async () => {
+    const { createBatch, jobBatch, jobBatches, prioritiseBatch, removeBatchQueued, recountJobs } = await import('./queue');
+    const logic = await createBatch('Logic', 'discography');
+    const other = await createBatch('Someone else', 'discography');
+    await enqueueMany('import_release', [{ label: 'Other 1' }, { label: 'Other 2' }] as never, 0, other);
+    const [l1] = await enqueueMany('import_release', [{ label: 'Logic 1' }, { label: 'Logic 2' }, { label: 'Logic 3' }] as never, 0, logic);
+
+    expect(await jobBatch(logic)).toMatchObject({ queued: 3, running: 0, done: 0 });
+    // Logic goes first, in its own order.
+    expect(await prioritiseBatch(logic, true)).toBe(3);
+    expect((await jobBatches()).find((b) => b.id === logic)?.first).toBe(true);
+    const job = await claimNext();
+    expect(job?.id).toBe(l1);
+    await complete(job!.id, {});
+    expect(await jobBatch(logic)).toMatchObject({ queued: 2, done: 1 });
+
+    // Back in line: the other batch, queued earlier, is next again.
+    await prioritiseBatch(logic, false);
+    expect(JSON.parse((await claimNext())!.payload_json).label).toBe('Other 1');
+
+    expect(await removeBatchQueued(logic)).toBe(2);
+    const counts = await jobBatch(logic);
+    await recountJobs();
+    expect(await jobBatch(logic)).toEqual(counts);
+    expect(counts).toMatchObject({ queued: 0, running: 0, done: 1, failed: 0 });
+  });
+});
