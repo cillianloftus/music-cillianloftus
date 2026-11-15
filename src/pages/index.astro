@@ -161,7 +161,7 @@ const statItems = [
             </a>
             <div class="feature-text">
               <p class="eyebrow">{lovedRating ? 'Lately loved' : 'Highest rated'}</p>
-              <h2 id="feature-title">
+              <h2 id="feature-title" data-fit-line>
                 <a href={`/album/${featured.id}`}>{featured.title}</a>
               </h2>
               <p class="feature-by">
@@ -508,6 +508,34 @@ const statItems = [
     </section>
   </div>
 </Base>
+
+<script>
+  // The featured title on one line when it nearly fits: shrunk just enough
+  // (never below two thirds of its size), else left large over balanced
+  // lines. Measured here, since each device's font is its own width: "I
+  // Didn't Mean To Haunt You" missed one line by a few pixels (15 Nov).
+  const fit = () => {
+    for (const title of document.querySelectorAll<HTMLElement>('[data-fit-line]')) {
+      title.style.fontSize = '';
+      const size = parseFloat(getComputedStyle(title).fontSize);
+      const probe = title.cloneNode(true) as HTMLElement;
+      Object.assign(probe.style, { position: 'absolute', visibility: 'hidden', whiteSpace: 'nowrap', width: 'auto' });
+      title.insertAdjacentElement('afterend', probe as unknown as Element);
+      const needed = probe.getBoundingClientRect().width;
+      probe.remove();
+      const room = title.getBoundingClientRect().width;
+      if (needed <= room) continue;
+      const ratio = room / needed;
+      if (ratio >= 2 / 3) title.style.fontSize = `${Math.floor(size * ratio * 0.98 * 10) / 10}px`;
+    }
+  };
+  void document.fonts.ready.then(fit);
+  let wait = 0;
+  addEventListener('resize', () => {
+    clearTimeout(wait);
+    wait = window.setTimeout(fit, 100);
+  });
+</script>
 
 <style>
   .home {
