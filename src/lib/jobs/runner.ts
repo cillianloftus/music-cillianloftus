@@ -21,6 +21,13 @@ import { pushDefinition } from '../spotify/push';
 import { runBackup } from '../backup/store';
 import { claimNext, complete, fail, requeue, toBack, type JobPayloads, type JobRow } from './queue';
 import { MusicBrainzError } from '../musicbrainz/client';
+import { mergeTwins } from '../twins';
+
+/** An imported release's songs joined to the same recordings already here (twins.ts), so their ratings show. */
+async function joinTwins(releaseId: string): Promise<void> {
+  const { results } = await env.DB.prepare(`SELECT DISTINCT recording_id AS id FROM track WHERE release_id = ?`).bind(releaseId).all<{ id: string }>();
+  await mergeTwins({ budgetMs: 15_000, of: results.map((r) => r.id) }).catch((error) => console.warn('Twins after import failed', error));
+}
 
 /**
  * Imports are pushed on hard: a job that stalls goes to the back of the
@@ -152,6 +159,7 @@ async function importRelease(job: JobRow): Promise<void> {
   const payload = JSON.parse(job.payload_json) as JobPayloads['import_release'];
   if (payload.source === 'spotify') {
     const result = await importFromSpotify(payload.target);
+    await joinTwins(result.releaseId);
     await enrichImportedArtists(result.releaseGroupId);
     await complete(job.id, { ...payload, result: { releaseGroupId: result.releaseGroupId, via: result.via } }, 1);
     return;
@@ -167,6 +175,8 @@ async function importRelease(job: JobRow): Promise<void> {
   lap('plan');
   const result = await writePlan(plan);
   lap('write');
+  await joinTwins(result.releaseId);
+  lap('twins');
 
   // Art is best-effort: an album without a cover is still an album, and the
   // review queue reports releases with no art.

@@ -23,6 +23,7 @@ import { checkOfficialReleases } from './lib/official';
 import { nudgeRatings, pushToUser, vapid } from './lib/nudge';
 import { latestBackup, recordNightly, type TaskRun } from './lib/health';
 import { rebuildAllGutConversions, rebuildStaleGutConversions } from './lib/gut-calibration';
+import { mergeTwins } from './lib/twins';
 
 /**
  * Checks the library against MusicBrainz's official releases a little at a
@@ -144,6 +145,9 @@ export default {
         // queue sat idle between one run's end and the next tick's start.
         // An import is mostly waiting on MusicBrainz, so this is little CPU.
         await runJobs({ budgetMs: 11 * 60_000 });
+        // Twin recordings already in the library (twins.ts), a batch a minute:
+        // the ticks that step aside from the job run have the time.
+        await mergeTwins({ budgetMs: 20_000 }).catch((error) => console.error('Twin merges failed', error));
         await checkOfficial().catch((error) => console.error('Official release check failed', error));
       })(),
     );
