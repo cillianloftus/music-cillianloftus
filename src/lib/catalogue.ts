@@ -543,7 +543,7 @@ export async function artistTracks(
   limit: number,
 ): Promise<{ tracks: ArtistTrack[]; total: number }> {
   // Ratings and plays decide it, not imports (byScoresAndPlays).
-  const ranked = await byScoresAndPlays(`artist-ranking:v2:${artistId}`, viewerId, () => rankArtistTracks(artistId, viewerId));
+  const ranked = await byScoresAndPlays(`artist-ranking:v3:${artistId}`, viewerId, () => rankArtistTracks(artistId, viewerId));
   const stretch = ranked.slice(from, from + limit);
   if (stretch.length === 0) return { tracks: [], total: ranked.length };
   const places = await trackPlaces(stretch.map((t) => t.id));
@@ -559,7 +559,8 @@ async function rankArtistTracks(artistId: string, viewerId: string | null): Prom
   // the artist's songs: 153,000 rows for Logic's 502. Apart: about 7,000.
   const [songs, scores] = await env.DB.batch([
     env.DB.prepare(
-      `SELECT r.id, r.title,
+      `SELECT r.id, r.title, r.work_id,
+              (SELECT i.from_recording_id FROM inherited_score i WHERE i.user_id = ?1 AND i.recording_id = r.id) AS borrowed_from,
               (SELECT count(*) FROM play p WHERE p.user_id = ?1 AND p.recording_id = r.id AND p.counted = 1) AS plays,
               -- On streaming: Spotify knows the song, or an edition or album it is on.
               r.spotify_id IS NOT NULL OR EXISTS (
@@ -574,11 +575,31 @@ async function rankArtistTracks(artistId: string, viewerId: string | null): Prom
   const scored = new Map(
     (scores!.results as { recording_id: string; quality_score: number | null; personal_score: number | null }[]).map((s) => [s.recording_id, s]),
   );
-  const tracks = (songs!.results as { id: string; title: string; plays: number; streamable: number }[])
-    .map(({ streamable, ...t }) => {
-      const s = scored.get(t.id);
+  type Song = { id: string; title: string; work_id: string | null; borrowed_from: string | null; plays: number; streamable: number };
+  const rows = songs!.results as Song[];
+  // One row a song: its versions (the single, the live take, the album's)
+  // are one song, so a rating borrowed by each (inherited.ts) listed it
+  // three times over (Runaway on Kanye's page, 15 Nov). The version rated
+  // itself stands for it, else the most played; plays are the song's, all
+  // versions' together; it is on streaming if any version is.
+  const work = new Map(rows.map((r) => [r.id, r.work_id]));
+  const songKey = (r: Song) => r.work_id ?? (r.borrowed_from ? (work.get(r.borrowed_from) ?? r.borrowed_from) : r.id);
+  const groups = new Map<string, Song[]>();
+  for (const r of rows) groups.set(songKey(r), [...(groups.get(songKey(r)) ?? []), r]);
+  const tracks = [...groups.values()]
+    .map((versions) => {
+      const lead = [...versions].sort(
+        (a, b) =>
+          Number(scored.has(b.id) && !b.borrowed_from) - Number(scored.has(a.id) && !a.borrowed_from) ||
+          b.plays - a.plays ||
+          b.streamable - a.streamable ||
+          a.title.length - b.title.length,
+      )[0]!;
+      const s = scored.get(lead.id);
+      const plays = versions.reduce((sum, v) => sum + v.plays, 0);
+      const streamable = versions.some((v) => v.streamable);
       // Played anyway (a local file, scrobbled): its plays are real and count.
-      return { ...t, quality_score: s?.quality_score ?? null, personal_score: s?.personal_score ?? null, off_streaming: !streamable && t.plays === 0 };
+      return { id: lead.id, title: lead.title, plays, quality_score: s?.quality_score ?? null, personal_score: s?.personal_score ?? null, off_streaming: !streamable && plays === 0 };
     })
     .filter((t) => t.quality_score !== null || t.plays > 0);
   return rankFavourites(tracks);
