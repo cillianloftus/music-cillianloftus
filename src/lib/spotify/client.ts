@@ -185,8 +185,21 @@ class RawBody {
   ) {}
 }
 
-/** An authenticated API client for one user. */
-export function spotifyFor(userId: string) {
+/**
+ * Until when Spotify asked an impatient client to keep away (a 429's
+ * Retry-After): in that time it does not ask at all.
+ */
+let quietUntil = 0;
+
+/**
+ * An authenticated API client for one user. Patient (the default), it waits
+ * out a 429 as Spotify asks, up to 30 s, three times over. Impatient (the
+ * work after an import), it gives up at once and keeps away for as long as
+ * Spotify said, so the next imports do not each wait too: on 15 Nov that
+ * waiting was three minutes of every import. What it skips, the nightly
+ * passes fill in.
+ */
+export function spotifyFor(userId: string, { patient = true }: { patient?: boolean } = {}) {
   async function request<T>(
     method: string,
     path: string,
@@ -194,6 +207,7 @@ export function spotifyFor(userId: string) {
     attempt = 1,
     refreshed = false,
   ): Promise<T> {
+    if (!patient && Date.now() < quietUntil) throw new SpotifyError(`Spotify asked to wait; ${path.split('?')[0]} left for later`, 429);
     const token = await accessToken(userId, refreshed);
     const response = await fetch(`${API}${path}`, {
       method,
@@ -207,6 +221,10 @@ export function spotifyFor(userId: string) {
     // An access token can be revoked early; refresh once and retry.
     if (response.status === 401 && !refreshed) return request<T>(method, path, body, attempt, true);
 
+    if (response.status === 429 && !patient) {
+      quietUntil = Date.now() + Number(response.headers.get('Retry-After') ?? '30') * 1000;
+      throw new SpotifyError(`Spotify asked to wait; ${path.split('?')[0]} left for later`, 429);
+    }
     if (response.status === 429 && attempt <= 3) {
       const wait = Number(response.headers.get('Retry-After') ?? '1');
       await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 30) * 1000));

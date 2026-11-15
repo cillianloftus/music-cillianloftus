@@ -73,8 +73,21 @@ async function enrichImportedArtists(releaseGroupId: string, timing?: Record<str
     await lane;
     if (timing) timing[name] = Date.now() - start;
   };
-  await Promise.all([timed('musicbrainz', musicBrainzLane(releaseGroupId)), timed('others', otherSourcesLane(releaseGroupId))]);
+  // The other sources are not waited for: they go on beside the next
+  // import, and the run waits for any still going before it ends
+  // (settleBackground). Each import waited for them, though none of them
+  // touch MusicBrainz, the one limit there is.
+  background.push(timed('others', otherSourcesLane(releaseGroupId)).catch((error) => console.warn('Other sources after import failed', error)));
+  await timed('musicbrainz', musicBrainzLane(releaseGroupId));
   await markSettleDue();
+}
+
+/** Lookups an import started and did not wait for: Spotify, Genius, Deezer, Discogs. */
+const background: Promise<unknown>[] = [];
+
+/** Waits for what imports left going in the background, before a run ends. */
+async function settleBackground(): Promise<void> {
+  while (background.length) await Promise.allSettled(background.splice(0));
 }
 
 /** The album's new artists (who they are, other names, pictures), then the rest MusicBrainz knows. */
@@ -88,7 +101,9 @@ async function musicBrainzLane(releaseGroupId: string): Promise<void> {
   for (const { id } of results) {
     try {
       await enrichArtist(id);
-      await fetchArtistImages(id);
+      // Pictures beside the next import: they wait on Spotify, which can ask
+      // for minutes (an import's MusicBrainz step took up to 190 s for it).
+      background.push(fetchArtistImages(id).catch((error) => console.warn('Artist pictures after import failed', id, error)));
     } catch (error) {
       console.warn('Artist enrichment after import failed', id, error);
     }
@@ -102,8 +117,10 @@ async function otherSourcesLane(releaseGroupId: string): Promise<void> {
   // Its Spotify album, when Spotify is connected, so the link is right from the start.
   const owner = await ownerId();
   if (owner && (await connection(owner))) {
-    await linkAlbumsToSpotify(spotifyFor(owner), { only: releaseGroupId }).catch((error) => console.warn('Spotify link after import failed', error));
-    await fillFromSpotify(spotifyFor(owner), releaseGroupId).catch((error) => console.warn('Spotify fill after import failed', error));
+    // Impatient: told to wait, it leaves this for the nightly passes (client.ts).
+    const spotify = spotifyFor(owner, { patient: false });
+    await linkAlbumsToSpotify(spotify, { only: releaseGroupId }).catch((error) => console.warn('Spotify link after import failed', error));
+    await fillFromSpotify(spotify, releaseGroupId).catch((error) => console.warn('Spotify fill after import failed', error));
   }
   // Writers MusicBrainz lacks.
   await fillCreditsFromGenius({ albumId: releaseGroupId, budgetMs: 15_000 }).catch((error) => console.warn('Genius after import failed', error));
@@ -192,13 +209,15 @@ async function importRelease(job: JobRow): Promise<void> {
   const releaseMbid = plan.release.mbid;
   const releaseGroupMbid = plan.releaseGroup.mbid;
   if (!hasArt?.art_key && releaseMbid && releaseGroupMbid) {
-    try {
-      // Its own scan, then its Spotify cover, then the album-wide front.
-      (await storeCoverArt({ releaseId: result.releaseId, releaseMbid, releaseGroupMbid, groupFallback: false })) ??
-        (await findCover(result.releaseId, { replace: false }));
-    } catch (error) {
-      console.warn('Cover art failed', error);
-    }
+    // Beside the next import, not before it: the Cover Art Archive took
+    // 6 to 17 s an album (15 Nov), and never touches MusicBrainz's limit.
+    background.push(
+      (async () => {
+        // Its own scan, then its Spotify cover, then the album-wide front.
+        (await storeCoverArt({ releaseId: result.releaseId, releaseMbid, releaseGroupMbid, groupFallback: false })) ??
+          (await findCover(result.releaseId, { replace: false }));
+      })().catch((error) => console.warn('Cover art failed', error)),
+    );
   }
 
   lap('art');
@@ -257,6 +276,7 @@ export async function runJobs({ budgetMs }: { budgetMs: number }): Promise<numbe
 
   try {
     processed = await work(deadline, token);
+    await settleBackground();
   } finally {
     await release(token).catch(() => {});
   }
