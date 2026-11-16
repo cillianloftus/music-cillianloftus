@@ -460,10 +460,16 @@ export interface ArtistTrack {
  * tenth. A track played a lot but not yet rated still makes the list.
  *
  * Plays have a say only as far as there is listening to go on: none until
- * the artist's most played track has more than a handful, their full 40%
+ * the artist's most played track has more than a handful, their full say
  * from 50. With little history, 1 play against 4 was worth 15 points and
  * put a 96 below 82s (Logic, 15 Nov).
+ *
+ * The rating leads; plays only nudge, up to PLAYS_NUDGE points, so they
+ * settle songs rated alike but never bury a better one. As a 40% share of
+ * the blend, born yesterday (100, two plays counted) sat below 93s played
+ * 68 times (16 Nov): the play history is young and patchy.
  */
+const PLAYS_NUDGE = 4;
 export function favouriteScore(rating: number | null, plays: number, mostPlays: number): number {
   return favouriteFrom(rating, playedShare(plays, mostPlays), playsEvidence(mostPlays));
 }
@@ -482,8 +488,7 @@ function playedShare(plays: number, mostPlays: number): number {
 function favouriteFrom(rating: number | null, played: number | null, evidence: number): number {
   if (evidence === 0 || played === null) return rating ?? 0;
   if (rating === null) return played * 0.85 * evidence;
-  const weight = 0.4 * evidence;
-  return rating * (1 - weight) + played * weight;
+  return rating + PLAYS_NUDGE * (played / 100) * evidence;
 }
 
 /**

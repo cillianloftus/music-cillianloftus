@@ -136,7 +136,7 @@ describe('scrobble sync', () => {
 });
 
 describe('favourites', () => {
-  it('are the best rated until there are plays, then plays count too', async () => {
+  it('are the best rated, plays only settling songs rated alike', async () => {
     const top3 = async () => (await artistTracks('art-x', 'u-owner', 0, 3)).tracks;
     expect((await top3()).map((t) => t.id)).toEqual(['a4', 'a1', 'b1']);
     // All on Spotify, so their missing plays are their own (a song on no
@@ -154,7 +154,10 @@ describe('favourites', () => {
         source: 'lastfm',
       })),
     );
-    expect((await top3())[0]).toMatchObject({ id: 'b2', plays: 40 });
+    // Played forty times, a 60 still does not top the best rated.
+    expect((await top3()).map((t) => t.id)).toEqual(['a4', 'a1', 'b1']);
+    const all = (await artistTracks('art-x', 'u-owner', 0, Infinity)).tracks;
+    expect(all.find((t) => t.id === 'b2')).toMatchObject({ plays: 40 });
   });
 
   it('come a stretch at a time, each in its place, with how many there are in all', async () => {

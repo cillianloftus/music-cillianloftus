@@ -122,9 +122,11 @@ describe('favouriteScore', () => {
     expect(favouriteScore(92, 0, 0)).toBe(92);
   });
 
-  it('lets a heavily played track overtake a slightly better rated one', () => {
+  it('lets plays settle songs rated alike, never bury a better one', () => {
     const most = 200;
-    expect(favouriteScore(90, 200, most)).toBeGreaterThan(favouriteScore(95, 3, most));
+    expect(favouriteScore(94, 200, most)).toBeGreaterThan(favouriteScore(95, 3, most));
+    // born yesterday on 16 Nov: a 100 with two plays counted, against 93s played 68 times.
+    expect(favouriteScore(100, 2, 68)).toBeGreaterThan(favouriteScore(93, 68, 68));
   });
 
   it('does not let a few plays outweigh the rating while history is thin', () => {
@@ -269,8 +271,10 @@ describe('favourites with songs not on streaming', () => {
     // Judged on none, a 93 with 0 plays would sit below every 70-something played 30 times.
     expect(order.indexOf('Griptape')).toBeLessThan(order.indexOf('Middling'));
     expect(order.slice(0, 4)).toContain('Griptape');
-    // A streamable song never played is still judged on that.
+    // A streamable song never played is still judged on that: below a song rated a point
+    // lower but played a lot, though its rating keeps it above the 70s.
     const unplayed = rankFavourites([...tracks.slice(0, 6), song('Skipped', 93, 0)]).map((t) => t.title);
-    expect(unplayed.indexOf('Skipped')).toBeGreaterThan(unplayed.indexOf('Middling'));
+    expect(unplayed.indexOf('Skipped')).toBeGreaterThan(unplayed.indexOf('Top B'));
+    expect(unplayed.indexOf('Skipped')).toBeLessThan(unplayed.indexOf('Middling'));
   });
 });
