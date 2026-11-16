@@ -15,7 +15,8 @@ export async function topByType(userId: string | null, types: string[], limit = 
   // From the user's album scores (album-scores.ts): no query of its own.
   const scores = await albumScores(userId);
   const ids = Object.entries(scores)
-    .filter(([, s]) => types.includes(s.type))
+    // Rated for itself: a single borrowing its album's score is not among the best singles.
+    .filter(([, s]) => types.includes(s.type) && s.own)
     .map(([id]) => id)
     // Fully rated albums rank ahead of a high score on one song (album-scores.ts).
     .sort(byRank(scores))

@@ -26,7 +26,7 @@ describe('album ranking', () => {
   });
 
   it('orders by rank, then score, then id', () => {
-    const a = (rank: number, quality: number) => ({ quality, personal: quality, rated: 1, tracks: 1, type: 'album', released: null, rank });
+    const a = (rank: number, quality: number) => ({ quality, personal: quality, rated: 1, tracks: 1, type: 'album', released: null, rank, own: true });
     const scores: AlbumScores = { x: a(80, 90), y: a(85, 85), z: a(80, 95) };
     expect(['x', 'y', 'z'].sort(byRank(scores))).toEqual(['y', 'z', 'x']);
   });

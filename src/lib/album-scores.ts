@@ -22,6 +22,12 @@ export interface ScoredAlbum {
   released: string | null;
   /** What albums are ranked by (rankScore): the score, as sure as its rating is complete. */
   rank: number;
+  /**
+   * Rated for itself: a song of its own or the album as a whole. A single
+   * whose song only borrows its album's score (inherited.ts) is not, and
+   * ranks below every album that is (Runaway among the best singles, 16 Nov).
+   */
+  own: boolean;
 }
 
 export type AlbumScores = Record<string, ScoredAlbum>;
@@ -55,7 +61,7 @@ export async function albumScores(userId: string | null): Promise<AlbumScores> {
   if (!userId) return {};
   // (Not 'album-scores': standing.ts keeps its own list under that name.)
   // By the scores stamp, not the library's: an import changes no score.
-  return byScores('album-score-map:v5', userId, async () => {
+  return byScores('album-score-map:v6', userId, async () => {
     const [{ results }, { results: detailed }] = await Promise.all([
       env.DB.prepare(
         `SELECT s.release_group_id AS id, s.quality_score AS quality, s.personal_score AS personal,
@@ -64,24 +70,36 @@ export async function albumScores(userId: string | null): Promise<AlbumScores> {
          WHERE s.user_id = ?1`,
       )
         .bind(userId)
-        .all<Omit<ScoredAlbum, 'rank'> & { id: string }>(),
-      // Each album's songs rated in full (a detailed rating), from the ratings outward: a few
-      // thousand rows, where the canonical-edition view would be built whole (98,000).
+        .all<Omit<ScoredAlbum, 'rank' | 'own'> & { id: string }>(),
+      // Each album's songs rated for themselves, and how many in full (a detailed rating), and
+      // albums rated as a whole: from the ratings outward, a few thousand rows, where the
+      // canonical-edition view would be built whole (98,000).
       env.DB.prepare(
-        `SELECT x.release_group_id AS id, count(DISTINCT r.entity_id) AS n
+        `SELECT x.release_group_id AS id, count(DISTINCT r.entity_id) AS rated,
+                count(DISTINCT CASE WHEN r.depth = 'detailed' THEN r.entity_id END) AS n
          FROM rating r JOIN track t ON t.recording_id = r.entity_id JOIN release x ON x.id = t.release_id
-         WHERE r.user_id = ?1 AND r.entity_type = 'recording' AND r.depth = 'detailed'
-         GROUP BY x.release_group_id`,
+         WHERE r.user_id = ?1 AND r.entity_type = 'recording'
+         GROUP BY x.release_group_id
+         UNION ALL
+         SELECT entity_id, 1, 0 FROM rating WHERE user_id = ?1 AND entity_type = 'release_group'`,
       )
         .bind(userId)
-        .all<{ id: string; n: number }>(),
+        .all<{ id: string; rated: number; n: number }>(),
     ]);
-    const inFull = new Map(detailed.map((d) => [d.id, d.n]));
+    const inFull = new Map<string, number>();
+    const ownRated = new Set<string>();
+    for (const d of detailed) {
+      if (d.n) inFull.set(d.id, Math.max(inFull.get(d.id) ?? 0, d.n));
+      if (d.rated) ownRated.add(d.id);
+    }
     const average = results.length ? results.reduce((sum, r) => sum + r.quality, 0) / results.length : 0;
     return Object.fromEntries(
       results.map(({ id, ...score }) => {
         const considered = score.tracks ? (inFull.get(id) ?? 0) / score.tracks : 0;
-        return [id, { ...score, rank: rankScore(score.quality, score.rated, score.tracks, average, considered) }];
+        const own = ownRated.has(id);
+        // Borrowed only: below everything rated for itself, in score order among its kind.
+        const rank = rankScore(score.quality, score.rated, score.tracks, average, considered) - (own ? 0 : 1000);
+        return [id, { ...score, rank, own }];
       }),
     );
   });

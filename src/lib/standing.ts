@@ -114,8 +114,9 @@ export async function albumStandings(userId: string): Promise<StandingAlbum[]> {
   // Scores from the album scores (album-score-map), so only the artists are read here.
   const scores = await albumScores(userId);
   // With the scores: an import adds no scored album (scoresStamp).
-  return byScores('album-standing:v4', userId, async () => {
-    const ids = Object.keys(scores).filter((id) => scores[id]!.quality != null);
+  return byScores('album-standing:v5', userId, async () => {
+    // Rated for itself only: a single borrowing its album's score has no standing of its own.
+    const ids = Object.keys(scores).filter((id) => scores[id]!.quality != null && scores[id]!.own);
     const { results } = await env.DB.prepare(
       `SELECT c.entity_id AS id, c.artist_id, a.name FROM artist_credit c JOIN artist a ON a.id = c.artist_id
        WHERE c.entity_type = 'release_group' AND c.role = 'primary' AND c.entity_id IN (SELECT value FROM json_each(?1))
