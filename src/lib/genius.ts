@@ -222,7 +222,40 @@ export async function geniusAlbumCover(
     const cover = song.album?.cover_art_url;
     if (song.album && normaliseTitle(song.album.name) === albumKey && cover && !/default_cover/i.test(cover)) return cover;
   }
-  return null;
+  // A compilation's songs are filed under the albums they first came out on
+  // (Quadeca's Melodic Hits under From Me To You, 16 Nov), so then the album's
+  // own page, by its address, its cover read from the page.
+  return geniusAlbumPageCover(query.artist, query.title, fetcher).catch(() => null);
+}
+
+/** "Quadeca’s Melodic Hits" as Genius writes it in an address: "Quadeca-s-melodic-hits". */
+export function geniusSlug(text: string, capitalise = true): string {
+  const slug = text
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .replace(/&/g, 'and')
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+  return capitalise ? slug.charAt(0).toUpperCase() + slug.slice(1) : slug;
+}
+
+/**
+ * An album's cover from its Genius page (genius.com/albums/Artist/Title),
+ * taken only when the page is that album's: its title names this artist
+ * and this album. The API has no album search for a client token.
+ */
+async function geniusAlbumPageCover(artist: string, title: string, fetcher: typeof fetch): Promise<string | null> {
+  const res = await fetcher(`https://genius.com/albums/${geniusSlug(artist)}/${geniusSlug(title)}`, {
+    headers: { accept: 'text/html', 'user-agent': 'Mozilla/5.0 (compatible; music-library)' },
+  });
+  if (!res.ok) return null;
+  const html = await res.text();
+  const pageTitle = /<title>([^<]*)/i.exec(html)?.[1] ?? '';
+  const named = normaliseTitle(pageTitle.replace(/&#39;|&rsquo;|&#x27;/g, '’'));
+  if (!named.includes(normaliseTitle(title)) || !named.includes(normaliseTitle(artist))) return null;
+  const cover = /<meta property="og:image" content="([^"]+)"/i.exec(html)?.[1] ?? null;
+  return cover && /^https:\/\/images\.genius\.com\//.test(cover) && !/default_cover/i.test(cover) ? cover : null;
 }
 
 /**

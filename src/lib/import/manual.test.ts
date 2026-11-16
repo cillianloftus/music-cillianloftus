@@ -198,6 +198,26 @@ describe('an album’s cover on Genius', () => {
   });
 });
 
+describe('a compilation’s cover on Genius', () => {
+  it('comes from the album’s own page when its songs are filed under another album', async () => {
+    const { geniusAlbumCover, geniusSlug } = await import('../genius');
+    expect(geniusSlug('Quadeca’s Melodic Hits')).toBe('Quadeca-s-melodic-hits');
+    const fetcher = (async (url: string) => {
+      if (url.startsWith('https://genius.com/albums/Quadeca/Quadeca-s-melodic-hits')) {
+        return new Response(
+          '<html><head><title>Quadeca - Quadeca’s Melodic Hits Lyrics and Tracklist | Genius</title><meta property="og:image" content="https://images.genius.com/melodic.jpg" /></head></html>',
+        );
+      }
+      const path = new URL(url).pathname;
+      const body = path.startsWith('/search')
+        ? { hits: [{ result: { id: 1, title: 'Shades of Us', primary_artist: { name: 'Quadeca' } } }] }
+        : { song: { album: { name: 'From Me To You', cover_art_url: 'https://images.genius.com/fmty.png' } } };
+      return new Response(JSON.stringify({ response: body }));
+    }) as typeof fetch;
+    expect(await geniusAlbumCover('t', { artist: 'Quadeca', title: 'Quadeca’s Melodic Hits', tracks: ['Shades of Us'] }, fetcher)).toBe('https://images.genius.com/melodic.jpg');
+  });
+});
+
 describe('songs picked for lines', () => {
   it('are kept while their line still has their title, by any artist, and dropped when it changed', async () => {
     const { seedLibrary } = await import('../../test/db');
