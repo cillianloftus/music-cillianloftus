@@ -6,6 +6,7 @@ import ResultList from '../../components/ResultList.astro';
 import SpotifyPanel from '../../components/SpotifyPanel.astro';
 import { getDefinition } from '../../lib/definitions';
 import { runDefinition } from '../../lib/query/run';
+import { playableSongs } from '../../lib/audio';
 import { encodeDefinition } from '../../lib/query/builder';
 
 const saved = await getDefinition(Astro.params.id!);
@@ -18,6 +19,11 @@ const results = await runDefinition(saved.definition, {
   excludes: saved.excludes,
 });
 const user = Astro.locals.user;
+// Your own uploaded audio for its tracks: Play your files (the owner only, /play).
+const playable =
+  user && user.id === saved.user_id && saved.definition.entity === 'recording'
+    ? (await playableSongs(results.map((r) => r.id))).size
+    : 0;
 const artSrc = saved.art_mode === 'uploaded' && saved.art_key ? `/playlist/${saved.id}/cover.jpg` : `/playlist/${saved.id}/art.svg`;
 
 const noun = saved.definition.entity === 'recording' ? 'track' : saved.definition.entity === 'release_group' ? 'album' : 'artist';
@@ -67,6 +73,11 @@ const summary = [
           {
             user?.id === saved.user_id && (
               <p class="actions">
+                {playable > 0 && (
+                  <a class="button button--primary" href={`/play?playlist=${saved.id}`} target="music-player">
+                    Play your files ({playable})
+                  </a>
+                )}
                 <a class="button" href={`/query?d=${encodeDefinition(saved.definition)}&saved=${saved.id}`}>Edit filters</a>
                 <a class="button button--quiet" href={`/edit/definition/${saved.id}`}>Edit as JSON</a>
               </p>

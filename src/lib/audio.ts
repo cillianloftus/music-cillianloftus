@@ -207,19 +207,30 @@ export async function albumQueue(albumId: string): Promise<PlayableTrack[]> {
 
 /** One song, if you have its audio: for a track page, a long-press, or a song alone. */
 export async function songQueue(recordingId: string): Promise<PlayableTrack[]> {
+  return songsQueue([recordingId]);
+}
+
+/**
+ * Songs you have audio for, in the order given (a playlist's), each once,
+ * the rest left out: for playing a playlist from your own files.
+ */
+export async function songsQueue(recordingIds: string[]): Promise<PlayableTrack[]> {
+  const playable = await playableSongs(recordingIds);
+  const ids = [...new Set(recordingIds.filter((id) => playable.has(id)))].slice(0, 500);
+  if (ids.length === 0) return [];
   const { results } = await env.DB.prepare(
     `${PLAYABLE}
-     FROM recording r
+     FROM json_each(?1) j JOIN recording r ON r.id = j.value
      JOIN file f ON f.id = (SELECT id FROM file WHERE recording_id = r.id AND audio_key IS NOT NULL ORDER BY uploaded_at DESC LIMIT 1)
      LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
      LEFT JOIN release_group g ON g.id = ra.release_group_id
      LEFT JOIN track t ON t.recording_id = r.id AND t.release_id = (SELECT c.release_id FROM v_release_group_canonical c WHERE c.release_group_id = g.id)
-     LEFT JOIN release x ON x.id = t.release_id
-     WHERE r.id = ?1 LIMIT 1`,
+     LEFT JOIN release x ON x.id = t.release_id`,
   )
-    .bind(recordingId)
+    .bind(JSON.stringify(ids))
     .all<PlayableTrack>();
-  return results;
+  const byId = new Map(results.map((r) => [r.recordingId, r]));
+  return ids.map((id) => byId.get(id)).filter((t): t is PlayableTrack => t !== undefined);
 }
 
 /** Which of some songs you have audio for. */

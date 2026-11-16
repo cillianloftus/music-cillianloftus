@@ -8,14 +8,23 @@
  */
 import Base from '../layouts/Base.astro';
 import { ownerId } from '../lib/auth/user';
-import { albumQueue, songQueue, type PlayableTrack } from '../lib/audio';
+import { albumQueue, songQueue, songsQueue, type PlayableTrack } from '../lib/audio';
+import { getDefinition } from '../lib/definitions';
+import { selectIds } from '../lib/query/run';
 
 const user = Astro.locals.user;
 const owner = user ? user.id === (await ownerId()) : false;
 const albumId = Astro.url.searchParams.get('album');
 const trackId = Astro.url.searchParams.get('track');
+const playlistId = Astro.url.searchParams.get('playlist');
 let queue: PlayableTrack[] = [];
-if (owner) queue = albumId ? await albumQueue(albumId) : trackId ? await songQueue(trackId) : [];
+if (owner && playlistId) {
+  // A playlist of tracks: its songs you have audio for, in its order.
+  const saved = await getDefinition(playlistId);
+  if (saved && saved.definition.entity === 'recording') {
+    queue = await songsQueue(await selectIds(saved.definition, { userId: saved.user_id, pins: saved.pins, excludes: saved.excludes }));
+  }
+} else if (owner) queue = albumId ? await albumQueue(albumId) : trackId ? await songQueue(trackId) : [];
 const start = Math.max(0, trackId ? queue.findIndex((t) => t.recordingId === trackId) : 0);
 const first = queue[start];
 ---
@@ -29,7 +38,7 @@ const first = queue[start];
         <div class="none">
           <h1>Nothing to play here</h1>
           <p class="muted">
-            None of {albumId ? 'this album' : 'this song'} is uploaded yet. <a href="/manage/files/upload">Upload your music</a>.
+            None of {playlistId ? 'this playlist' : albumId ? 'this album' : 'this song'} is uploaded yet. <a href="/manage/files/upload">Upload your music</a>.
           </p>
         </div>
       ) : (
@@ -72,6 +81,11 @@ const first = queue[start];
             </button>
           </div>
           <p class="status muted" role="status" data-status></p>
+          {/* Kept on this device: plays with no signal (the service worker serves it). */}
+          <p class="keep">
+            <button type="button" class="keep-button" data-keep hidden>Keep on this device</button>
+            <span class="muted small" data-keep-status></span>
+          </p>
           {queue.length > 1 && (
             <ol class="queue" role="list" data-list>
               {queue.map((t, i) => (
@@ -114,9 +128,41 @@ const first = queue[start];
       if (!listen?.startedAt || listen.heardMs < 1000) return;
       const body = JSON.stringify({ recordingId: listen.recordingId, playedAt: listen.startedAt, msPlayed: Math.round(listen.heardMs) });
       listen = null;
+      if (!navigator.onLine) return hold(body);
       if (beacon && navigator.sendBeacon) navigator.sendBeacon('/api/write/audio/played', new Blob([body], { type: 'application/json' }));
-      else void fetch('/api/write/audio/played', { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true }).catch(() => {});
+      else
+        void fetch('/api/write/audio/played', { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true })
+          .then((res) => !res.ok && res.status >= 500 && hold(body))
+          .catch(() => hold(body));
     };
+    // Listens heard offline wait on this device and go when there is a network again.
+    const HELD = 'listens-waiting';
+    const held = (): string[] => {
+      try {
+        return JSON.parse(localStorage.getItem(HELD) || '[]') as string[];
+      } catch {
+        return [];
+      }
+    };
+    const hold = (body: string) => {
+      try {
+        localStorage.setItem(HELD, JSON.stringify([...held(), body].slice(-500)));
+      } catch {}
+    };
+    const sendHeld = async () => {
+      const waiting = held();
+      if (!waiting.length || !navigator.onLine) return;
+      const left: string[] = [];
+      for (const body of waiting) {
+        const res = await fetch('/api/write/audio/played', { method: 'POST', headers: { 'content-type': 'application/json' }, body }).catch(() => null);
+        if (!res || res.status >= 500) left.push(body);
+      }
+      try {
+        localStorage.setItem(HELD, JSON.stringify(left));
+      } catch {}
+    };
+    void sendHeld();
+    addEventListener('online', () => void sendHeld());
     const hear = () => {
       if (!listen) return;
       const now = performance.now();
@@ -277,6 +323,84 @@ const first = queue[start];
       channel?.postMessage({ type: 'stopped' });
     });
 
+    // Keep on this device: every song in the queue, this page and what it loads, so it all
+    // plays with no network (public/sw.js serves them). Listed on the offline page.
+    const keepButton = $<HTMLButtonElement>('[data-keep]')!;
+    const keepStatus = $('[data-keep-status]')!;
+    const KEPT = 'offline-kept';
+    const here = location.pathname + location.search;
+    const keptList = (): { url: string; title: string; count: number }[] => {
+      try {
+        return JSON.parse(localStorage.getItem(KEPT) || '[]');
+      } catch {
+        return [];
+      }
+    };
+    const setKept = (list: { url: string; title: string; count: number }[]) => {
+      try {
+        localStorage.setItem(KEPT, JSON.stringify(list));
+      } catch {}
+    };
+    const keptHere = async () => {
+      if (!('caches' in window)) return false;
+      const cache = await caches.open('audio-v1');
+      for (const t of queue) if (!(await cache.match(`/audio/${t.fileId}`))) return false;
+      return true;
+    };
+    const paintKeep = async () => {
+      if (!('caches' in window) || !navigator.serviceWorker?.controller) return;
+      const kept = await keptHere();
+      keepButton.hidden = false;
+      keepButton.textContent = kept ? 'Remove from this device' : 'Keep on this device';
+      keepStatus.textContent = kept ? 'Plays with no signal.' : '';
+    };
+    keepButton.addEventListener('click', async () => {
+      const audioCache = await caches.open('audio-v1');
+      const pageCache = await caches.open('player-v1');
+      keepButton.disabled = true;
+      if (await keptHere()) {
+        for (const t of queue) await audioCache.delete(`/audio/${t.fileId}`);
+        await pageCache.delete(here);
+        setKept(keptList().filter((k) => k.url !== here));
+      } else {
+        try {
+          for (const [i, t] of queue.entries()) {
+            keepStatus.textContent = `Saving ${i + 1} of ${queue.length}…`;
+            if (await audioCache.match(`/audio/${t.fileId}`)) continue;
+            // The whole file (no range), kept as it came.
+            const res = await fetch(`/audio/${t.fileId}`, { cache: 'no-store' });
+            if (!res.ok) throw new Error(String(res.status));
+            await audioCache.put(`/audio/${t.fileId}`, res);
+          }
+          // This page, and its scripts, styles and covers, for opening with no network.
+          await pageCache.put(here, await fetch(here, { cache: 'no-store' }));
+          const loaded = performance
+            .getEntriesByType('resource')
+            .map((e) => new URL(e.name))
+            .filter((u) => u.origin === location.origin && (u.pathname.startsWith('/_astro/') || u.pathname.startsWith('/art/')));
+          await Promise.all(
+            loaded.map((u) =>
+              fetch(u)
+                .then(async (r) => {
+                  if (r.ok) await pageCache.put(u.href, r);
+                })
+                .catch(() => {}),
+            ),
+          );
+          const t = queue[0]!;
+          const title = new URLSearchParams(location.search).has('album') ? (t.album ?? t.title) : queue.length > 1 ? `${queue.length} songs` : t.title;
+          setKept([{ url: here, title, count: queue.length }, ...keptList().filter((k) => k.url !== here)]);
+        } catch {
+          keepStatus.textContent = 'Saving stopped (no space, or the network went). Try again.';
+          keepButton.disabled = false;
+          return;
+        }
+      }
+      keepButton.disabled = false;
+      await paintKeep();
+    });
+    void paintKeep();
+
     load(index, true);
   }
 </script>
@@ -375,6 +499,36 @@ const first = queue[start];
 
   .ctl [hidden] {
     display: none;
+  }
+
+  .keep {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2) var(--space-3);
+    margin: 0;
+  }
+
+  .keep-button {
+    min-height: var(--target);
+    padding: 0 var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-1);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--step--1);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .keep-button[hidden] {
+    display: none;
+  }
+
+  .small {
+    font-size: var(--step--1);
   }
 
   .status:empty {
