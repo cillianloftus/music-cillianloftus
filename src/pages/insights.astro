@@ -6,7 +6,6 @@
 import Base from '../layouts/Base.astro';
 import PageHeader from '../components/PageHeader.astro';
 import BarChart from '../components/BarChart.astro';
-import { hueOf } from '../lib/art/playlist';
 import { ownerId } from '../lib/auth/user';
 import { scoreHue } from '../lib/format';
 import { insights } from '../lib/insights';
@@ -126,14 +125,40 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             </div>
           </dl>
 
-          <section aria-labelledby="patterns-heading">
+          {/* Where to go on a long page. */}
+          <nav class="jumps" aria-label="Sections">
+            <a href="#stands-out">Stands out</a>
+            <a href="#scores">Scores</a>
+            <a href="#over-time">Over time</a>
+            <a href="#taste">Your taste</a>
+            <a href="#artists">Artists</a>
+          </nav>
+
+          <section aria-labelledby="patterns-heading" id="stands-out">
             <h2 id="patterns-heading">What stands out</h2>
-            {findings.length > 0 ? <Findings findings={findings} show={9} rotate="insights" /> : <p>Nothing stands out yet.</p>}
+            {findings.length > 0 ? <Findings findings={findings} show={4} rotate="insights" /> : <p>Nothing stands out yet.</p>}
+          </section>
+
+          <div class="group" id="scores">
+            <h2 class="group-heading">Scores</h2>
+            <div class="cards">
+          <section aria-labelledby="spread-heading" class="card">
+            <h3 id="spread-heading">How scores spread</h3>
+            <BarChart
+              title="Rated tracks by score band"
+              valueLabel="Tracks"
+              bars={data.spread.map((b) => ({
+                label: b.from === 90 ? '90+' : `${b.from}s`,
+                value: b.count,
+                detail: `${plural(b.count, 'track')} scored ${b.from}–${b.to}`,
+                colour: `oklch(0.66 0.15 ${scoreHue(b.from + 5)})`,
+              }))}
+            />
           </section>
 
           {minds.length > 0 && (
-            <section aria-labelledby="minds-heading">
-              <h2 id="minds-heading">Changed your mind</h2>
+            <section aria-labelledby="minds-heading" class="card">
+              <h3 id="minds-heading">Changed your mind</h3>
               <ol role="list" class="minds">
                 {minds.map((m) => {
                   const up = m.now > m.was;
@@ -157,23 +182,32 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             </section>
           )}
 
-          <section aria-labelledby="spread-heading">
-            <h2 id="spread-heading">How scores spread</h2>
-            <BarChart
-              title="Rated tracks by score band"
-              valueLabel="Tracks"
-              bars={data.spread.map((b) => ({
-                label: b.from === 90 ? '90+' : `${b.from}s`,
-                value: b.count,
-                detail: `${plural(b.count, 'track')} scored ${b.from}–${b.to}`,
-                colour: `oklch(0.66 0.15 ${scoreHue(b.from + 5)})`,
-              }))}
-            />
-          </section>
+            </div>
+          </div>
 
-          {data.decades.length > 0 && (
-            <section aria-labelledby="decades-heading">
-              <h2 id="decades-heading">By decade</h2>
+          <div class="group" id="over-time">
+            <h2 class="group-heading">Over time</h2>
+            <div class="cards">
+          {data.years.length > 0 && (
+            <section aria-labelledby="years-heading" class="card">
+              <h3 id="years-heading">Year by year</h3>
+              <ul role="list" class="years">
+                {data.years.map((y) => (
+                  <li>
+                    <a href={`/year/${y.key}`} style={`--h: ${scoreHue(y.average)}`}>
+                      <span class="year tabular">{y.key}</span>
+                      <span class="avg tabular">{Math.round(y.average)}</span>
+                      <span class="n tabular">{plural(y.count, 'track')}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {data.decades.length > 2 && (
+            <section aria-labelledby="decades-heading" class="card">
+              <h3 id="decades-heading">By decade</h3>
               <BarChart
                 title="Average album score by decade of release" min={floorOf(data.decades.map((d) => d.average))}
                 valueLabel="Average score"
@@ -189,26 +223,27 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             </section>
           )}
 
-          {data.years.length > 0 && (
-            <section aria-labelledby="years-heading">
-              <h2 id="years-heading">Year by year</h2>
-              <ul role="list" class="years">
-                {data.years.map((y) => (
-                  <li>
-                    <a href={`/year/${y.key}`} style={`--h: ${scoreHue(y.average)}`}>
-                      <span class="year tabular">{y.key}</span>
-                      <span class="avg tabular">{Math.round(y.average)}</span>
-                      <span class="n tabular">{plural(y.count, 'track')}</span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
+          {data.months.length > 1 && (
+            <section aria-labelledby="months-heading" class="card">
+              <h3 id="months-heading">When the rating happened</h3>
+              <BarChart
+                title="Ratings made per month"
+                valueLabel="Ratings"
+                labelEvery={Math.max(1, Math.ceil(data.months.length / 8))}
+                bars={data.months.map((m) => ({ label: monthLabel(m.month), value: m.count, detail: plural(m.count, 'rating') }))}
+              />
             </section>
           )}
 
+            </div>
+          </div>
+
+          <div class="group" id="taste">
+            <h2 class="group-heading">Your taste</h2>
+            <div class="cards">
           {data.families.length > 0 && (
-            <section aria-labelledby="families-heading">
-              <h2 id="families-heading">Genre families</h2>
+            <section aria-labelledby="families-heading" class="card">
+              <h3 id="families-heading">Genre families</h3>
               <BarChart
                 title="Average track score by genre family" min={floorOf(data.families.map((f) => f.average))}
                 orientation="horizontal"
@@ -218,15 +253,33 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
                   label: f.label,
                   value: Math.round(f.average),
                   detail: `average ${Math.round(f.average)} across ${plural(f.count, 'track')}`,
-                  colour: `oklch(0.64 0.12 ${hueOf(f.label)})`,
+                  colour: `oklch(0.66 0.15 ${scoreHue(f.average)})`,
                 }))}
               />
             </section>
           )}
 
+          {deep && tells(deep.axes) && (
+            <section aria-labelledby="axes-heading" class="card">
+              <h3 id="axes-heading">What you rate highest</h3>
+              {axisLead && (
+                <p class="lead-line">
+                  <strong>{axisLead.label}</strong> earns your best marks, at {Math.round(axisLead.average) / 10} out of 10 on average.
+                </p>
+              )}
+              <BarChart
+                title="Average axis score" min={floorOf(deep.axes.map((b) => b.average))}
+                orientation="horizontal"
+                valueLabel="Average (out of 100)"
+                max={100}
+                bars={bandBars(deep.axes, 'rating')}
+              />
+            </section>
+          )}
+
           {deep && tells(deep.length) && (
-            <section aria-labelledby="length-heading" class="finding">
-              <h2 id="length-heading">Song length</h2>
+            <section aria-labelledby="length-heading" class="card">
+              <h3 id="length-heading">Song length</h3>
               {sweetSpot && (
                 <p class="lead-line">
                   Your sweet spot is <strong>{sweetSpot.best.label.toLowerCase()}</strong>: an average of {Math.round(sweetSpot.best.average)}
@@ -238,8 +291,8 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
           )}
 
           {tells(tempo) && (
-            <section aria-labelledby="tempo-heading" class="finding">
-              <h2 id="tempo-heading">Tempo</h2>
+            <section aria-labelledby="tempo-heading" class="card">
+              <h3 id="tempo-heading">Tempo</h3>
               {tempoLead && (
                 <p class="lead-line">
                   Your sweet spot is <strong>{tempoLead.best.label.replace(/^Under/, 'under')}</strong>: an average of {Math.round(tempoLead.best.average)}
@@ -250,33 +303,9 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             </section>
           )}
 
-          {gems.length >= 3 && (
-            <section aria-labelledby="gems-heading" class="finding">
-              <h2 id="gems-heading">Hidden gems</h2>
-              <p class="lead-line">
-                Your best-rated tracks that fewer than {FEW_LISTENERS.toLocaleString('en-GB')} people listen to on ListenBrainz
-                {crowd && <>; the middle track you rate has {compactNumber.format(crowd.median)} listeners there</>}.
-              </p>
-              <RowList>
-                {gems.map((g) => {
-                  const place = gemPlaces[g.id];
-                  const artist = g.credits.filter((c) => c.role === 'primary').map((c) => c.name).join(', ');
-                  return (
-                    <MediaRow href={`/track/${g.id}`} title={g.title} artKey={place?.art_key ?? null} artTitle={place?.album_title ?? g.title} score={{ quality: g.score, personal: null }}>
-                      <span>
-                        {artist}
-                        {g.listeners !== null && ` · ${g.listeners.toLocaleString('en-GB')} ${g.listeners === 1 ? 'listener' : 'listeners'}`}
-                      </span>
-                    </MediaRow>
-                  );
-                })}
-              </RowList>
-            </section>
-          )}
-
           {deep && tells(deep.position) && (
-            <section aria-labelledby="position-heading" class="finding">
-              <h2 id="position-heading">Where it sits on the album</h2>
+            <section aria-labelledby="position-heading" class="card">
+              <h3 id="position-heading">Where it sits on the album</h3>
               {placeLead && (
                 <p class="lead-line">
                   You rate <strong>{placeLead.best.key === '0' ? 'openers' : placeLead.best.key === '3' ? 'closers' : `the ${placeLead.best.label.toLowerCase()}`}</strong> highest, at {Math.round(placeLead.best.average)} on average.
@@ -287,8 +316,8 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
           )}
 
           {deep && solo && guest && tells(deep.features) && (
-            <section aria-labelledby="features-heading" class="finding">
-              <h2 id="features-heading">Solo or with a guest</h2>
+            <section aria-labelledby="features-heading" class="card">
+              <h3 id="features-heading">Solo or with a guest</h3>
               <p class="lead-line">
                 {Math.round(guest.average) === Math.round(solo.average) ? (
                   <>A guest makes no difference: both average {Math.round(solo.average)}.</>
@@ -304,8 +333,8 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
           )}
 
           {deep && (tells(deep.ageByYear) || (deep.ageLink && Math.abs(deep.ageLink.r) >= 0.15)) && (
-            <section aria-labelledby="age-heading" class="finding">
-              <h2 id="age-heading">How old they were</h2>
+            <section aria-labelledby="age-heading" class="card">
+              <h3 id="age-heading">How old they were</h3>
               {deep.ageLink && (
                 <p class="lead-line">
                   {Math.abs(deep.ageLink.r) < 0.15 ? (
@@ -335,39 +364,15 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             </section>
           )}
 
-          {deep && tells(deep.axes) && (
-            <section aria-labelledby="axes-heading" class="finding">
-              <h2 id="axes-heading">What you rate highest</h2>
-              {axisLead && (
-                <p class="lead-line">
-                  <strong>{axisLead.label}</strong> earns your best marks, at {Math.round(axisLead.average) / 10} out of 10 on average.
-                </p>
-              )}
-              <BarChart
-                title="Average axis score" min={floorOf(deep.axes.map((b) => b.average))}
-                orientation="horizontal"
-                valueLabel="Average (out of 100)"
-                max={100}
-                bars={bandBars(deep.axes, 'rating')}
-              />
-            </section>
-          )}
+            </div>
+          </div>
 
-          {data.months.length > 1 && (
-            <section aria-labelledby="months-heading">
-              <h2 id="months-heading">When the rating happened</h2>
-              <BarChart
-                title="Ratings made per month"
-                valueLabel="Ratings"
-                labelEvery={Math.max(1, Math.ceil(data.months.length / 8))}
-                bars={data.months.map((m) => ({ label: monthLabel(m.month), value: m.count, detail: plural(m.count, 'rating') }))}
-              />
-            </section>
-          )}
-
+          <div class="group" id="artists">
+            <h2 class="group-heading">Artists</h2>
+            <div class="cards">
           {data.artists.length > 0 && (
-            <section aria-labelledby="artists-heading">
-              <h2 id="artists-heading">Most rated</h2>
+            <section aria-labelledby="artists-heading" class="card">
+              <h3 id="artists-heading">Most rated</h3>
               <ol role="list" class="artists">
                 {data.artists.map((a, i) => (
                   <li>
@@ -382,6 +387,32 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
               </ol>
             </section>
           )}
+          {gems.length >= 3 && (
+            <section aria-labelledby="gems-heading" class="card">
+              <h3 id="gems-heading">Hidden gems</h3>
+              <p class="lead-line">
+                Your best-rated tracks that fewer than {FEW_LISTENERS.toLocaleString('en-GB')} people listen to on ListenBrainz
+                {crowd && <>; the middle track you rate has {compactNumber.format(Math.round(crowd.median))} listeners there</>}.
+              </p>
+              <RowList>
+                {gems.map((g) => {
+                  const place = gemPlaces[g.id];
+                  const artist = g.credits.filter((c) => c.role === 'primary').map((c) => c.name).join(', ');
+                  return (
+                    <MediaRow href={`/track/${g.id}`} title={g.title} artKey={place?.art_key ?? null} artTitle={place?.album_title ?? g.title} score={{ quality: g.score, personal: null }}>
+                      <span>
+                        {artist}
+                        {g.listeners !== null && ` · ${g.listeners.toLocaleString('en-GB')} ${g.listeners === 1 ? 'listener' : 'listeners'}`}
+                      </span>
+                    </MediaRow>
+                  );
+                })}
+              </RowList>
+            </section>
+          )}
+
+            </div>
+          </div>
         </>
       )
     }
@@ -399,7 +430,7 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
      score now, and the move, the numbers in columns that line up. */
   .minds {
     display: grid;
-    margin: var(--space-3) 0 0;
+    margin: 0;
     padding: 0;
     list-style: none;
   }
@@ -453,7 +484,81 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
   .page {
     display: grid;
     gap: var(--space-7);
-    --content-max: 52rem;
+    --content-max: 72rem;
+  }
+
+  /* The page's parts, a tap away: a row of chips under the title. */
+  .jumps {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: calc(var(--space-5) * -1);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .jumps a {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.25rem;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 650;
+    text-decoration: none;
+  }
+
+  .jumps a:hover {
+    border-color: var(--text-subtle);
+    color: var(--text);
+  }
+
+  /* A group: its heading, then its charts as cards, two across where there is room. */
+  .group {
+    display: grid;
+    gap: var(--space-4);
+    scroll-margin-top: var(--space-5);
+  }
+
+  #stands-out {
+    scroll-margin-top: var(--space-5);
+  }
+
+  .cards {
+    display: grid;
+    gap: var(--space-4);
+    align-items: start;
+  }
+
+  @media (min-width: 52rem) {
+    .cards {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  /* A card on its own, or the odd one at the end, takes the whole row. */
+  @media (min-width: 52rem) {
+    .cards > :last-child:nth-child(odd) {
+      grid-column: 1 / -1;
+    }
+  }
+
+  .card {
+    display: grid;
+    gap: var(--space-3);
+    min-width: 0;
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .card h3 {
+    margin: 0;
+    font-size: var(--step-1);
+    letter-spacing: -0.01em;
   }
 
   header {
@@ -464,6 +569,10 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
   h2 {
     font-size: var(--step-2);
     letter-spacing: -0.02em;
+  }
+
+  .group-heading {
+    margin: 0;
   }
 
   .lead {
@@ -511,7 +620,7 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
   }
 
   .artists {
-    margin: var(--space-3) 0 0;
+    margin: 0;
     padding: 0;
     list-style: none;
   }
@@ -521,7 +630,7 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
     grid-template-columns: 1.5rem minmax(0, 1fr) auto 3ch;
     align-items: baseline;
     gap: var(--space-3);
-    padding: var(--space-3) 0;
+    padding: var(--space-2) 0;
     border-bottom: 1px solid var(--border);
   }
 
@@ -544,10 +653,15 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
     text-align: right;
   }
 
+  /* What the chart says, in a line above it. */
   .lead-line {
-    margin: var(--space-1) 0 var(--space-4);
-    font-size: var(--step-1);
+    margin: 0;
+    color: var(--text-muted);
     text-wrap: pretty;
+  }
+
+  .lead-line strong {
+    color: var(--text);
   }
 
   .lead-line strong {
