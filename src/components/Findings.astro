@@ -21,7 +21,8 @@ interface Props {
   /** Offer the ones not shown under "N more" (on by default). */
   moreList?: boolean;
 }
-const { findings, show = findings.length, rotate, moreList = true } = Astro.props;
+// Three unless a page says otherwise: six or more cards in a row were a wall (16 Nov).
+const { findings, show = 3, rotate, moreList = true } = Astro.props;
 const first = findings.slice(0, show);
 const more = findings.slice(show);
 ---

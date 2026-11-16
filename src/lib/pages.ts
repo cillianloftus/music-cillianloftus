@@ -245,7 +245,11 @@ export async function genreDetail(id: string, deep = false): Promise<GenreDetail
   };
 }
 
-/** Albums in the genre (or beneath it, when deep): rated ones by score first, then the rest by date. */
+/**
+ * Albums, mixtapes and EPs in the genre (or beneath it, when deep): rated
+ * ones by score first, then the rest by date. Not singles: a single is its
+ * song, already among the favourite tracks, and they crowded out the albums.
+ */
 export async function genreAlbums(id: string, viewerId: string | null, limit = 24, deep = false): Promise<ReleaseGroupSummary[]> {
   const [{ results }, scores] = await Promise.all([
     env.DB.prepare(
@@ -253,7 +257,7 @@ export async function genreAlbums(id: string, viewerId: string | null, limit = 2
        SELECT DISTINCT vg.release_group_id AS id, g.first_release_date
        FROM v_release_group_genre vg
        JOIN release_group g ON g.id = vg.release_group_id
-       WHERE vg.genre_id IN (SELECT id FROM tree)
+       WHERE vg.genre_id IN (SELECT id FROM tree) AND g.type IN ('album', 'mixtape', 'ep')
        ORDER BY g.first_release_date DESC`,
     )
       .bind(id)
