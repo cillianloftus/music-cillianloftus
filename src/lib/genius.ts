@@ -324,7 +324,9 @@ export async function fillCreditsFromGenius({
      FROM recording r
      WHERE r.genius_url IS NULL
        AND NOT EXISTS (SELECT 1 FROM lookup_log l WHERE l.source = 'genius' AND l.entity_id = r.id AND l.looked_at > datetime('now', '-30 days'))
-       AND (?1 IS NULL OR r.id IN (SELECT t.recording_id FROM release x JOIN track t ON t.release_id = x.id WHERE x.release_group_id = ?1))
+       -- One album's songs is a seek on its tracks; "?1 IS NULL OR r.id IN (...)" in one
+       -- statement read every recording, 47,000 rows after each import (16 Nov).
+       AND ${albumId ? 'r.id IN (SELECT t.recording_id FROM release x JOIN track t ON t.release_id = x.id WHERE x.release_group_id = ?1)' : '?1 IS NULL'}
      LIMIT ?2`,
   )
     .bind(albumId ?? null, limit)

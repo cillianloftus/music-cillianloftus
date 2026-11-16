@@ -242,25 +242,47 @@ async function markCredits(userId: string, id: string, entity: CreditTarget, bef
 export async function artistForCredit(name: string, { create }: { create: boolean }): Promise<{ id: string; created: boolean }> {
   const clean = name.trim();
   if (!clean || clean.length > 200) throw new EditError('Give the artist’s name.');
+  // By name, then by alias: two seeks on case-blind indexes (0080). As one
+  // statement with an OR, every artist and alias was read: 55,000 rows a name.
   const { results } = await env.DB.prepare(
-    `SELECT DISTINCT a.id, a.name FROM artist a LEFT JOIN artist_alias x ON x.artist_id = a.id
-     WHERE a.name = ?1 COLLATE NOCASE OR x.name = ?1 COLLATE NOCASE`,
+    `SELECT id, name FROM artist WHERE name = ?1 COLLATE NOCASE
+     UNION
+     SELECT a.id, a.name FROM artist_alias x JOIN artist a ON a.id = x.artist_id WHERE x.name = ?1 COLLATE NOCASE`,
   )
     .bind(clean)
     .all<{ id: string; name: string }>();
   let matches = results;
   if (matches.length === 0) {
     // Accents and punctuation: "Beyonce" finds "Beyoncé".
-    const key = normaliseName(clean);
-    const all = await env.DB.prepare(`SELECT id, name FROM artist`).all<{ id: string; name: string }>();
-    matches = all.results.filter((a) => normaliseName(a.name) === key);
+    matches = (await namesByKey()).get(normaliseName(clean)) ?? [];
   }
   if (matches.length > 1) throw new EditError(`More than one artist is called “${clean}”. Give them distinct names first.`);
   if (matches.length === 1) return { id: matches[0]!.id, created: false };
   if (!create) throw new EditError(`There is no artist called “${clean}”.`);
   const id = crypto.randomUUID();
   await env.DB.prepare(`INSERT INTO artist (id, name, sort_name, source) VALUES (?, ?, ?, 'manual')`).bind(id, clean, clean).run();
+  if (keyed?.db === env.DB) keyed.names.set(normaliseName(clean), [{ id, name: clean }]);
   return { id, created: true };
+}
+
+/**
+ * Every artist by their name with accents and punctuation aside, read once
+ * and kept a few minutes in this Worker, for this database only: a run
+ * filling credits looks up thousands of names, and reading every artist for
+ * each one that missed read 60 million rows on 16 Nov. An artist made here
+ * joins it at once; one made elsewhere shows within minutes.
+ */
+let keyed: { at: number; db: unknown; names: Map<string, { id: string; name: string }[]> } | null = null;
+async function namesByKey(): Promise<Map<string, { id: string; name: string }[]>> {
+  if (keyed && keyed.db === env.DB && Date.now() - keyed.at < 5 * 60_000) return keyed.names;
+  const { results } = await env.DB.prepare(`SELECT id, name FROM artist`).all<{ id: string; name: string }>();
+  const names = new Map<string, { id: string; name: string }[]>();
+  for (const a of results) {
+    const key = normaliseName(a.name);
+    names.set(key, [...(names.get(key) ?? []), a]);
+  }
+  keyed = { at: Date.now(), db: env.DB, names };
+  return names;
 }
 
 export async function addCredit(
