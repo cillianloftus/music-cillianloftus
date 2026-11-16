@@ -53,8 +53,34 @@ export const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 
 const songKey = (title: string) => normaliseTitle(withoutFeaturing(title));
 
-export async function matchFiles(files: FileToMatch[]): Promise<FileMatch[]> {
-  if (files.length === 0) return [];
+/**
+ * What a file's path says, for files with no tags: "Artist/Album/04 - Title.flac"
+ * (the track number and an "Artist - " prefix on the name aside).
+ */
+export function fromPath(path: string): { title: string | null; artist: string | null; album: string | null } {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  let name = (parts.at(-1) ?? '').replace(/\.[a-z0-9]{2,4}$/i, '');
+  name = name.replace(/^\s*(?:\d{1,2}[-.]\s*)?\d{1,3}(?:\s*[-.–_)]\s*|\s+)/, '').trim();
+  let artist = parts.length >= 3 ? parts.at(-3)! : null;
+  const split = /^(.+?)\s+[-–]\s+(.+)$/.exec(name);
+  if (split) {
+    artist ??= split[1]!.trim();
+    name = split[2]!.trim();
+  }
+  return { title: name || null, artist, album: parts.length >= 2 ? parts.at(-2)! : null };
+}
+
+/** Within this of the library's length, an untagged file with the same title is taken to be that song. */
+const TITLE_ONLY_GAP_MS = 3_000;
+
+export async function matchFiles(input: FileToMatch[]): Promise<FileMatch[]> {
+  if (input.length === 0) return [];
+  // Untagged files go by their path.
+  const files = input.map((f) => {
+    if (f.title && f.artist) return f;
+    const guess = fromPath(f.path);
+    return { ...f, title: f.title ?? guess.title, artist: f.artist ?? f.albumArtist ?? guess.artist, album: f.album ?? guess.album };
+  });
   // Already catalogued: by checksum, then by path.
   const { results: known } = await env.DB.prepare(
     `SELECT f.path, f.checksum, f.recording_id, f.audio_key IS NOT NULL AS uploaded FROM file f
@@ -90,6 +116,29 @@ export async function matchFiles(files: FileToMatch[]): Promise<FileMatch[]> {
         .all<{ id: string; title: string; length_ms: number | null; artist: string; albums: string | null }>()
     : { results: [] as { id: string; title: string; length_ms: number | null; artist: string; albums: string | null }[] };
 
+  // Last, for files with no artist to go on (or a folder name that is not
+  // one): any song of that exact title, if just one is about the same length.
+  const titles = [...new Set(files.filter((f) => f.title && f.lengthMs).map((f) => f.title!))];
+  const { results: sameTitle } = titles.length
+    ? await env.DB.prepare(
+        `SELECT r.id, r.title, r.length_ms,
+                (SELECT group_concat(g.title, '|') FROM track t JOIN release x ON x.id = t.release_id
+                 JOIN release_group g ON g.id = x.release_group_id WHERE t.recording_id = r.id) AS albums
+         FROM recording r WHERE r.title COLLATE NOCASE IN (SELECT value FROM json_each(?)) AND r.length_ms IS NOT NULL`,
+      )
+        .bind(JSON.stringify(titles))
+        .all<{ id: string; title: string; length_ms: number; albums: string | null }>()
+    : { results: [] as { id: string; title: string; length_ms: number; albums: string | null }[] };
+  const byTitleAndLength = (file: FileToMatch): string | null => {
+    if (!file.title || !file.lengthMs) return null;
+    const close = sameTitle.filter((s) => s.title.toLowerCase() === file.title!.toLowerCase() && Math.abs(s.length_ms - file.lengthMs!) <= TITLE_ONLY_GAP_MS);
+    if (close.length === 1) return close[0]!.id;
+    // Several: the one on the album the folder names, if exactly one is.
+    const album = file.album ? normaliseTitle(file.album) : null;
+    const onAlbum = album ? close.filter((s) => (s.albums ?? '').split('|').some((a) => normaliseTitle(a) === album)) : [];
+    return onAlbum.length === 1 ? onAlbum[0]!.id : null;
+  };
+
   const matched = files.map((file): { file: FileToMatch; recordingId: string | null; uploaded: boolean } => {
     const same = (file.checksum && byChecksum.get(file.checksum)) || byPath.get(file.path);
     if (same) return { file, recordingId: same.recording_id, uploaded: same.uploaded === 1 && same.checksum === file.checksum };
@@ -105,7 +154,7 @@ export async function matchFiles(files: FileToMatch[]): Promise<FileMatch[]> {
     const gap = (s: (typeof songs)[number]) => (file.lengthMs && s.length_ms ? Math.abs(file.lengthMs - s.length_ms) : 0);
     const best = candidates.sort((a, b) => onAlbum(b) - onAlbum(a) || gap(a) - gap(b))[0];
     // A song far longer or shorter is another version (a live take, an edit): not this one.
-    return { file, recordingId: best && gap(best) <= 15_000 ? best.id : null, uploaded: false };
+    return { file, recordingId: best && gap(best) <= 15_000 ? best.id : byTitleAndLength(file), uploaded: false };
   });
 
   const ids = [...new Set(matched.map((m) => m.recordingId).filter((id): id is string => Boolean(id)))];

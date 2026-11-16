@@ -127,7 +127,8 @@ const gb = (bytes: number) => (bytes / 1024 ** 3).toFixed(bytes > 10 * 1024 ** 3
       }).catch(() => null);
       if (!res?.ok) {
         progress.hidden = true;
-        status.textContent = 'Matching failed. Try again in a moment.';
+        const reason = res?.status === 403 ? 'Only the owner can upload; sign in again.' : ((await res?.json().catch(() => null)) as { error?: string } | null)?.error;
+        status.textContent = `Matching failed${res ? ` (${res.status})` : ': no connection'}. ${reason ?? 'Try again in a moment.'}`;
         return;
       }
       matches.push(...((await res.json()) as { matches: Match[] }).matches);

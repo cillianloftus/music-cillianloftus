@@ -189,6 +189,12 @@ const first = queue[start];
       });
     };
 
+    // A cover that will not load leaves the plain square, not a broken image.
+    const artImage = $<HTMLImageElement>('[data-art]');
+    artImage?.addEventListener('error', () => (artImage.style.visibility = 'hidden'));
+    artImage?.addEventListener('load', () => (artImage.style.visibility = ''));
+    if (artImage?.complete && artImage.naturalWidth === 0) artImage.style.visibility = 'hidden';
+
     const show = () => {
       const t = queue[index]!;
       $('[data-title]')!.textContent = t.title;

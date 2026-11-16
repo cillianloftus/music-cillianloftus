@@ -64,6 +64,24 @@ describe('your files, matched to songs', () => {
     expect(far?.recordingId).toBeNull();
   });
 
+  it('untagged, by their path: the name, the folders, else a song of that title and length', async () => {
+    const { fromPath } = await import('./audio');
+    expect(fromPath('Xavier/Album B/04 - Song B1.flac')).toEqual({ title: 'Song B1', artist: 'Xavier', album: 'Album B' });
+    expect(fromPath('2.VI.MMXXVI/04 - y3llow bike.flac')).toEqual({ title: 'y3llow bike', artist: null, album: '2.VI.MMXXVI' });
+    expect(fromPath('Xavier - Song B1.mp3')).toEqual({ title: 'Song B1', artist: 'Xavier', album: null });
+    expect(fromPath('1-07 Song.m4a').title).toBe('Song');
+    const bare = { title: null, artist: null, album: null };
+    const [byFolders] = await matchFiles([file({ ...bare, path: 'Xavier/Album B/01 - Song B1.flac' })]);
+    expect(byFolders?.recordingId).toBe('b1');
+    db.prepare(`UPDATE recording SET length_ms = 174000 WHERE id = 'b1'`).run();
+    const [byLength, tooFar] = await matchFiles([
+      file({ ...bare, path: 'Some Folder/04 - song b1.flac', lengthMs: 174_656 }),
+      file({ ...bare, path: 'Some Folder/05 - Song B1.flac', lengthMs: 190_000 }),
+    ]);
+    expect(byLength?.recordingId).toBe('b1');
+    expect(tooFar?.recordingId).toBeNull();
+  });
+
   it('are uploaded once, then known by their checksum, and play in album order', async () => {
     const sum = 'a'.repeat(64);
     const bytes = new TextEncoder().encode('not really a flac');
