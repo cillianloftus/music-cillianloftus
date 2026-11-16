@@ -11,7 +11,7 @@ import { fillMoreFromMusicBrainz } from '../sources/musicbrainz-more';
 import { fillFromDiscogs } from '../sources/discogs';
 import { deriveAlbumGenres } from '../genres';
 import { ownerId } from '../auth/user';
-import { connection, spotifyFor } from '../spotify/client';
+import { connection, SpotifyError, spotifyFor } from '../spotify/client';
 import { linkAlbumsToSpotify } from '../spotify/link';
 import { fillFromSpotify } from '../spotify/fill';
 import { importFromSpotify } from '../import/spotify';
@@ -363,6 +363,15 @@ async function work(deadline: number, token: string): Promise<number> {
         console.warn(`Job ${job.id}: MusicBrainz refused it; to the back of the queue`);
         await toBack(job.id);
         if (++refusals >= REFUSALS_TO_STOP) break;
+        continue;
+      }
+      // Spotify asked the site to wait (too many requests; spotify/client.ts keeps the wait for
+      // every Worker): not the job's fault, and not one of its tries. To the back; 75 imports
+      // failed this way on 14-16 Nov.
+      if (error instanceof SpotifyError && error.status === 429) {
+        console.warn(`Job ${job.id}: Spotify asked to wait; to the back of the queue`);
+        await env.DB.prepare(`UPDATE job SET attempts = max(0, attempts - 1) WHERE id = ?`).bind(job.id).run();
+        await toBack(job.id);
         continue;
       }
       console.error(`Job ${job.id} (${job.kind}) failed`, error);
