@@ -182,6 +182,13 @@ const ICON = {
             <p class="muted">Start something in Spotify, or press Listen on any track or album here. This page follows along.</p>
           </section>
 
+          {/* Lyrics first when there are any, then the rating and credits (16 Nov). */}
+          <section aria-labelledby="lyrics-heading" class="lyrics" data-lyrics-box hidden>
+            <h2 id="lyrics-heading">Lyrics</h2>
+            <ol class="lines" data-lyrics role="list"></ol>
+            <p class="muted small">From LRCLIB.</p>
+          </section>
+
           <div id="now-song" class="song" data-song-id={song?.spotifyId ?? ''} data-links={JSON.stringify(links)}>
             {
               song && here && (
@@ -231,11 +238,6 @@ const ICON = {
             }
           </div>
 
-          <section aria-labelledby="lyrics-heading" class="lyrics" data-lyrics-box hidden>
-            <h2 id="lyrics-heading">Lyrics</h2>
-            <ol class="lines" data-lyrics role="list"></ol>
-            <p class="muted small">From LRCLIB.</p>
-          </section>
         </>
       )
     }
