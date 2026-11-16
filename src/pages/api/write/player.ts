@@ -16,6 +16,7 @@ const command = z.discriminatedUnion('action', [
   z.object({ action: z.literal('seek'), positionMs: z.number().int().min(0).max(24 * 3_600_000) }),
   z.object({ action: z.literal('shuffle'), on: z.boolean() }),
   z.object({ action: z.literal('repeat'), mode: z.enum(['off', 'track', 'context']) }),
+  z.object({ action: z.literal('queue'), track: spotifyId }),
   z
     .object({ action: z.literal('start'), track: spotifyId.optional(), album: spotifyId.optional() })
     .refine((c) => c.track || c.album, 'A track or an album to start.'),

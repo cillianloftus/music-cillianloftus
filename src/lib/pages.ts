@@ -290,7 +290,7 @@ async function ratedInGenre(id: string, viewerId: string | null, deep: boolean):
   const [index, edges, { results: scored }] = await Promise.all([
     genreIndex(),
     deep ? genreEdges() : Promise.resolve([]),
-    env.DB.prepare(`SELECT recording_id AS id, quality_score AS quality, personal_score AS personal FROM v_recording_score WHERE user_id = ?`)
+    env.DB.prepare(`SELECT recording_id AS id, quality_score AS quality, personal_score AS personal FROM v_recording_own_score WHERE user_id = ?`)
       .bind(viewerId)
       .all<{ id: string; quality: number; personal: number }>(),
   ]);

@@ -133,7 +133,7 @@ export async function divergence(userId: string, limit = 10): Promise<{ underpla
     `WITH rated AS (
        SELECT s.recording_id, s.quality_score,
               (SELECT count(*) FROM play p WHERE p.recording_id = s.recording_id AND p.user_id = ?1 AND p.counted = 1) AS plays
-       FROM v_recording_score s WHERE s.user_id = ?1
+       FROM v_recording_own_score s WHERE s.user_id = ?1
          -- Only songs certainly on Spotify: one heard only on a CD or a file
          -- is not "rarely played", just not streamable. Certain means its
          -- own Spotify track, or a play in the Spotify export.

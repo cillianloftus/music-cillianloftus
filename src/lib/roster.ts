@@ -64,11 +64,11 @@ export async function roster(viewerId: string | null): Promise<Roster> {
             scored.average,
             norm.mean
      FROM artist a JOIN own ON own.artist_id = a.id
-     CROSS JOIN (SELECT avg(quality_score) AS mean FROM v_recording_score WHERE user_id = ?1) norm
+     CROSS JOIN (SELECT avg(quality_score) AS mean FROM v_recording_own_score WHERE user_id = ?1) norm
      LEFT JOIN covers ON covers.artist_id = a.id
      -- Grouped once, not a scoring subquery per artist (thousands of them).
      LEFT JOIN (SELECT c.artist_id, avg(s.quality_score) AS average, count(*) AS rated
-                FROM artist_credit c JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
+                FROM artist_credit c JOIN v_recording_own_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
                 WHERE c.entity_type = 'recording' AND c.role = 'primary' GROUP BY c.artist_id) scored ON scored.artist_id = a.id`,
   )
     .bind(viewerId)

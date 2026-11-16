@@ -198,7 +198,7 @@ export async function lovedArtists(userId: string | null, limit = 12): Promise<L
   const { results } = await env.DB.prepare(
     `SELECT c.artist_id AS id, avg(s.quality_score) AS average, count(*) AS tracks
      FROM artist_credit c
-     JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
+     JOIN v_recording_own_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
      WHERE c.entity_type = 'recording' AND c.role = 'primary'
      GROUP BY c.artist_id HAVING count(*) >= 3`,
   )
@@ -246,7 +246,7 @@ export async function lovedGenres(userId: string | null, limit = 12): Promise<Lo
   if (!userId) return [];
   const [index, { results: scored }] = await Promise.all([
     genreIndex(),
-    env.DB.prepare(`SELECT recording_id AS id, quality_score AS score FROM v_recording_score WHERE user_id = ?`)
+    env.DB.prepare(`SELECT recording_id AS id, quality_score AS score FROM v_recording_own_score WHERE user_id = ?`)
       .bind(userId)
       .all<{ id: string; score: number }>(),
   ]);

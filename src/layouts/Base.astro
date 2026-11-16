@@ -4,6 +4,7 @@ import NowBar from '../components/NowBar.astro';
 import SearchOverlay from '../components/SearchOverlay.astro';
 import SoftForms from '../components/SoftForms.astro';
 import CollapsibleSections from '../components/CollapsibleSections.astro';
+import QuickActions from '../components/QuickActions.astro';
 import '../styles/global.css';
 import SiteHeader from '../components/SiteHeader.astro';
 import { THEME_COOKIE, themeFrom } from '../lib/theme';
@@ -69,6 +70,8 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     {Astro.locals.user && <NowBar />}
     <SearchOverlay />
     {Astro.locals.user && <SoftForms />}
+    {/* Long-press (or right-click) a song or album for its quick actions. */}
+    {Astro.locals.user && <QuickActions />}
     <script>
       import { startSuggestions } from '../lib/client/suggest';
       startSuggestions();

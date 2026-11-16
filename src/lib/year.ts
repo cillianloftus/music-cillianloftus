@@ -54,7 +54,7 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
          SELECT entity_id, min(rated_at) AS first FROM rating WHERE user_id = ?1 AND entity_type = 'recording' GROUP BY entity_id
        )
        SELECT (SELECT count(*) FROM firsts WHERE first >= ?2 AND first < ?3) AS rated,
-              (SELECT avg(s.quality_score) FROM firsts f JOIN v_recording_score s ON s.recording_id = f.entity_id AND s.user_id = ?1
+              (SELECT avg(s.quality_score) FROM firsts f JOIN v_recording_own_score s ON s.recording_id = f.entity_id AND s.user_id = ?1
                WHERE f.first >= ?2 AND f.first < ?3) AS average,
               (SELECT count(*) FROM play WHERE user_id = ?1 AND played_at >= ?2 AND played_at < ?3 AND counted = 1) AS plays,
               (SELECT count(*) FROM (
@@ -72,7 +72,7 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
       `WITH firsts AS (
          SELECT entity_id, min(rated_at) AS first FROM rating WHERE user_id = ?1 AND entity_type = 'recording' GROUP BY entity_id
        )
-       SELECT f.entity_id AS id FROM firsts f JOIN v_recording_score s ON s.recording_id = f.entity_id AND s.user_id = ?1
+       SELECT f.entity_id AS id FROM firsts f JOIN v_recording_own_score s ON s.recording_id = f.entity_id AND s.user_id = ?1
        WHERE f.first >= ?2 AND f.first < ?3
        ORDER BY s.personal_score DESC, s.quality_score DESC LIMIT 15`,
     ).bind(userId, from, to),
@@ -84,7 +84,7 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
          SELECT c.artist_id, min(f.first) AS met, avg(s.quality_score) AS average, count(*) AS tracks
          FROM firsts f
          JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = f.entity_id AND c.role = 'primary'
-         JOIN v_recording_score s ON s.recording_id = f.entity_id AND s.user_id = ?1
+         JOIN v_recording_own_score s ON s.recording_id = f.entity_id AND s.user_id = ?1
          GROUP BY c.artist_id
        )
        SELECT a.id, a.name, p.average, p.tracks FROM per_artist p JOIN artist a ON a.id = p.artist_id
@@ -100,7 +100,7 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
     env.DB.prepare(
       `SELECT DISTINCT CAST(substr(rated_at, 1, 4) AS INTEGER) AS y FROM rating WHERE user_id = ?1
        UNION SELECT DISTINCT CAST(substr(played_at, 1, 4) AS INTEGER) FROM play WHERE user_id = ?1 AND counted = 1
-       UNION SELECT DISTINCT CAST(substr(r.first_release_date, 1, 4) AS INTEGER) FROM v_recording_score s
+       UNION SELECT DISTINCT CAST(substr(r.first_release_date, 1, 4) AS INTEGER) FROM v_recording_own_score s
              JOIN recording r ON r.id = s.recording_id WHERE s.user_id = ?1 AND r.first_release_date IS NOT NULL
        ORDER BY y DESC`,
     ).bind(userId),
@@ -109,17 +109,17 @@ export async function yearInReview(userId: string, year: number): Promise<YearRe
       `SELECT (SELECT count(*) FROM release_group WHERE first_release_date >= ?2 AND first_release_date < ?3
                  AND type IN ('album', 'mixtape', 'ep') AND (coalesce(official, 1) = 1 OR keep_unofficial = 1)) AS albums,
               count(s.recording_id) AS rated, avg(s.quality_score) AS average
-       FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
+       FROM v_recording_own_score s JOIN recording r ON r.id = s.recording_id
        WHERE s.user_id = ?1 AND r.first_release_date >= ?2 AND r.first_release_date < ?3`,
     ).bind(userId, from, to),
     env.DB.prepare(
-      `SELECT s.recording_id AS id FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
+      `SELECT s.recording_id AS id FROM v_recording_own_score s JOIN recording r ON r.id = s.recording_id
        WHERE s.user_id = ?1 AND r.first_release_date >= ?2 AND r.first_release_date < ?3
        ORDER BY s.personal_score DESC, s.quality_score DESC LIMIT 15`,
     ).bind(userId, from, to),
     env.DB.prepare(
       `SELECT a.id, a.name, avg(s.quality_score) AS average, count(*) AS tracks
-       FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
+       FROM v_recording_own_score s JOIN recording r ON r.id = s.recording_id
        JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary'
        JOIN artist a ON a.id = c.artist_id
        WHERE s.user_id = ?1 AND r.first_release_date >= ?2 AND r.first_release_date < ?3

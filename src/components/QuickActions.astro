@@ -1,0 +1,350 @@
+---
+/**
+ * Quick actions on any song or album, anywhere on the site: long-press a
+ * link to one (or right-click it on a computer) and a sheet offers what
+ * you would otherwise go to its page for: play it, add it to the queue,
+ * rate it (in full, when it is rated by gut), open its album, edit it,
+ * copy its link (15 Nov: "if I long press a track on an album, I should
+ * get some options"). Signed in only, like the actions. The sheet is a
+ * modal dialog: Escape or a tap outside closes it, and focus returns.
+ *
+ * Play and Add to queue go through the in-page player (NowBar: a link with
+ * data-play) and /api/write/player. What a song is (its Spotify id, its
+ * album) comes from /api/quick when the sheet opens; the actions that need
+ * nothing appear at once.
+ */
+---
+
+<dialog class="quick" data-quick aria-labelledby="quick-title">
+  <div class="quick-sheet">
+    <div class="quick-head">
+      <p class="quick-kind" data-quick-kind></p>
+      <h2 id="quick-title" data-quick-title></h2>
+    </div>
+    <ul role="list" class="quick-list" data-quick-list></ul>
+    <p class="quick-status" role="status" data-quick-status></p>
+    <button type="button" class="quick-close" data-quick-close>Close</button>
+  </div>
+</dialog>
+
+<script>
+  type Info = { kind: 'track' | 'album'; id: string; title: string; spotifyId: string | null; albumId: string | null; depth: string | null };
+  type Action = { label: string; href?: string; run?: () => void | Promise<void>; icon: string };
+
+  const dialog = document.querySelector('[data-quick]') as unknown as HTMLDialogElement | null;
+  const ICONS: Record<string, string> = {
+    play: '<path d="M8 5.5v13l10.5-6.5z"/>',
+    queue: '<path d="M4 6h12M4 12h12M4 18h7M17 15v6M14 18h6"/>',
+    rate: '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
+    open: '<path d="M9 6l6 6-6 6"/>',
+    album: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4"/>',
+    link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  };
+
+  if (dialog) {
+    const list = dialog.querySelector('[data-quick-list]')!;
+    const title = dialog.querySelector<HTMLElement>('[data-quick-title]')!;
+    const kindLine = dialog.querySelector<HTMLElement>('[data-quick-kind]')!;
+    const status = dialog.querySelector<HTMLElement>('[data-quick-status]')!;
+    let opener: HTMLElement | null = null;
+    let asked = 0;
+
+    const target = (el: EventTarget | null): { a: HTMLAnchorElement; kind: 'track' | 'album'; id: string } | null => {
+      const a = (el as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!a || a.closest('[data-quick]')) return null;
+      const match = /^\/(track|album)\/([0-9a-f-]{8,64})\/?$/i.exec(new URL(a.href, location.href).pathname);
+      if (!match || new URL(a.href, location.href).origin !== location.origin) return null;
+      return { a, kind: match[1] === 'track' ? 'track' : 'album', id: match[2]! };
+    };
+
+    const render = (actions: Action[]) => {
+      list.replaceChildren(
+        ...actions.map((action) => {
+          const li = document.createElement('li');
+          const el = document.createElement(action.href ? 'a' : 'button') as HTMLAnchorElement & HTMLButtonElement;
+          el.className = 'quick-action';
+          if (action.href) el.href = action.href;
+          else {
+            el.type = 'button';
+            el.addEventListener('click', async () => {
+              await action.run?.();
+            });
+          }
+          el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[action.icon] ?? ''}</svg>`;
+          el.appendChild(document.createTextNode(action.label));
+          li.appendChild(el);
+          return li;
+        }),
+      );
+    };
+
+    const play = (info: Info, queue: boolean) => async () => {
+      if (!info.spotifyId) return;
+      if (queue) {
+        const res = await fetch('/api/write/player', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'queue', track: info.spotifyId }),
+        }).catch(() => null);
+        status.textContent = res?.ok ? 'Added to the queue.' : 'Spotify could not take it just now.';
+        if (res?.ok) window.setTimeout(() => dialog.close(), 700);
+        return;
+      }
+      // The in-page player takes any Listen link (NowBar): one made for the moment.
+      const link = document.createElement('a');
+      link.href = `https://open.spotify.com/${info.kind}/${info.spotifyId}`;
+      link.dataset.play = '';
+      if (info.kind === 'track') link.dataset.track = info.spotifyId;
+      else link.dataset.album = info.spotifyId;
+      link.hidden = true;
+      document.body.appendChild(link);
+      dialog.close();
+      link.click();
+      link.remove();
+    };
+
+    const actionsFor = (kind: 'track' | 'album', id: string, info: Info | null): Action[] => {
+      const here = `${location.pathname}${location.search}`;
+      const rate = `/edit/rate/${kind === 'track' ? 'recording' : 'release_group'}/${id}?return_to=${encodeURIComponent(here)}`;
+      const actions: Action[] = [];
+      if (info?.spotifyId) {
+        actions.push({ label: kind === 'track' ? 'Play' : 'Play album', icon: 'play', run: play(info, false) });
+        if (kind === 'track') actions.push({ label: 'Add to queue', icon: 'queue', run: play(info, true) });
+      }
+      actions.push({ label: info?.depth === 'gut' ? 'Rate in full' : info?.depth ? 'Rate again' : 'Rate', icon: 'rate', href: rate });
+      actions.push({ label: kind === 'track' ? 'Open song' : 'Open album', icon: 'open', href: `/${kind}/${id}` });
+      if (kind === 'track' && info?.albumId) actions.push({ label: 'Go to album', icon: 'album', href: `/album/${info.albumId}` });
+      actions.push({ label: 'Edit', icon: 'edit', href: `/edit/${kind}/${id}` });
+      actions.push({
+        label: 'Copy link',
+        icon: 'link',
+        run: async () => {
+          try {
+            await navigator.clipboard.writeText(new URL(`/${kind}/${id}`, location.href).href);
+            status.textContent = 'Link copied.';
+          } catch {
+            status.textContent = 'Could not copy here.';
+          }
+        },
+      });
+      return actions;
+    };
+
+    const open = async (found: { a: HTMLAnchorElement; kind: 'track' | 'album'; id: string }, at: { x: number; y: number } | null) => {
+      const ask = ++asked;
+      opener = found.a;
+      kindLine.textContent = found.kind === 'track' ? 'Song' : 'Album';
+      title.textContent = found.a.textContent?.trim() || (found.kind === 'track' ? 'This song' : 'This album');
+      status.textContent = '';
+      render(actionsFor(found.kind, found.id, null));
+      // Beside the pointer on a wide screen; a sheet from the bottom on a phone (CSS).
+      if (at && matchMedia('(min-width: 48rem)').matches) {
+        dialog.style.setProperty('--x', `${Math.min(at.x, innerWidth - 300)}px`);
+        dialog.style.setProperty('--y', `${Math.min(at.y, innerHeight - 380)}px`);
+        dialog.dataset.at = '';
+      } else delete dialog.dataset.at;
+      if (!dialog.open) dialog.showModal();
+      navigator.vibrate?.(10);
+      const res = await fetch(`/api/quick?${new URLSearchParams({ kind: found.kind, id: found.id })}`).catch(() => null);
+      if (ask !== asked || !res?.ok) return;
+      const info = (await res.json()) as Info;
+      title.textContent = info.title;
+      render(actionsFor(found.kind, found.id, info));
+    };
+
+    // Right-click, and on Android a long-press (which fires contextmenu on a link).
+    document.addEventListener('contextmenu', (event) => {
+      const found = target(event.target);
+      if (!found || event.shiftKey) return;
+      event.preventDefault();
+      void open(found, { x: event.clientX, y: event.clientY });
+    });
+
+    // Elsewhere (iOS fires no contextmenu): a held touch that does not move.
+    let hold = 0;
+    let start: { x: number; y: number } | null = null;
+    let fired = false;
+    document.addEventListener(
+      'touchstart',
+      (event) => {
+        const found = target(event.target);
+        fired = false;
+        if (!found || event.touches.length !== 1) return;
+        start = { x: event.touches[0]!.clientX, y: event.touches[0]!.clientY };
+        window.clearTimeout(hold);
+        hold = window.setTimeout(() => {
+          fired = true;
+          void open(found, null);
+        }, 550);
+      },
+      { passive: true },
+    );
+    document.addEventListener(
+      'touchmove',
+      (event) => {
+        if (!start) return;
+        const t = event.touches[0]!;
+        if (Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10) window.clearTimeout(hold);
+      },
+      { passive: true },
+    );
+    for (const end of ['touchend', 'touchcancel'] as const) document.addEventListener(end, () => window.clearTimeout(hold), { passive: true });
+    // The tap that ends a long-press does not also follow the link.
+    document.addEventListener(
+      'click',
+      (event) => {
+        if (fired && target(event.target)) {
+          event.preventDefault();
+          fired = false;
+        }
+      },
+      true,
+    );
+
+    dialog.querySelector('[data-quick-close]')!.addEventListener('click', () => dialog.close());
+    // A tap on the backdrop (the dialog itself, outside the sheet) closes it.
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+    dialog.addEventListener('close', () => {
+      asked++;
+      opener?.focus({ preventScroll: true });
+    });
+  }
+</script>
+
+<style is:global>
+  /* Song and album links: a long-press is the site's, not the browser's link menu. */
+  a[href^='/track/'],
+  a[href^='/album/'] {
+    -webkit-touch-callout: none;
+  }
+
+  .quick {
+    width: min(100%, 26rem);
+    max-width: none;
+    max-height: none;
+    margin: auto auto 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+  }
+
+  .quick::backdrop {
+    background: rgb(0 0 0 / 0.5);
+  }
+
+  .quick[data-at] {
+    position: fixed;
+    inset: var(--y) auto auto var(--x);
+    width: 17rem;
+    margin: 0;
+  }
+
+  .quick-sheet {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom));
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l) var(--radius-l) 0 0;
+    background: var(--surface-1);
+    box-shadow: 0 -12px 40px -12px rgb(0 0 0 / 0.5);
+  }
+
+  .quick[data-at] .quick-sheet {
+    padding: var(--space-2);
+    border-radius: var(--radius-m);
+    box-shadow: 0 16px 40px -12px rgb(0 0 0 / 0.5);
+  }
+
+  .quick-head {
+    padding: 0 var(--space-3) var(--space-2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .quick-kind {
+    margin: 0;
+    color: var(--text-subtle);
+    font-size: var(--step--1);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .quick-head h2 {
+    margin: 0;
+    overflow: hidden;
+    font-size: var(--step-1);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .quick-list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .quick-action {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: 3rem;
+    padding: 0 var(--space-3);
+    border: 0;
+    border-radius: var(--radius-s);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .quick-action:hover,
+  .quick-action:focus-visible {
+    background: var(--surface-2);
+  }
+
+  .quick-action svg {
+    flex: none;
+    width: 1.25rem;
+    height: 1.25rem;
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .quick-status {
+    margin: 0;
+    padding: 0 var(--space-3);
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .quick-status:empty {
+    display: none;
+  }
+
+  .quick-close {
+    min-height: var(--target);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text);
+    font: inherit;
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .quick[data-at] .quick-close {
+    display: none;
+  }
+</style>

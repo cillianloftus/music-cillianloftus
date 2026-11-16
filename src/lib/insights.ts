@@ -59,26 +59,26 @@ export async function insights(userId: string): Promise<Insights> {
   // Albums come from the user's album scores (album-scores.ts), read alongside.
   const [batch, scores, index] = await Promise.all([env.DB.batch([
     env.DB.prepare(
-      `SELECT (SELECT count(*) FROM v_recording_score WHERE user_id = ?1) AS ratedTracks,
-              (SELECT avg(quality_score) FROM v_recording_score WHERE user_id = ?1) AS averageTrack,
+      `SELECT (SELECT count(*) FROM v_recording_own_score WHERE user_id = ?1) AS ratedTracks,
+              (SELECT avg(quality_score) FROM v_recording_own_score WHERE user_id = ?1) AS averageTrack,
               (SELECT gut_offset FROM v_gut_calibration WHERE user_id = ?1) AS gutOffset,
               (SELECT sample_size FROM v_gut_calibration WHERE user_id = ?1) AS gutSamples,
-              (SELECT count(*) FROM v_recording_score WHERE user_id = ?1 AND personal_score > quality_score) AS impactTracks`,
+              (SELECT count(*) FROM v_recording_own_score WHERE user_id = ?1 AND personal_score > quality_score) AS impactTracks`,
     ).bind(userId),
     // Ten-point bands; 100 belongs to the top band.
     env.DB.prepare(
       `SELECT min(9, CAST(quality_score / 10 AS INTEGER)) AS band, count(*) AS count
-       FROM v_recording_score WHERE user_id = ? GROUP BY band`,
+       FROM v_recording_own_score WHERE user_id = ? GROUP BY band`,
     ).bind(userId),
     // Genre families: from the genre index and the tree, in code (genreFamilies).
     env.DB.prepare(`SELECT id, name, parent_id FROM genre`),
-    env.DB.prepare(`SELECT recording_id AS id, quality_score AS score FROM v_recording_score WHERE user_id = ?`).bind(userId),
+    env.DB.prepare(`SELECT recording_id AS id, quality_score AS score FROM v_recording_own_score WHERE user_id = ?`).bind(userId),
     env.DB.prepare(
       `SELECT substr(rated_at, 1, 7) AS month, count(*) AS count FROM rating WHERE user_id = ? GROUP BY month ORDER BY month`,
     ).bind(userId),
     env.DB.prepare(
       `SELECT a.id, a.name, count(*) AS tracks, avg(s.quality_score) AS average
-       FROM v_recording_score s
+       FROM v_recording_own_score s
        JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = s.recording_id AND c.role = 'primary' AND c.position = 1
        JOIN artist a ON a.id = c.artist_id
        WHERE s.user_id = ?
@@ -88,7 +88,7 @@ export async function insights(userId: string): Promise<Insights> {
     ).bind(userId),
     env.DB.prepare(
       `SELECT substr(r.first_release_date, 1, 4) AS key, avg(s.quality_score) AS average, count(*) AS count
-       FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
+       FROM v_recording_own_score s JOIN recording r ON r.id = s.recording_id
        WHERE s.user_id = ? AND r.first_release_date IS NOT NULL
        GROUP BY key ORDER BY key DESC`,
     ).bind(userId),

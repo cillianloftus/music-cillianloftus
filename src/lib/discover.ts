@@ -168,7 +168,7 @@ export async function trackFactsDirect(userId: string): Promise<TrackFact[]> {
             (SELECT count(*) FROM play p WHERE p.user_id = s.user_id AND p.recording_id = r.id AND p.counted = 1) AS plays,
             coalesce(ax.arrangement, ax.production) AS arrangement, coalesce(ax.sound, ax.production) AS sound,
             ax.songwriting, ax.lyrics, ax.performance, ax.originality, ax.gut_score
-     FROM v_recording_score s
+     FROM v_recording_own_score s
      JOIN recording r ON r.id = s.recording_id
      LEFT JOIN rating ax ON ax.user_id = s.user_id AND ax.entity_type = 'recording' AND ax.entity_id = r.id
           AND ax.rated_at = (SELECT max(y.rated_at) FROM rating y WHERE y.user_id = s.user_id AND y.entity_type = 'recording' AND y.entity_id = r.id)
@@ -285,7 +285,7 @@ async function gatherFacts(userId: string): Promise<TrackFact[]> {
             (SELECT count(*) FROM play p WHERE p.user_id = s.user_id AND p.recording_id = s.recording_id AND p.counted = 1) AS plays,
             coalesce(ax.arrangement, ax.production) AS arrangement, coalesce(ax.sound, ax.production) AS sound,
             ax.songwriting, ax.lyrics, ax.performance, ax.originality, ax.gut_score
-     FROM v_recording_score s
+     FROM v_recording_own_score s
      LEFT JOIN rating ax ON ax.user_id = s.user_id AND ax.entity_type = 'recording' AND ax.entity_id = s.recording_id
           AND ax.rated_at = (SELECT max(y.rated_at) FROM rating y WHERE y.user_id = s.user_id AND y.entity_type = 'recording' AND y.entity_id = s.recording_id)
      WHERE s.user_id = ?1
@@ -948,10 +948,10 @@ export interface ArtistBreakdown {
 /** The whole library's average, artists ranked by average, and how spread an artist's scores usually are. */
 async function libraryRanks(userId: string): Promise<{ libraryAverage: number; ranking: { artist_id: string; average: number; n: number }[]; typicalSpread: number }> {
   const [library, ranks] = await env.DB.batch([
-    env.DB.prepare('SELECT avg(quality_score) AS average, count(*) AS n FROM v_recording_score WHERE user_id = ?').bind(userId),
+    env.DB.prepare('SELECT avg(quality_score) AS average, count(*) AS n FROM v_recording_own_score WHERE user_id = ?').bind(userId),
     env.DB.prepare(
       `SELECT c.artist_id, avg(s.quality_score) AS average, count(*) AS n
-       FROM v_recording_score s JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = s.recording_id AND c.role = 'primary'
+       FROM v_recording_own_score s JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = s.recording_id AND c.role = 'primary'
        WHERE s.user_id = ? GROUP BY c.artist_id HAVING count(*) >= 3 ORDER BY average DESC`,
     ).bind(userId),
   ]);
@@ -962,7 +962,7 @@ async function libraryRanks(userId: string): Promise<{ libraryAverage: number; r
   );
   const spreads = await env.DB.prepare(
     `SELECT c.artist_id, s.quality_score AS score
-     FROM v_recording_score s JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = s.recording_id AND c.role = 'primary'
+     FROM v_recording_own_score s JOIN artist_credit c ON c.entity_type = 'recording' AND c.entity_id = s.recording_id AND c.role = 'primary'
      WHERE s.user_id = ?`,
   )
     .bind(userId)

@@ -120,7 +120,9 @@ export type PlayerCommand =
   | { action: 'shuffle'; on: boolean }
   | { action: 'repeat'; mode: 'off' | 'track' | 'context' }
   /** A track (in its album, so the album plays on after it) or a whole album. */
-  | { action: 'start'; track?: string; album?: string };
+  | { action: 'start'; track?: string; album?: string }
+  /** A track after the one playing (long-press, Add to queue). */
+  | { action: 'queue'; track: string };
 
 /** What kind of device the command was sent from, so the music starts there. */
 export type Origin = 'phone' | 'computer';
@@ -178,6 +180,8 @@ export async function control(client: SpotifyClient, command: PlayerCommand, fro
         return client.put(`/me/player/shuffle?${q(`state=${command.on}`)}`, undefined);
       case 'repeat':
         return client.put(`/me/player/repeat?${q(`state=${command.mode}`)}`, undefined);
+      case 'queue':
+        return client.post(`/me/player/queue?${q(`uri=${encodeURIComponent(`spotify:track:${command.track}`)}`)}`, undefined);
       case 'start': {
         const body = command.album
           ? { context_uri: `spotify:album:${command.album}`, ...(command.track ? { offset: { uri: `spotify:track:${command.track}` } } : {}) }

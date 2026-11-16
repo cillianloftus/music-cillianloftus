@@ -91,7 +91,7 @@ const ARTIST_STATS = `
   SELECT a.id, scored.average, coalesce(scored.rated, 0) AS rated, coalesce(own.releases, 0) AS releases
   FROM artist a
   LEFT JOIN (SELECT c.artist_id, avg(s.quality_score) AS average, count(*) AS rated
-             FROM artist_credit c JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
+             FROM artist_credit c JOIN v_recording_own_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
              WHERE c.artist_id IN (SELECT value FROM json_each(?2)) AND c.entity_type = 'recording' AND c.role = 'primary'
              GROUP BY c.artist_id) scored ON scored.artist_id = a.id
   LEFT JOIN (SELECT artist_id, count(*) AS releases FROM artist_credit
@@ -344,7 +344,7 @@ async function fillers(viewerId: string | null, today: string): Promise<Pick[]> 
       `SELECT r.id, r.title, r.spotify_id, x.art_key, s.quality_score AS score, ra.release_group_id AS album_id,
               (SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
                WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary') AS by
-       FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
+       FROM v_recording_own_score s JOIN recording r ON r.id = s.recording_id
        LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
        LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = ra.release_group_id
        LEFT JOIN release x ON x.id = gc.release_id

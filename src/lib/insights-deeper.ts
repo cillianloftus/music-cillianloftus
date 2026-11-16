@@ -69,7 +69,7 @@ export async function deeperInsights(userId: string): Promise<Deeper> {
                 WHEN r.length_ms < 360000 THEN '4'
                 ELSE '5' END AS key,
               avg(s.quality_score) AS average, count(*) AS count
-       FROM v_recording_score s JOIN recording r ON r.id = s.recording_id
+       FROM v_recording_own_score s JOIN recording r ON r.id = s.recording_id
        WHERE s.user_id = ? AND r.length_ms IS NOT NULL
        GROUP BY key ORDER BY key`,
     ).bind(userId),
@@ -78,7 +78,7 @@ export async function deeperInsights(userId: string): Promise<Deeper> {
       `WITH placed AS (
          SELECT s.recording_id, s.quality_score, t.position,
                 (SELECT count(*) FROM track t2 WHERE t2.release_id = t.release_id) AS size
-         FROM v_recording_score s
+         FROM v_recording_own_score s
          JOIN v_recording_album ra ON ra.recording_id = s.recording_id
          JOIN v_release_group_canonical c ON c.release_group_id = ra.release_group_id
          JOIN track t ON t.release_id = c.release_id AND t.recording_id = s.recording_id
@@ -100,7 +100,7 @@ export async function deeperInsights(userId: string): Promise<Deeper> {
                      OR (SELECT count(*) FROM artist_credit c WHERE c.entity_type = 'recording' AND c.entity_id = s.recording_id AND c.role = 'primary') > 1
                    THEN '1' ELSE '0' END AS key,
               avg(s.quality_score) AS average, count(*) AS count
-       FROM v_recording_score s WHERE s.user_id = ?
+       FROM v_recording_own_score s WHERE s.user_id = ?
        GROUP BY key ORDER BY key`,
     ).bind(userId),
     // The lead artist's age when it came out, for people with a known birth year.
@@ -108,7 +108,7 @@ export async function deeperInsights(userId: string): Promise<Deeper> {
       `WITH aged AS (
          SELECT s.quality_score, a.id AS artist_id,
                 CAST(substr(coalesce(r.first_release_date, g.first_release_date), 1, 4) AS INTEGER) - CAST(substr(a.begin_date, 1, 4) AS INTEGER) AS age
-         FROM v_recording_score s
+         FROM v_recording_own_score s
          JOIN recording r ON r.id = s.recording_id
          LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
          LEFT JOIN release_group g ON g.id = ra.release_group_id
