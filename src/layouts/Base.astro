@@ -3,6 +3,7 @@ import JobTray from '../components/JobTray.astro';
 import NowBar from '../components/NowBar.astro';
 import SearchOverlay from '../components/SearchOverlay.astro';
 import SoftForms from '../components/SoftForms.astro';
+import FreshOnReturn from '../components/FreshOnReturn.astro';
 import CollapsibleSections from '../components/CollapsibleSections.astro';
 import QuickActions from '../components/QuickActions.astro';
 import '../styles/global.css';
@@ -57,6 +58,8 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
         if (scale >= 0.7 && scale <= 1.5) document.documentElement.style.setProperty('--ui-scale', String(scale));
       } catch {}
     </script>
+    {/* A page gone back to after a save reloads where it was. Before the page's own scripts, so it sees their saves. */}
+    {Astro.locals.user && <FreshOnReturn />}
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>

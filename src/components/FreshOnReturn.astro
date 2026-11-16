@@ -1,0 +1,87 @@
+---
+/**
+ * A page gone back to shows what is true now. Swiping back restores the
+ * page as it was left (the browser's back-forward cache), so a cover
+ * changed on the edit page meanwhile was missing until a manual refresh,
+ * which threw away the place on the page (16 Nov).
+ *
+ * Every save marks the time (any form posted, any write sent in the
+ * background: a rating, a cover, a quick action; not the player's
+ * controls). A page returned to by back or forward that was loaded before
+ * the latest save reloads, and lands where it was: the scroll is put back
+ * before the page paints. Signed in only: only then is anything saved.
+ * Without JavaScript the browser does as it always did.
+ *
+ * When the page was made is the server's time (a page shown again from the
+ * HTTP cache runs its scripts afresh), and a page reloads at most once for
+ * a given save, so clocks that disagree can never set it reloading over and
+ * over.
+ */
+const rendered = Date.now();
+---
+
+<script is:inline define:vars={{ rendered }}>
+  // Back where it was, before the reloaded page paints.
+  try {
+    const kept = JSON.parse(sessionStorage.getItem('return-scroll') || 'null');
+    if (kept && kept.url === location.href && Date.now() - kept.at < 15000) {
+      sessionStorage.removeItem('return-scroll');
+      history.scrollRestoration = 'manual';
+      const put = () => window.scrollTo(0, kept.y);
+      addEventListener('DOMContentLoaded', put, { once: true });
+      addEventListener('load', put, { once: true });
+      // Late images and lazy sections can push it about: once more, after them.
+      setTimeout(put, 400);
+    }
+  } catch {}
+
+  (() => {
+    // When this page was made: the server's time, unless this browser's is earlier
+    // (a fresh load, its clock a little behind). A copy from the HTTP cache keeps the server's.
+    const loadedAt = Math.min(rendered, Date.now());
+    const mark = () => {
+      try {
+        localStorage.setItem('last-write', String(Date.now()));
+      } catch {}
+    };
+    // Forms posted the ordinary way, or by the background save (SoftForms).
+    document.addEventListener(
+      'submit',
+      (event) => {
+        const form = event.target;
+        if (form instanceof HTMLFormElement && form.method.toLowerCase() === 'post') mark();
+      },
+      true,
+    );
+    // Writes sent from a page's own script.
+    const send = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      try {
+        const method = (init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+        const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+        if (method !== 'GET' && url.origin === location.origin && !url.pathname.startsWith('/api/write/player')) mark();
+      } catch {}
+      return send(input, init);
+    };
+
+    addEventListener('pageshow', (event) => {
+      const nav = performance.getEntriesByType('navigation')[0];
+      if (!event.persisted && nav?.type !== 'back_forward') return;
+      let last = 0;
+      try {
+        last = Number(localStorage.getItem('last-write') || 0);
+      } catch {}
+      if (last <= loadedAt) return;
+      try {
+        // Once per save and page: never round and round.
+        const key = `reloaded:${location.href}`;
+        if (sessionStorage.getItem(key) === String(last)) return;
+        sessionStorage.setItem(key, String(last));
+        sessionStorage.setItem('return-scroll', JSON.stringify({ url: location.href, y: scrollY, at: Date.now() }));
+      } catch {
+        return;
+      }
+      location.reload();
+    });
+  })();
+</script>
