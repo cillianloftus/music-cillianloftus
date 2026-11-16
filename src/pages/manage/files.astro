@@ -21,6 +21,10 @@ for (const f of files) {
   albums.set(key, entry);
 }
 const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
+const mb = (bytes: number) => (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`);
+const uploaded = files.filter((f) => f.audio_bytes != null);
+const uploadedBytes = uploaded.reduce((sum, f) => sum + (f.audio_bytes ?? 0), 0);
+const done = Astro.url.searchParams.get('done');
 ---
 
 <Base title="Files">
@@ -40,7 +44,9 @@ const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
           <p class="summary tabular">
             {files.length.toLocaleString('en-GB')} files:{' '}
             {[...byFormat].map(([format, n]) => `${n} ${format.toUpperCase()}`).join(', ')}
+            {uploaded.length > 0 && <> · {uploaded.length.toLocaleString('en-GB')} uploaded to play anywhere, {mb(uploadedBytes)}</>}
           </p>
+          {done && <p class="notice" role="status">{done}</p>}
 
           <section class="verify" aria-labelledby="verify-heading" data-verify hidden>
             <h2 id="verify-heading">Check a folder</h2>
@@ -66,12 +72,17 @@ const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
                     <summary>
                       <span class="title">{album.title}</span>
                       <span class="muted tabular"> · {album.files.length} {album.files.length === 1 ? 'file' : 'files'}</span>
+                      {album.files.some((f) => f.audio_bytes != null) && <span class="up"> · uploaded</span>}
                     </summary>
-                    {album.id && (
-                      <p>
-                        <a href={`/album/${album.id}`}>Open album</a>
-                      </p>
-                    )}
+                    <p class="album-actions">
+                      {album.id && <a href={`/album/${album.id}`}>Open album</a>}
+                      {album.files.some((f) => f.audio_bytes != null) && (
+                        <form method="post" action="/api/write/audio/remove" data-confirm="Remove this album's uploaded audio? Your own files are not touched.">
+                          {album.files.filter((f) => f.audio_bytes != null).map((f) => <input type="hidden" name="id" value={f.id} />)}
+                          <button class="link-button" type="submit">Remove this album's uploads</button>
+                        </form>
+                      )}
+                    </p>
                     <ul role="list" class="paths">
                       {album.files.map((f) => (
                         <li>
@@ -80,7 +91,14 @@ const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
                             {f.format.toUpperCase()}
                             {f.bitrate && ` · ${f.bitrate} kbps`}
                             {!f.checksum && ' · no checksum'}
+                            {f.audio_bytes != null && <span class="up"> · uploaded, {mb(f.audio_bytes)}</span>}
                           </span>
+                          {f.audio_bytes != null && (
+                            <form method="post" action="/api/write/audio/remove" class="remove">
+                              <input type="hidden" name="id" value={f.id} />
+                              <button class="link-button" type="submit">Remove upload</button>
+                            </form>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -164,7 +182,47 @@ const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
   }
 </script>
 
+<script>
+  for (const form of document.querySelectorAll<HTMLFormElement>('form[data-confirm]')) {
+    form.addEventListener('submit', (event) => {
+      if (!confirm(form.dataset.confirm!)) event.preventDefault();
+    });
+  }
+</script>
+
 <style>
+  .up {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .album-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .album-actions form,
+  .remove {
+    display: inline;
+  }
+
+  .link-button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--step--1);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  .link-button:hover {
+    color: var(--text);
+  }
+
   .head-links {
     display: flex;
     flex-wrap: wrap;

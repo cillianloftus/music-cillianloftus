@@ -233,6 +233,24 @@ export async function playableSongs(recordingIds: string[]): Promise<Set<string>
   return new Set(results.map((r) => r.id));
 }
 
+/**
+ * Removes uploaded audio (to free space): the stored copy goes; the file
+ * stays catalogued, its original on Cillian's machine untouched. Returns
+ * how many were removed.
+ */
+export async function removeAudio(fileIds: string[]): Promise<number> {
+  if (fileIds.length === 0) return 0;
+  const { results } = await env.DB.prepare(`SELECT id, audio_key FROM file WHERE audio_key IS NOT NULL AND id IN (SELECT value FROM json_each(?))`)
+    .bind(JSON.stringify(fileIds))
+    .all<{ id: string; audio_key: string }>();
+  if (results.length === 0) return 0;
+  await env.AUDIO_STORE.delete(results.map((r) => r.audio_key));
+  await env.DB.prepare(`UPDATE file SET audio_key = NULL, audio_bytes = NULL, uploaded_at = NULL WHERE id IN (SELECT value FROM json_each(?))`)
+    .bind(JSON.stringify(results.map((r) => r.id)))
+    .run();
+  return results.length;
+}
+
 /** How much audio is stored, for the upload page. */
 export async function audioTotals(): Promise<{ files: number; bytes: number }> {
   const row = await env.DB.prepare(`SELECT count(*) AS files, coalesce(sum(audio_bytes), 0) AS bytes FROM file WHERE audio_key IS NOT NULL`).first<{

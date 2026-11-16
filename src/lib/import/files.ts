@@ -231,6 +231,7 @@ export async function importFiles(input: z.infer<typeof filesPayload>): Promise<
 }
 
 export interface CataloguedFile {
+  id: string;
   path: string;
   format: string;
   bitrate: number | null;
@@ -238,12 +239,15 @@ export interface CataloguedFile {
   title: string;
   album_id: string | null;
   album_title: string | null;
+  /** Its audio, when uploaded (src/lib/audio.ts): the size kept. */
+  audio_bytes: number | null;
 }
 
 /** Every catalogued file, by path, with what it is a recording of. */
 export async function catalogue(): Promise<CataloguedFile[]> {
   const { results } = await env.DB.prepare(
-    `SELECT f.path, f.format, f.bitrate, f.checksum, r.title, ra.release_group_id AS album_id, g.title AS album_title
+    `SELECT f.id, f.path, f.format, f.bitrate, f.checksum, r.title, ra.release_group_id AS album_id, g.title AS album_title,
+            CASE WHEN f.audio_key IS NOT NULL THEN f.audio_bytes END AS audio_bytes
      FROM file f
      JOIN recording r ON r.id = f.recording_id
      LEFT JOIN v_recording_album ra ON ra.recording_id = r.id

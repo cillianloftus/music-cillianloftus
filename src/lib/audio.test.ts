@@ -20,6 +20,9 @@ beforeEach(() => {
       for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) n += chunk.byteLength;
       stored.set(key, n);
     },
+    delete: async (keys: string[]) => {
+      for (const k of keys) stored.delete(k);
+    },
   };
 });
 
@@ -72,5 +75,11 @@ describe('your files, matched to songs', () => {
     expect(again).toMatchObject({ recordingId: 'b2', uploaded: true });
     expect([...(await playableSongs(['b1', 'b2']))]).toEqual(['b2']);
     expect((await albumQueue('rg-b')).map((t) => [t.recordingId, t.fileId])).toEqual([['b2', id]]);
+    // Removed: the stored copy goes, the file stays catalogued.
+    const { removeAudio } = await import('./audio');
+    expect(await removeAudio([id])).toBe(1);
+    expect(stored.size).toBe(0);
+    expect(db.prepare('SELECT audio_key, path FROM file WHERE id = ?').get(id)).toEqual({ audio_key: null, path: 'Xavier/Album B/02.flac' });
+    expect(await albumQueue('rg-b')).toEqual([]);
   });
 });
