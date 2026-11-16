@@ -34,18 +34,46 @@ const term = (value: string) => value.replace(/["':]/g, ' ').replace(/\s+/g, ' '
 
 /** The best confident match among search results, or null. Pure. */
 export function pickAlbum(album: Pick<Album, 'title' | 'artist' | 'first_release_date' | 'track_count'>, hits: SpotifyAlbumHit[]): SpotifyAlbumHit | null {
-  if (!album.artist) return null;
+  return rankAlbums(album, hits)[0] ?? null;
+}
+
+/** The confident matches, best first. Pure. */
+function rankAlbums(album: Pick<Album, 'title' | 'artist' | 'first_release_date' | 'track_count'>, hits: SpotifyAlbumHit[]): SpotifyAlbumHit[] {
+  if (!album.artist) return [];
   const title = normaliseTitle(album.title);
   const artist = normaliseName(album.artist);
   const year = album.first_release_date ? Number(album.first_release_date.slice(0, 4)) : null;
   const ok = hits.filter(
     (h) => h.album_type !== 'compilation' && normaliseTitle(h.name) === title && h.artists.some((a) => normaliseName(a.name) === artist),
   );
-  if (ok.length === 0) return null;
   // Nearest year first, then the edition closest in length (the standard one, not a deluxe).
   const distance = (h: SpotifyAlbumHit) =>
     (year ? Math.abs(Number(h.release_date.slice(0, 4)) - year) * 100 : 0) + Math.abs(h.total_tracks - album.track_count);
-  return [...ok].sort((a, b) => distance(a) - distance(b))[0]!;
+  return [...ok].sort((a, b) => distance(a) - distance(b));
+}
+
+type SpotifyTrackItem = { id: string; name: string; disc_number: number; track_number: number; explicit: boolean };
+
+const albumTracks = async (spotify: SpotifyClient, id: string) =>
+  (await spotify.get<{ items: SpotifyTrackItem[] }>(`/albums/${id}/tracks?limit=50&market=${MARKET}`)).items;
+
+const explicitCount = (items: SpotifyTrackItem[]) => items.filter((t) => t.explicit).length;
+
+/**
+ * Of editions alike in name, year and length, the one as released: a clean
+ * edition sits beside the explicit one on Spotify, and the first found
+ * played Kamikaze censored (16 Nov). Each alike edition's tracks are looked
+ * at (up to three) and the one with the most marked explicit taken; its
+ * tracks come back too, so they are not asked for twice.
+ */
+async function choosePlayable(spotify: SpotifyClient, ranked: SpotifyAlbumHit[]): Promise<{ pick: SpotifyAlbumHit; items: SpotifyTrackItem[] } | null> {
+  const first = ranked[0];
+  if (!first) return null;
+  const alike = ranked
+    .filter((h) => h.total_tracks === first.total_tracks && h.release_date.slice(0, 4) === first.release_date.slice(0, 4))
+    .slice(0, 3);
+  const looked = await Promise.all(alike.map(async (pick) => ({ pick, items: await albumTracks(spotify, pick.id) })));
+  return looked.sort((a, b) => explicitCount(b.items) - explicitCount(a.items))[0]!;
 }
 
 async function albumsToLink(limit: number, only?: string): Promise<Album[]> {
@@ -78,11 +106,9 @@ async function albumsToLink(limit: number, only?: string): Promise<Album[]> {
 }
 
 /** Matches the album's tracks to its standard edition and fills their ids. */
-async function linkTracks(spotify: SpotifyClient, album: Album, spotifyAlbumId: string): Promise<number> {
+async function linkTracks(spotify: SpotifyClient, album: Album, spotifyAlbumId: string, known?: SpotifyTrackItem[]): Promise<number> {
   if (!album.release_id) return 0;
-  const page = await spotify.get<{ items: { id: string; name: string; disc_number: number; track_number: number }[] }>(
-    `/albums/${spotifyAlbumId}/tracks?limit=50&market=${MARKET}`,
-  );
+  const page = { items: known ?? (await albumTracks(spotify, spotifyAlbumId)) };
   const ours = (
     await env.DB.prepare(
       `SELECT t.disc, t.position, r.id, r.title, r.spotify_id FROM track t JOIN recording r ON r.id = t.recording_id WHERE t.release_id = ?`,
@@ -125,7 +151,8 @@ export async function linkAlbumsToSpotify(spotify: SpotifyClient, { limit = 20, 
     if (!album.artist) continue;
     const params = new URLSearchParams({ q: `album:${term(album.title)} artist:${term(album.artist)}`, type: 'album', limit: '10', market: MARKET });
     const hits = (await spotify.get<{ albums: { items: SpotifyAlbumHit[] } }>(`/search?${params}`)).albums.items;
-    const pick = pickAlbum(album, hits);
+    const chosen = await choosePlayable(spotify, rankAlbums(album, hits));
+    const pick = chosen?.pick ?? null;
     if (!pick) {
       report.missed.push(album.title);
       await env.DB.prepare(
@@ -145,7 +172,7 @@ export async function linkAlbumsToSpotify(spotify: SpotifyClient, { limit = 20, 
       .bind(pick.id, album.id)
       .run();
     if (set.meta.changes) report.albums++;
-    report.tracks += await linkTracks(spotify, album, pick.id);
+    report.tracks += await linkTracks(spotify, album, pick.id, chosen!.items);
   }
   return report;
 }
@@ -205,4 +232,81 @@ export async function findEditionOnSpotify(spotify: SpotifyClient, releaseId: st
     return pick.id;
   }
   return null;
+}
+
+/**
+ * Linked albums checked for a clean edition taken in place of the one as
+ * released (spotify_explicit_check, 0078): a few a night, rated or played
+ * first. One with no explicit track whose twin on Spotify (same name,
+ * artist, year and length) has some is switched to the twin, and its
+ * songs' ids with it, track by track. Hand-set ids are left alone.
+ * Returns how many were switched.
+ */
+export async function preferExplicitEditions(spotify: SpotifyClient, { limit = 10 }: { limit?: number } = {}): Promise<number> {
+  const { results } = await env.DB.prepare(
+    `SELECT g.id, g.title, g.first_release_date, g.spotify_id, c.release_id,
+            (SELECT a.name FROM artist_credit ac JOIN artist a ON a.id = ac.artist_id
+             WHERE ac.entity_type = 'release_group' AND ac.entity_id = g.id AND ac.role = 'primary'
+             ORDER BY ac.position LIMIT 1) AS artist,
+            (SELECT count(*) FROM track t WHERE t.release_id = c.release_id) AS track_count
+     FROM release_group g
+     LEFT JOIN v_release_group_canonical c ON c.release_group_id = g.id
+     WHERE g.spotify_id IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM field_override fo WHERE fo.entity_type = 'release_group' AND fo.entity_id = g.id AND fo.field = 'spotify_id')
+       AND NOT EXISTS (SELECT 1 FROM spotify_explicit_check k WHERE k.release_group_id = g.id
+                       AND k.checked_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-180 days'))
+     ORDER BY EXISTS (SELECT 1 FROM track t JOIN rating r ON r.entity_type = 'recording' AND r.entity_id = t.recording_id WHERE t.release_id = c.release_id) DESC,
+              EXISTS (SELECT 1 FROM track t JOIN play p ON p.recording_id = t.recording_id WHERE t.release_id = c.release_id) DESC,
+              g.created_at DESC
+     LIMIT ?1`,
+  )
+    .bind(limit)
+    .all<Album & { spotify_id: string }>();
+  let switched = 0;
+  for (const album of results) {
+    const checked = () =>
+      env.DB.prepare(
+        `INSERT INTO spotify_explicit_check (release_group_id) VALUES (?)
+         ON CONFLICT (release_group_id) DO UPDATE SET checked_at = excluded.checked_at`,
+      )
+        .bind(album.id)
+        .run();
+    const current = await albumTracks(spotify, album.spotify_id);
+    if (!album.artist || explicitCount(current) > 0) {
+      await checked();
+      continue;
+    }
+    const params = new URLSearchParams({ q: `album:${term(album.title)} artist:${term(album.artist)}`, type: 'album', limit: '10', market: MARKET });
+    const hits = (await spotify.get<{ albums: { items: SpotifyAlbumHit[] } }>(`/search?${params}`)).albums.items;
+    const twins = rankAlbums(album, hits)
+      .filter((h) => h.id !== album.spotify_id && h.total_tracks === current.length)
+      .slice(0, 2);
+    for (const twin of twins) {
+      const items = await albumTracks(spotify, twin.id);
+      if (explicitCount(items) === 0) continue;
+      await env.DB.prepare(`UPDATE release_group SET spotify_id = ?1 WHERE id = ?2 AND NOT EXISTS (SELECT 1 FROM release_group o WHERE o.spotify_id = ?1)`)
+        .bind(twin.id, album.id)
+        .run();
+      // Each song linked to a clean track: to the original at the same place.
+      const swaps = current.flatMap((clean) => {
+        const original = items.find((t) => t.disc_number === clean.disc_number && t.track_number === clean.track_number);
+        return original ? [{ from: clean.id, to: original.id }] : [];
+      });
+      if (swaps.length) {
+        await env.DB.batch(
+          swaps.map((sw) =>
+            env.DB.prepare(
+              `UPDATE recording SET spotify_id = ?2 WHERE spotify_id = ?1
+                 AND NOT EXISTS (SELECT 1 FROM field_override fo WHERE fo.entity_type = 'recording' AND fo.entity_id = recording.id AND fo.field = 'spotify_id')
+                 AND NOT EXISTS (SELECT 1 FROM recording o WHERE o.spotify_id = ?2)`,
+            ).bind(sw.from, sw.to),
+          ),
+        );
+      }
+      switched++;
+      break;
+    }
+    await checked();
+  }
+  return switched;
 }

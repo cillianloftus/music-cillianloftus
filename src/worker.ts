@@ -13,7 +13,7 @@ import { fillAlbumsMoreFromMusicBrainz } from './lib/sources/musicbrainz-more';
 import { ownerId } from './lib/auth/user';
 import { deriveAlbumGenres } from './lib/genres';
 import { connection, spotifyFor } from './lib/spotify/client';
-import { linkAlbumsToSpotify } from './lib/spotify/link';
+import { linkAlbumsToSpotify, preferExplicitEditions } from './lib/spotify/link';
 import { detectAnomalies } from './lib/review';
 import { syncAllScrobbles } from './lib/scrobbles';
 import { catalogueIndex } from './lib/listens/match';
@@ -77,6 +77,8 @@ async function linkSpotifyAlbums(): Promise<void> {
   if (!owner || !(await connection(owner))) return;
   // Sixty a night, misses remembered (0077): the 5,700 unlinked on 15 Nov in about three months, rated ones first.
   await linkAlbumsToSpotify(spotifyFor(owner), { limit: 60 });
+  // Albums linked to a clean edition, switched to the one as released (Kamikaze, 16 Nov).
+  await preferExplicitEditions(spotifyFor(owner), { limit: 10 }).catch((error) => console.warn('Explicit check failed', error));
   // Then what Spotify knows about them: dates, lengths, ISRCs.
   await fillAlbumsFromSpotify(spotifyFor(owner), { budgetMs: 15_000 });
 }

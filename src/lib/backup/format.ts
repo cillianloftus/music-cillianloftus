@@ -48,7 +48,9 @@ export function isExcluded(table: string): boolean {
     // The same: scores versions borrow (inherited.ts).
     table === 'inherited_score' ||
     // When Spotify was last asked about an album and had nothing: only a note to wait.
-    table === 'spotify_link_miss'
+    table === 'spotify_link_miss' ||
+    // When an album's Spotify edition was last checked: only a note to wait.
+    table === 'spotify_explicit_check'
   );
 }
 
