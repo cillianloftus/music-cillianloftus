@@ -115,6 +115,96 @@ describe('helpers', () => {
   });
 });
 
+describe('albums already in the library', () => {
+  // Tonight's two: "Welcome To Forever" beside "Young Sinatra: Welcome to
+  // Forever" by one of two artists called Logic, and a folder whose artist
+  // tag was "Logic_Inglorious_Basterd".
+  beforeEach(() => {
+    insert(db, 'artist', [
+      { id: 'logic', name: 'Logic', sort_name: 'Logic', source: 'spotify' },
+      { id: 'logic-dj', name: 'Logic', sort_name: 'Logic', source: 'musicbrainz' },
+    ]);
+    insert(db, 'release_group', [
+      { id: 'wtf', title: 'Young Sinatra: Welcome to Forever', type: 'mixtape', source: 'musicbrainz', mbid: '11111111-1111-1111-1111-111111111111' },
+      { id: 'ib', title: 'Inglorious Basterd', type: 'mixtape', source: 'musicbrainz' },
+    ]);
+    insert(db, 'release', [
+      { id: 'wtf-r', release_group_id: 'wtf', title: 'Young Sinatra: Welcome to Forever', source: 'musicbrainz' },
+      { id: 'ib-r', release_group_id: 'ib', title: 'Inglorious Basterd', source: 'musicbrainz' },
+    ]);
+    insert(db, 'recording', [
+      { id: 'w1', title: 'Welcome to Forever', source: 'musicbrainz' },
+      { id: 'w2', title: 'Ballin', source: 'musicbrainz' },
+      { id: 'w3', title: 'Roll', source: 'musicbrainz' },
+      { id: 'i1', title: 'Griptape', source: 'musicbrainz' },
+      { id: 'i2', title: 'Starfield', source: 'musicbrainz' },
+    ]);
+    insert(db, 'track', [
+      { id: 'tw1', release_id: 'wtf-r', recording_id: 'w1', position: 1 },
+      { id: 'tw2', release_id: 'wtf-r', recording_id: 'w2', position: 2 },
+      { id: 'tw3', release_id: 'wtf-r', recording_id: 'w3', position: 3 },
+      { id: 'ti1', release_id: 'ib-r', recording_id: 'i1', position: 1 },
+      { id: 'ti2', release_id: 'ib-r', recording_id: 'i2', position: 2 },
+    ]);
+    insert(db, 'artist_credit', [
+      { id: 'c1', entity_type: 'release_group', entity_id: 'wtf', artist_id: 'logic', role: 'primary' },
+      { id: 'c2', entity_type: 'release_group', entity_id: 'ib', artist_id: 'logic', role: 'primary' },
+    ]);
+  });
+
+  const wtf = ['Welcome to Forever', 'Ballin', 'Roll'].map((title, i) =>
+    file(`Logic/WTF/0${i + 1}.flac`, { title, artist: 'Logic', album: 'Young Sinatra: Welcome To Forever', track: i + 1, checksum: String(i).repeat(64) }),
+  );
+  const ib = [
+    file('IB/01.flac', { title: 'Griptape feat. John Lindahl', artist: 'Logic_Inglorious_Basterd', album: 'Inglorious Basterd', track: 1, checksum: 'c'.repeat(64) }),
+    file('IB/02.flac', { title: 'Starfield', artist: 'Logic_Inglorious_Basterd', album: 'Inglorious Basterd', track: 2, checksum: 'd'.repeat(64) }),
+  ];
+
+  it('are offered to confirm: by artist and title, case aside, or by their songs', async () => {
+    const { albumCandidates } = await import('./files');
+    const [first] = await albumCandidates({ artist: 'Logic', title: 'Young Sinatra: Welcome To Forever', tracks: ['Welcome to Forever', 'Ballin', 'Roll'] });
+    expect(first).toMatchObject({ id: 'wtf', shared: 3, likely: true, tracks: 3, artist: 'Logic' });
+    // A shorter title, inside the album's.
+    expect((await albumCandidates({ artist: 'Logic', title: 'Welcome to Forever', tracks: ['Ballin', 'Roll'] }))[0]).toMatchObject({ id: 'wtf', likely: true });
+    // A wrong artist tag: found by the songs.
+    expect((await albumCandidates({ artist: 'Logic_Inglorious_Basterd', title: 'Inglorious Basterd', tracks: ['Griptape feat. John Lindahl', 'Starfield'] }))[0]).toMatchObject({
+      id: 'ib',
+      shared: 2,
+      likely: true,
+    });
+    // Rip titles carrying guests and producers still match the songs.
+    expect(
+      (await albumCandidates({ artist: 'Somebody', title: 'Rip', tracks: ['Ballin (ft. Castro) (Prod by Arthur McArthur)', 'Roll (Prod. by 6ix)'] }))[0],
+    ).toMatchObject({ id: 'wtf', shared: 2 });
+    // Nothing like it: nothing offered.
+    expect(await albumCandidates({ artist: 'Someone Else', title: 'Fresh', tracks: ['New One', 'New Two'] })).toEqual([]);
+  });
+
+  it('take the files when confirmed, and nothing new is made', async () => {
+    const [album] = groupAlbums(ib);
+    const [outcome] = await importFiles({ root: '', files: ib, choices: { [album!.key]: 'ib' } });
+    expect(outcome).toMatchObject({ status: 'matched', href: '/album/ib' });
+    expect(db.prepare(`SELECT path, recording_id FROM file ORDER BY path`).all()).toEqual([
+      { path: 'IB/01.flac', recording_id: 'i1' },
+      { path: 'IB/02.flac', recording_id: 'i2' },
+    ]);
+    expect(db.prepare(`SELECT count(*) AS n FROM release_group`).get()).toEqual({ n: 2 });
+    expect(db.prepare(`SELECT count(*) AS n FROM artist`).get()).toEqual({ n: 2 });
+  });
+
+  it('join the album of the same artist and title even unasked, and are added only when told it is new', async () => {
+    const [unasked] = await importFiles({ root: '', files: wtf });
+    expect(unasked).toMatchObject({ status: 'matched', href: '/album/wtf' });
+    expect(db.prepare(`SELECT count(*) AS n FROM release_group`).get()).toEqual({ n: 2 });
+
+    const other = wtf.map((f) => ({ ...f, path: f.path.replace('WTF', 'WTF copy') }));
+    const [album] = groupAlbums(other);
+    const [told] = await importFiles({ root: '', files: other, choices: { [album!.key]: 'new' } });
+    expect(told!.status).toBe('added');
+    expect(db.prepare(`SELECT count(*) AS n FROM release_group`).get()).toEqual({ n: 3 });
+  });
+});
+
 describe('importing', () => {
   it('writes the album, credits and a file row per track', async () => {
     const [outcome] = await importFiles({ root: 'D:\\Music\\', files: tape });

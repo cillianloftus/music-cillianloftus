@@ -53,6 +53,10 @@ import { MAX_FILES } from '../../../lib/import/files';
           <p class="album-title"></p>
           <p class="album-meta muted"></p>
         </div>
+        <fieldset class="same" hidden>
+          <legend>Is this already in your library?</legend>
+          <div class="options"></div>
+        </fieldset>
         <p class="album-source"></p>
         <ul class="album-notes"></ul>
         <details>
@@ -137,22 +141,90 @@ import { MAX_FILES } from '../../../lib/import/files';
       records.push({ ...tags, path, size: file.size, checksum: await sha256(file) });
     }
     progress.hidden = true;
+    const albums = groupAlbums(records);
+    status.textContent = 'Looking for these in your library…';
+    const candidates = await findCandidates(albums);
     status.textContent = unreadable ? `${unreadable} ${unreadable === 1 ? 'file' : 'files'} could not be read and will be left out.` : '';
-    render(groupAlbums(records));
+    render(albums, candidates);
   }
 
-  function render(albums: AlbumGroup[]) {
+  type Candidate = { id: string; title: string; artist: string; type: string; year: string | null; tracks: number; art: string | null; shared: number; likely: boolean };
+  /** Each album's answer: an album already held, or 'new'. */
+  let choices: Record<string, string> = {};
+
+  async function findCandidates(albums: AlbumGroup[]): Promise<Record<string, Candidate[]>> {
+    const response = await fetch('/api/write/import/files-check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ albums: albums.map((a) => ({ key: a.key, artist: a.artist, title: a.title, tracks: a.tracks.map((t) => t.title) })) }),
+    }).catch(() => null);
+    if (!response?.ok) return {};
+    return ((await response.json()) as { candidates: Record<string, Candidate[]> }).candidates;
+  }
+
+  const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
+
+  /** What happens to an album, given its answer. */
+  function describe(album: AlbumGroup, choice: string, found: Candidate[]): string {
+    if (choice !== 'new') {
+      const c = found.find((f) => f.id === choice);
+      return `These files join ${c ? `“${c.title}”` : 'that album'}. Nothing new is added.`;
+    }
+    return album.mbReleaseId ? 'Added as a new album, imported from MusicBrainz (it is tagged by them).' : 'Added as a new album, from the tags.';
+  }
+
+  function option(name: string, value: string, checked: boolean, label: Node[], onPick: () => void): HTMLLabelElement {
+    const wrap = document.createElement('label');
+    wrap.className = 'option';
+    const input = Object.assign(document.createElement('input'), { type: 'radio', name, value, checked });
+    input.addEventListener('change', onPick);
+    for (const node of [input, ...label]) wrap.appendChild(node);
+    return wrap;
+  }
+
+  function render(albums: AlbumGroup[], candidates: Record<string, Candidate[]>) {
     list.replaceChildren();
-    for (const album of albums) {
+    choices = {};
+    for (const [index, album] of albums.entries()) {
       const item = template.content.firstElementChild!.cloneNode(true) as HTMLLIElement;
       // Tag text is untrusted: textContent only.
       item.querySelector('.album-title')!.textContent = `${album.title}, ${album.artist}`;
       item.querySelector('.album-meta')!.textContent = [album.date, `${album.tracks.length} ${album.tracks.length === 1 ? 'track' : 'tracks'}`]
         .filter(Boolean)
         .join(' · ');
-      item.querySelector('.album-source')!.textContent = album.mbReleaseId
-        ? 'Tagged by MusicBrainz: imported from there, with these files attached.'
-        : 'Added from the tags.';
+      const found = candidates[album.key] ?? [];
+      const source = item.querySelector<HTMLElement>('.album-source')!;
+      choices[album.key] = found.find((c) => c.likely)?.id ?? 'new';
+      source.textContent = found.length ? describe(album, choices[album.key]!, found) : `Not in your library yet. ${describe(album, 'new', found)}`;
+      if (found.length) {
+        const fieldset = item.querySelector<HTMLFieldSetElement>('.same')!;
+        const options = fieldset.querySelector('.options')!;
+        const pick = (value: string) => () => {
+          choices[album.key] = value;
+          source.textContent = describe(album, value, found);
+        };
+        for (const c of found) {
+          const art = c.art ? Object.assign(document.createElement('img'), { src: c.art, alt: '', width: 48, height: 48, loading: 'lazy' }) : document.createElement('span');
+          art.className = 'thumb';
+          // A cover that will not load leaves the plain square.
+          art.addEventListener('error', () => art.removeAttribute('src'));
+          const text = document.createElement('span');
+          text.className = 'option-text';
+          const title = document.createElement('strong');
+          title.textContent = `Yes, ${c.title}`;
+          const meta = document.createElement('span');
+          meta.className = 'muted';
+          meta.textContent = [c.artist, c.year, plural(c.tracks, 'song'), c.shared ? `${c.shared} of ${album.tracks.length} songs match` : null].filter(Boolean).join(' · ');
+          text.appendChild(title);
+          text.appendChild(meta);
+          options.appendChild(option(`same-${index}`, c.id, choices[album.key] === c.id, [art, text], pick(c.id)));
+        }
+        const no = document.createElement('span');
+        no.className = 'option-text';
+        no.textContent = 'No, it is a different album: add it as new';
+        options.appendChild(option(`same-${index}`, 'new', choices[album.key] === 'new', [document.createElement('span'), no], pick('new')));
+        fieldset.hidden = false;
+      }
       const notes = item.querySelector('.album-notes')!;
       for (const note of album.notes) {
         const li = document.createElement('li');
@@ -169,7 +241,7 @@ import { MAX_FILES } from '../../../lib/import/files';
       list.appendChild(item);
     }
     $('[data-preview-heading]').textContent = `${albums.length} ${albums.length === 1 ? 'album' : 'albums'} found`;
-    addButton.textContent = `Add ${albums.length === 1 ? 'it' : `all ${albums.length}`} to the catalogue`;
+    addButton.textContent = albums.length === 1 ? 'Import it' : `Import all ${albums.length}`;
     addButton.disabled = false;
     preview.hidden = false;
     $<HTMLElement>('#preview-heading').focus();
@@ -182,7 +254,7 @@ import { MAX_FILES } from '../../../lib/import/files';
       const response = await fetch('/api/write/import/files', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ root: rootInput.value.trim(), files: records }),
+        body: JSON.stringify({ root: rootInput.value.trim(), files: records, choices }),
       });
       const body = (await response.json()) as {
         error?: string;
@@ -193,7 +265,8 @@ import { MAX_FILES } from '../../../lib/import/files';
       for (const album of body.albums) {
         const li = document.createElement('li');
         li.className = 'album';
-        const verb = album.status === 'added' ? 'Added' : album.status === 'queued' ? 'Importing from MusicBrainz' : 'Skipped';
+        const verb =
+          album.status === 'added' ? 'Added' : album.status === 'matched' ? 'Joined' : album.status === 'queued' ? 'Importing from MusicBrainz' : 'Skipped';
         const head = document.createElement('p');
         head.className = 'album-title';
         if (album.href) {
@@ -375,6 +448,68 @@ import { MAX_FILES } from '../../../lib/import/files';
 
   .albums :global(.album-notes:empty) {
     display: none;
+  }
+
+  .albums :global(.same) {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  .albums :global(.same legend) {
+    padding: 0;
+    margin-bottom: var(--space-2);
+    font-weight: 600;
+  }
+
+  .albums :global(.options) {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .albums :global(.option) {
+    display: grid;
+    grid-template-columns: auto 3rem 1fr;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: var(--target);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    cursor: pointer;
+  }
+
+  .albums :global(.option:has(input:checked)) {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+
+  .albums :global(.option input) {
+    accent-color: var(--accent);
+    width: 1.1rem;
+    height: 1.1rem;
+  }
+
+  .albums :global(.thumb) {
+    width: 3rem;
+    height: 3rem;
+    border-radius: var(--radius-s, 4px);
+    object-fit: cover;
+    background: var(--surface-2);
+  }
+
+  .albums :global(.option-text) {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .albums :global(.option-text .muted) {
+    font-size: var(--step--1);
   }
 
   .albums :global(summary) {

@@ -14,7 +14,7 @@
 import { env } from 'cloudflare:workers';
 import { listenTrack } from './listens/keys';
 import { savePlays } from './listens/store';
-import { normaliseName, normaliseTitle, withoutFeaturing } from './text';
+import { normaliseName, normaliseTitle, withoutCredits } from './text';
 
 /** What the browser reads from each file and sends to be matched. */
 export interface FileToMatch {
@@ -51,7 +51,7 @@ export type AudioFormat = keyof typeof AUDIO_FORMATS;
 /** A Worker takes request bodies up to 100 MB. */
 export const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 
-const songKey = (title: string) => normaliseTitle(withoutFeaturing(title));
+const songKey = (title: string) => normaliseTitle(withoutCredits(title));
 
 /**
  * What a file's path says, for files with no tags: "Artist/Album/04 - Title.flac"

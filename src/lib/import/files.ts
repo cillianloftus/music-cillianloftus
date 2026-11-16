@@ -1,5 +1,5 @@
 /**
- * Import from local audio tags (ARCHITECTURE.md §5, rung 4). The browser
+ * Import from local audio tags (ARCHITECTURE.md Â§5, rung 4). The browser
  * reads the tags; this side gets text only, never audio.
  *
  *   - An album tagged by MusicBrainz Picard carries its release MBID, so it
@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { parsePartialDate } from '../dates';
 import { createBatch, enqueue, PRIORITY } from '../jobs/queue';
 import { groupAlbums, splitArtist, type AlbumGroup, type FileRecord } from '../tags/albums';
+import { normaliseTitle, withoutCredits } from '../text';
 import { sortName } from './manual';
 import type { ImportPlan, PlanArtist, PlanCredit, PlanRecording, PlanTrack, ReleaseGroupType } from './plan';
 import { writePlan } from './write';
@@ -51,8 +52,132 @@ export const filesPayload = z
     /** Optional folder location on the owner's machine, prefixed to every path. */
     root: z.string().trim().max(500).default(''),
     files: z.array(fileRecord).min(1).max(MAX_FILES),
+    /**
+     * What Cillian confirmed for each album (by groupAlbums key): the album
+     * already held that it is, or 'new' to add it. An album with no answer
+     * still joins one held under the same artist and title rather than
+     * becoming a second copy.
+     */
+    choices: z.record(z.string().max(2000), z.string().max(64)).default({}),
   })
   .strict();
+
+/** An album already in the library that a folder might be, for Cillian to confirm. */
+export interface Candidate {
+  id: string;
+  title: string;
+  artist: string;
+  type: string;
+  year: string | null;
+  tracks: number;
+  /** Cover, a small WebP. */
+  art: string | null;
+  /** How many of the folder's song titles are on it. */
+  shared: number;
+  /** Sure enough to be chosen unless Cillian says otherwise. */
+  likely: boolean;
+}
+
+export const albumQuestion = z.object({
+  albums: z
+    .array(z.object({ key: z.string().max(2000), artist: z.string().max(500), title: z.string().max(500), tracks: z.array(z.string().max(500)).max(200) }))
+    .max(500),
+});
+
+/**
+ * The albums already held that a folder might be: by the tagged artist (or
+ * an alias of theirs) with the same title, or one title inside the other
+ * ("Welcome To Forever", "Young Sinatra: Welcome to Forever"); and any
+ * album, whoever it is credited to, holding half or more of the folder's
+ * songs by title (so a folder tagged "Logic_Inglorious_Basterd" still finds
+ * Logic's album). Best first, at most three.
+ */
+export async function albumCandidates(album: { artist: string; title: string; tracks: string[] }): Promise<Candidate[]> {
+  const db = env.DB;
+  const names = [...new Set([album.artist, splitArtist(album.artist).primary].map((n) => n.trim()).filter(Boolean))];
+  const songKey = (t: string) => normaliseTitle(withoutCredits(t));
+  const titles = [...new Set(album.tracks.flatMap((t) => [t, withoutCredits(t)]).map((t) => t.trim()).filter(Boolean))];
+  const [byArtist, bySongs] = await db.batch<{ id: string; title?: string; song?: string }>([
+    db
+      .prepare(
+        `WITH who AS (
+           SELECT a.id FROM json_each(?1) j JOIN artist a ON a.name = j.value COLLATE NOCASE
+           UNION SELECT x.artist_id FROM json_each(?1) j JOIN artist_alias x ON x.name = j.value COLLATE NOCASE
+         )
+         SELECT DISTINCT g.id, g.title FROM who
+         JOIN artist_credit c ON c.artist_id = who.id AND c.entity_type = 'release_group' AND c.role = 'primary'
+         JOIN release_group g ON g.id = c.entity_id`,
+      )
+      .bind(JSON.stringify(names)),
+    db
+      .prepare(
+        `SELECT DISTINCT e.release_group_id AS id, r.title AS song
+         FROM recording r JOIN track t ON t.recording_id = r.id JOIN release e ON e.id = t.release_id
+         WHERE r.title COLLATE NOCASE IN (SELECT value FROM json_each(?))`,
+      )
+      .bind(JSON.stringify(titles.length ? titles : [''])),
+  ]);
+
+  const want = normaliseTitle(album.title);
+  const artistAlbums = new Map(byArtist!.results.map((g) => [g.id, normaliseTitle(g.title ?? '')]));
+  const folderSongs = new Set(album.tracks.map(songKey));
+  const shared = new Map<string, Set<string>>();
+  for (const row of bySongs!.results) {
+    const k = songKey(row.song ?? '');
+    if (!folderSongs.has(k)) continue;
+    shared.set(row.id, (shared.get(row.id) ?? new Set()).add(k));
+  }
+
+  const n = Math.max(1, folderSongs.size);
+  const scored: { id: string; score: number; shared: number; likely: boolean }[] = [];
+  for (const id of new Set([...artistAlbums.keys(), ...shared.keys()])) {
+    const title = artistAlbums.get(id);
+    const hits = shared.get(id)?.size ?? 0;
+    const exact = title !== undefined && title === want;
+    const inside = title !== undefined && Math.min(title.length, want.length) >= 4 && (title.includes(want) || want.includes(title));
+    const share = hits / n;
+    // Songs alone: half the folder, and at least two unless the artist agrees too.
+    const bySongsOnly = share >= 0.5 && (hits >= 2 || title !== undefined);
+    if (!exact && !inside && !bySongsOnly) continue;
+    const score = (exact ? 100 : inside ? 60 : 0) + 50 * share;
+    scored.push({ id, score, shared: hits, likely: exact || (inside && share >= 0.5) || share >= 0.8 });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const top = scored.slice(0, 3);
+  if (top.length === 0) return [];
+
+  const { results: details } = await db
+    .prepare(
+      `SELECT g.id, g.title, g.type, substr(g.first_release_date, 1, 4) AS year,
+              (SELECT group_concat(coalesce(c.credited_as, a.name) || c.join_phrase, '') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+               WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary' ORDER BY c.position) AS artist,
+              (SELECT count(*) FROM track t WHERE t.release_id = coalesce(g.preferred_release_id, (SELECT min(e.id) FROM release e WHERE e.release_group_id = g.id))) AS tracks,
+              (SELECT e.art_key FROM release e WHERE e.release_group_id = g.id AND e.art_key IS NOT NULL
+               ORDER BY e.id = g.preferred_release_id DESC LIMIT 1) AS art_key
+       FROM release_group g WHERE g.id IN (SELECT value FROM json_each(?))`,
+    )
+    .bind(JSON.stringify(top.map((t) => t.id)))
+    .all<{ id: string; title: string; type: string; year: string | null; artist: string | null; tracks: number; art_key: string | null }>();
+  const byId = new Map(details.map((d) => [d.id, d]));
+  // Only the best can be preselected, and only when nothing close rivals it.
+  return top.flatMap((t, i) => {
+    const d = byId.get(t.id);
+    if (!d) return [];
+    return [
+      {
+        id: d.id,
+        title: d.title,
+        artist: d.artist ?? '',
+        type: d.type,
+        year: d.year,
+        tracks: d.tracks,
+        art: d.art_key ? `/${d.art_key}/128.webp` : null,
+        shared: t.shared,
+        likely: i === 0 && t.likely,
+      },
+    ];
+  });
+}
 
 /** One file to catalogue once its release exists. */
 export interface FileAttachment {
@@ -187,32 +312,121 @@ export async function attachFiles(releaseId: string, files: FileAttachment[]): P
   return result.meta.changes ?? 0;
 }
 
+/**
+ * The album already in the library that a folder of files is: one credited
+ * to an artist of the tagged name (or an alias of theirs) with the same
+ * title, case and punctuation aside ("Welcome To Forever" is "Welcome to
+ * Forever"). The one with MusicBrainz behind it first, then the oldest.
+ */
+export async function heldAlbum(album: Pick<AlbumGroup, 'artist' | 'title'>): Promise<string | null> {
+  const names = [...new Set([album.artist, splitArtist(album.artist).primary].map((n) => n.trim()).filter(Boolean))];
+  const { results } = await env.DB.prepare(
+    `WITH who AS (
+       SELECT a.id FROM json_each(?1) j JOIN artist a ON a.name = j.value COLLATE NOCASE
+       UNION SELECT x.artist_id FROM json_each(?1) j JOIN artist_alias x ON x.name = j.value COLLATE NOCASE
+     )
+     SELECT DISTINCT g.id, g.title, g.mbid IS NOT NULL AS mb, g.created_at
+     FROM who JOIN artist_credit c ON c.artist_id = who.id AND c.entity_type = 'release_group' AND c.role = 'primary'
+     JOIN release_group g ON g.id = c.entity_id`,
+  )
+    .bind(JSON.stringify(names))
+    .all<{ id: string; title: string; mb: number; created_at: string }>();
+  const want = normaliseTitle(album.title);
+  const same = results.filter((g) => normaliseTitle(g.title) === want).sort((a, b) => b.mb - a.mb || a.created_at.localeCompare(b.created_at));
+  return same[0]?.id ?? null;
+}
+
+/**
+ * Catalogues a folder's files against an album already held, creating
+ * nothing: each file to the album's song of the same title (featured
+ * artists aside), else, when the folder and an edition have the same number
+ * of tracks, to the song at its disc and position. Returns how many files
+ * were catalogued and how many found no song.
+ */
+export async function attachToHeldAlbum(albumId: string, album: AlbumGroup, files: FileAttachment[]): Promise<{ attached: number; unmatched: number }> {
+  const { results: tracks } = await env.DB.prepare(
+    `SELECT t.recording_id, coalesce(t.title_on_release, r.title) AS title, r.title AS song, t.disc, t.position, e.id AS release_id,
+            e.id = g.preferred_release_id AS preferred
+     FROM release_group g JOIN release e ON e.release_group_id = g.id JOIN track t ON t.release_id = e.id JOIN recording r ON r.id = t.recording_id
+     WHERE g.id = ?
+     ORDER BY preferred DESC, e.id, t.disc, t.position`,
+  )
+    .bind(albumId)
+    .all<{ recording_id: string; title: string; song: string; disc: number; position: number; release_id: string; preferred: number }>();
+  const key = (title: string) => normaliseTitle(withoutCredits(title));
+  const byTitle = new Map<string, string>();
+  for (const t of tracks) for (const k of [key(t.title), key(t.song)]) if (!byTitle.has(k)) byTitle.set(k, t.recording_id);
+  const counts = new Map<string, number>();
+  for (const t of tracks) counts.set(t.release_id, (counts.get(t.release_id) ?? 0) + 1);
+  const sameLength = [...counts].find(([, n]) => n === album.tracks.length)?.[0];
+  const byPosition = new Map(tracks.filter((t) => t.release_id === sameLength).map((t) => [`${t.disc}-${t.position}`, t.recording_id]));
+
+  const rows = album.tracks.flatMap((track, i) => {
+    const file = files[i]!;
+    const recordingId = byTitle.get(key(track.title)) ?? byPosition.get(`${track.disc}-${track.position}`);
+    return recordingId ? [{ id: crypto.randomUUID(), recording_id: recordingId, path: file.path, format: file.format, bitrate: file.bitrate, checksum: file.checksum }] : [];
+  });
+  if (rows.length === 0) return { attached: 0, unmatched: album.tracks.length };
+  const result = await env.DB.prepare(
+    `INSERT INTO file (id, recording_id, path, format, bitrate, checksum)
+     SELECT value ->> '$.id', value ->> '$.recording_id', value ->> '$.path', value ->> '$.format', value ->> '$.bitrate', value ->> '$.checksum'
+     FROM json_each(?) WHERE true
+     ON CONFLICT (path) DO NOTHING`,
+  )
+    .bind(JSON.stringify(rows))
+    .run();
+  return { attached: result.meta.changes ?? 0, unmatched: album.tracks.length - rows.length };
+}
+
 export interface AlbumOutcome {
   title: string;
   artist: string;
   tracks: number;
-  status: 'added' | 'queued' | 'skipped';
+  status: 'added' | 'matched' | 'queued' | 'skipped';
   /** Where to look: the album page, or the jobs page for a queued import. */
   href: string | null;
   note: string | null;
 }
 
-export async function importFiles(input: z.infer<typeof filesPayload>): Promise<AlbumOutcome[]> {
+export async function importFiles(input: z.input<typeof filesPayload>): Promise<AlbumOutcome[]> {
   const albums = groupAlbums(input.files as FileRecord[]);
   const outcomes: AlbumOutcome[] = [];
   // Imports from MusicBrainz tags: one batch on the Jobs page (0072), made when the first is queued.
   let batch: string | null = null;
 
   for (const album of albums) {
-    const files = attachmentsFor(album, input.root);
+    const files = attachmentsFor(album, input.root ?? '');
     const base = { title: album.title, artist: album.artist, tracks: album.tracks.length };
-    const held = await env.DB.prepare(
+    const catalogued = await env.DB.prepare(
       `SELECT count(*) AS n FROM file WHERE path IN (SELECT value FROM json_each(?))`,
     )
       .bind(JSON.stringify(files.map((f) => f.path)))
       .first<number>('n');
+    if (catalogued) {
+      outcomes.push({ ...base, status: 'skipped', href: null, note: `${catalogued} of these files are already catalogued.` });
+      continue;
+    }
+
+    // Already in the library (most of what is on disk is): the files join
+    // it; nothing new is made. Cillian's answer first; with none, the album
+    // held under the same artist and title.
+    const choice = input.choices?.[album.key];
+    if (choice && choice !== 'new') {
+      const exists = await env.DB.prepare(`SELECT 1 FROM release_group WHERE id = ?`).bind(choice).first();
+      if (!exists) {
+        outcomes.push({ ...base, status: 'skipped', href: null, note: 'The album chosen for these files is no longer in the library. Choose the folder again.' });
+        continue;
+      }
+    }
+    const held = choice === 'new' ? null : (choice ?? (await heldAlbum(album)));
     if (held) {
-      outcomes.push({ ...base, status: 'skipped', href: null, note: `${held} of these files are already catalogued.` });
+      const { attached, unmatched } = await attachToHeldAlbum(held, album, files);
+      outcomes.push({
+        ...base,
+        status: 'matched',
+        href: `/album/${held}`,
+        note: `Already in your library: ${attached} ${attached === 1 ? 'file' : 'files'} catalogued against its songs${unmatched ? `, ${unmatched} matched no song on it` : ''}.`,
+      });
       continue;
     }
 

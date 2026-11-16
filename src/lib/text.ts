@@ -53,3 +53,11 @@ export function normaliseName(name: string): string {
 export function withoutFeaturing(title: string): string {
   return title.replace(/\s*[([](?:feat\.?|ft\.?|featuring|with)\s[^)\]]*[)\]]|\s+(?:feat\.?|ft\.?|featuring)\s.+$/giu, '').trim() || title;
 }
+
+/**
+ * A song title as a rip often has it, without the guests and producers it
+ * adds: "Ballin (ft. Castro) (Prod by Arthur McArthur)" is "Ballin".
+ */
+export function withoutCredits(title: string): string {
+  return withoutFeaturing(title.replace(/\s*[([](?:prod\.?|produced)(?:\s+by)?\s[^)\]]*[)\]]/giu, '').trim() || title);
+}
