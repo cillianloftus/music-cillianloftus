@@ -81,19 +81,54 @@ const onNow = Astro.url.pathname === '/now';
     }
   };
 
+  /** What your own player (/play, another tab) says is on: shown here before Spotify. */
+  type LocalState = { title: string; artist: string; art: string | null; playing: boolean; positionMs: number; durationMs: number; at: number };
+
   class NowBar extends HTMLElement {
     clock = new NowClock(stored());
     lastEnd = 0;
+    local: LocalState | null = null;
+    channel = 'BroadcastChannel' in window ? new BroadcastChannel('local-player') : null;
+
+    /** The player tab spoke in the last few seconds (it says what is on every two). */
+    localOn(): LocalState | null {
+      return this.local && Date.now() - this.local.at < 6000 ? this.local : null;
+    }
 
     connectedCallback() {
       const onNow = this.hasAttribute('data-on-now');
+      this.channel?.addEventListener('message', (event) => {
+        const m = event.data as { type?: string; state?: Omit<LocalState, 'at'> };
+        if (m.type === 'state' && m.state) this.local = { ...m.state, at: Date.now() };
+        if (m.type === 'stopped') this.local = null;
+        this.paint();
+      });
+      // Ask a player already open to say what it is playing.
+      this.channel?.postMessage({ type: 'hello' });
+      // The bar opens the player tab rather than Now playing while your own files play.
+      this.querySelector('.nb-link')!.addEventListener('click', (event) => {
+        if (!this.localOn()) return;
+        event.preventDefault();
+        window.open('', 'music-player')?.focus();
+      });
       this.querySelector('[data-nb-toggle]')!.addEventListener('click', () => {
+        const local = this.localOn();
+        if (local) {
+          local.playing = !local.playing;
+          this.paint();
+          this.channel?.postMessage({ type: 'command', cmd: 'toggle' });
+          return;
+        }
         if (!this.clock.state) return;
         this.clock.set({ playing: !this.clock.state.playing });
         this.paint();
         void this.send({ action: this.clock.state.playing ? 'play' : 'pause' });
       });
       this.querySelector('[data-nb-next]')!.addEventListener('click', () => {
+        if (this.localOn()) {
+          this.channel?.postMessage({ type: 'command', cmd: 'next' });
+          return;
+        }
         if (this.clock.advance()) this.paint();
         void this.send({ action: 'next' });
       });
@@ -117,6 +152,11 @@ const onNow = Astro.url.pathname === '/now';
     }
 
     tick() {
+      // The player tab went quiet (closed without a word): back to Spotify, or away.
+      if (this.local && !this.localOn()) {
+        this.local = null;
+        this.paint();
+      }
       const now = Date.now();
       // The song ran out: on to the next in Spotify's queue, then check with Spotify.
       if (this.clock.ended(now) && now - this.lastEnd > 1500) {
@@ -165,6 +205,19 @@ const onNow = Astro.url.pathname === '/now';
     }
 
     paint() {
+      const local = this.localOn();
+      if (local && !this.hasAttribute('data-on-now')) {
+        this.hidden = false;
+        document.documentElement.toggleAttribute('data-nowbar', true);
+        const art = this.querySelector<HTMLImageElement>('[data-nb-art]')!;
+        if (art.getAttribute('src') !== (local.art ?? '')) art.src = local.art ?? '';
+        this.querySelector('[data-nb-title]')!.textContent = local.title;
+        this.querySelector('[data-nb-by]')!.textContent = local.artist;
+        this.classList.toggle('is-playing', local.playing);
+        this.querySelector('[data-nb-toggle]')!.setAttribute('aria-label', local.playing ? 'Pause' : 'Play');
+        this.paintProgress();
+        return;
+      }
       const state = this.clock.state;
       // Shown while a song is on, or paused part-way (it can be resumed from here).
       const visible = Boolean(state?.track && (state.playing || state.progressMs > 0));
@@ -182,6 +235,12 @@ const onNow = Astro.url.pathname === '/now';
     }
 
     paintProgress() {
+      const local = this.localOn();
+      if (local) {
+        const pos = Math.min(local.positionMs + (local.playing ? Date.now() - local.at : 0), local.durationMs || 1);
+        this.querySelector<HTMLElement>('[data-nb-fill]')!.style.width = `${local.durationMs ? (pos / local.durationMs) * 100 : 0}%`;
+        return;
+      }
       const track = this.clock.state?.track;
       if (!track || this.hidden) return;
       this.querySelector<HTMLElement>('[data-nb-fill]')!.style.width = `${(this.clock.position() / track.durationMs) * 100}%`;

@@ -12,6 +12,8 @@
  */
 
 import { env } from 'cloudflare:workers';
+import { listenTrack } from './listens/keys';
+import { savePlays } from './listens/store';
 import { normaliseName, normaliseTitle, withoutFeaturing } from './text';
 
 /** What the browser reads from each file and sends to be matched. */
@@ -238,4 +240,35 @@ export async function audioTotals(): Promise<{ files: number; bytes: number }> {
     bytes: number;
   }>();
   return row ?? { files: 0, bytes: 0 };
+}
+
+/**
+ * A listen on the player (/play), logged as any other: its song's listen
+ * track (keyed as Spotify or MusicBrainz would key it, so it pairs with
+ * the same song heard there), then the play, counted from 30 seconds and
+ * deduplicated with the rest (listens/store.ts). The source is "manual",
+ * the site's own; the platform says "Your files".
+ */
+export async function logLocalPlay(userId: string, recordingId: string, playedAt: string, msPlayed: number): Promise<boolean> {
+  const song = await env.DB.prepare(
+    `SELECT r.title, r.spotify_id, r.mbid,
+            (SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+             WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary') AS artist,
+            (SELECT g.title FROM v_recording_album ra JOIN release_group g ON g.id = ra.release_group_id WHERE ra.recording_id = r.id) AS album
+     FROM recording r WHERE r.id = ?`,
+  )
+    .bind(recordingId)
+    .first<{ title: string; spotify_id: string | null; mbid: string | null; artist: string | null; album: string | null }>();
+  if (!song) return false;
+  const row = listenTrack({ artist: song.artist ?? 'Unknown', title: song.title, album: song.album, spotify_id: song.spotify_id, mbid: song.mbid });
+  await env.DB.prepare(
+    `INSERT INTO listen_track (key, artist, title, album, artist_key, title_key, spotify_id, mbid, recording_id, matched_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+     ON CONFLICT (key) DO UPDATE SET recording_id = coalesce(listen_track.recording_id, excluded.recording_id),
+                                     matched_at = coalesce(listen_track.matched_at, excluded.matched_at)`,
+  )
+    .bind(row.key, row.artist, row.title, row.album, row.artist_key, row.title_key, row.spotify_id, row.mbid, recordingId)
+    .run();
+  const added = await savePlays(userId, 'manual', [{ track_key: row.key, played_at: playedAt, ms_played: Math.max(0, Math.round(msPlayed)), platform: 'Your files' }]);
+  return added > 0;
 }

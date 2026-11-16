@@ -36,6 +36,21 @@ const file = (over: Partial<FileToMatch>): FileToMatch => ({
   ...over,
 });
 
+describe('listens on your own player', () => {
+  it('are logged as plays of the song, counted from thirty seconds', async () => {
+    const { logLocalPlay } = await import('./audio');
+    expect(await logLocalPlay('u-owner', 'b1', '2026-11-16T21:00:00.000Z', 185_000)).toBe(true);
+    expect(await logLocalPlay('u-owner', 'b1', '2026-11-16T22:00:00.000Z', 12_000)).toBe(true);
+    const plays = db.prepare(`SELECT recording_id, ms_played, counted, source, platform FROM play WHERE user_id = 'u-owner' AND platform = 'Your files' ORDER BY played_at`).all();
+    expect(plays).toEqual([
+      { recording_id: 'b1', ms_played: 185000, counted: 1, source: 'manual', platform: 'Your files' },
+      { recording_id: 'b1', ms_played: 12000, counted: 0, source: 'manual', platform: 'Your files' },
+    ]);
+    // The same listen sent twice is one play.
+    expect(await logLocalPlay('u-owner', 'b1', '2026-11-16T21:00:00.000Z', 185_000)).toBe(false);
+  });
+});
+
 describe('your files, matched to songs', () => {
   it('by the tagged artist and title, guests and case aside, and not a song far longer', async () => {
     const [b1, unknown] = await matchFiles([file({ title: 'song b1 (feat. Someone)' }), file({ path: 'x.flac', title: 'Not In The Library' })]);

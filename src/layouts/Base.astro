@@ -70,7 +70,8 @@ const fullTitle = title === 'music' ? 'music · Cillian Loftus' : `${title} · m
     {/* Straight after the page: its sections fold before it paints. */}
     <CollapsibleSections />
     {Astro.locals.user && <JobTray />}
-    {Astro.locals.user && <NowBar />}
+    {/* Not on the player itself, which is the thing it would show. */}
+    {Astro.locals.user && Astro.url.pathname !== '/play' && <NowBar />}
     <SearchOverlay />
     {Astro.locals.user && <SoftForms />}
     {/* Long-press (or right-click) a song or album for its quick actions. */}

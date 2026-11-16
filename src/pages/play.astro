@@ -107,6 +107,42 @@ const first = queue[start];
     const time = (s: number) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00');
     let seeking = false;
 
+    // Each listen logged like any other play (api/write/audio/played): when it began and how
+    // much was heard, seeks aside. Sent when the song ends or changes, or the tab is left.
+    let listen: { recordingId: string; startedAt: string | null; heardMs: number; lastAt: number | null } | null = null;
+    const report = (beacon = false) => {
+      if (!listen?.startedAt || listen.heardMs < 1000) return;
+      const body = JSON.stringify({ recordingId: listen.recordingId, playedAt: listen.startedAt, msPlayed: Math.round(listen.heardMs) });
+      listen = null;
+      if (beacon && navigator.sendBeacon) navigator.sendBeacon('/api/write/audio/played', new Blob([body], { type: 'application/json' }));
+      else void fetch('/api/write/audio/played', { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true }).catch(() => {});
+    };
+    const hear = () => {
+      if (!listen) return;
+      const now = performance.now();
+      // Time heard while playing, a second at most between updates (a seek is not listening).
+      if (listen.lastAt !== null && !audio.paused) listen.heardMs += Math.min(1000, now - listen.lastAt);
+      listen.lastAt = audio.paused ? null : now;
+    };
+
+    // The rest of the site's tabs show what is playing here (NowBar) and can pause or skip it.
+    const channel = 'BroadcastChannel' in window ? new BroadcastChannel('local-player') : null;
+    const broadcast = () => {
+      const t = queue[index];
+      if (!channel || !t) return;
+      channel.postMessage({
+        type: 'state',
+        state: {
+          title: t.title,
+          artist: t.artist,
+          art: t.artKey ? `/${t.artKey}/250.jpg` : null,
+          playing: !audio.paused,
+          positionMs: Math.round(audio.currentTime * 1000),
+          durationMs: Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : 0,
+        },
+      });
+    };
+
     const show = () => {
       const t = queue[index]!;
       $('[data-title]')!.textContent = t.title;
@@ -134,9 +170,14 @@ const first = queue[start];
     };
 
     const load = (i: number, play: boolean) => {
+      // The song leaving (ended or skipped): its listen, as far as it went.
+      hear();
+      report();
       index = (i + queue.length) % queue.length;
       audio.src = `/audio/${queue[index]!.fileId}`;
+      listen = { recordingId: queue[index]!.recordingId, startedAt: null, heardMs: 0, lastAt: null };
       show();
+      broadcast();
       if (play) void start();
     };
     const start = async () => {
@@ -155,20 +196,37 @@ const first = queue[start];
     for (const b of root.querySelectorAll<HTMLButtonElement>('[data-index]')) b.addEventListener('click', () => load(Number(b.dataset.index), true));
     audio.addEventListener('ended', () => {
       if (index < queue.length - 1) load(index + 1, true);
+      else {
+        // The last song: its listen now, nothing follows to send it.
+        hear();
+        report();
+        broadcast();
+      }
     });
     audio.addEventListener('play', () => {
       $('[data-icon-play]')!.style.display = 'none';
       $('[data-icon-pause]')!.style.display = '';
       toggle.setAttribute('aria-label', 'Pause');
+      if (listen && !listen.startedAt) listen.startedAt = new Date().toISOString();
+      if (listen) listen.lastAt = performance.now();
+      broadcast();
     });
     audio.addEventListener('pause', () => {
       $('[data-icon-play]')!.style.display = '';
       $('[data-icon-pause]')!.style.display = 'none';
       toggle.setAttribute('aria-label', 'Play');
+      hear();
+      broadcast();
+    });
+    audio.addEventListener('seeking', () => {
+      // Listening resumes from the new place; the jump itself is not heard.
+      hear();
+      if (listen) listen.lastAt = audio.paused ? null : performance.now();
     });
     audio.addEventListener('error', () => (status.textContent = 'This file would not play here.'));
     audio.addEventListener('loadedmetadata', () => (length.textContent = time(audio.duration)));
     audio.addEventListener('timeupdate', () => {
+      hear();
       at.textContent = time(audio.currentTime);
       if (!seeking && audio.duration) seek.value = String(Math.round((audio.currentTime / audio.duration) * 1000));
       if ('mediaSession' in navigator && audio.duration && 'setPositionState' in navigator.mediaSession) {
@@ -200,6 +258,24 @@ const first = queue[start];
         } catch {}
       }
     }
+
+    // Other tabs: say what is on every couple of seconds (so a closed player is noticed),
+    // answer a tab that has just opened, and take its play, pause and next.
+    if (channel) {
+      setInterval(broadcast, 2000);
+      channel.addEventListener('message', (event) => {
+        const m = event.data as { type?: string; cmd?: string };
+        if (m.type === 'hello') broadcast();
+        if (m.type === 'command' && m.cmd === 'toggle') audio.paused ? void start() : audio.pause();
+        if (m.type === 'command' && m.cmd === 'next') load(index + 1, true);
+      });
+    }
+    // Leaving the tab: the listen so far, and the bars elsewhere let go.
+    addEventListener('pagehide', () => {
+      hear();
+      report(true);
+      channel?.postMessage({ type: 'stopped' });
+    });
 
     load(index, true);
   }

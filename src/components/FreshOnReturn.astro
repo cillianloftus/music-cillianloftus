@@ -7,7 +7,7 @@
  *
  * Every save marks the time (any form posted, any write sent in the
  * background: a rating, a cover, a quick action; not the player's
- * controls). A page returned to by back or forward that was loaded before
+ * controls, nor a listen logged by your own player). A page returned to by back or forward that was loaded before
  * the latest save reloads, and lands where it was: the scroll is put back
  * before the page paints. Signed in only: only then is anything saved.
  * Without JavaScript the browser does as it always did.
@@ -59,7 +59,7 @@ const rendered = Date.now();
       try {
         const method = (init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
         const url = new URL(input instanceof Request ? input.url : String(input), location.href);
-        if (method !== 'GET' && url.origin === location.origin && !url.pathname.startsWith('/api/write/player')) mark();
+        if (method !== 'GET' && url.origin === location.origin && !url.pathname.startsWith('/api/write/player') && url.pathname !== '/api/write/audio/played') mark();
       } catch {}
       return send(input, init);
     };
