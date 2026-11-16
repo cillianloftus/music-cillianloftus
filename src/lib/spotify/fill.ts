@@ -51,6 +51,19 @@ export async function fillFromSpotify(spotify: Getter, albumId: string): Promise
     )
     .bind(row.release_id ?? '')
     .all<{ id: string; spotify_id: string | null; length_ms: number | null; isrc: string | null; disc: number; position: number }>();
+  // ISRCs the album listing leaves out, for the songs missing one: all in one request
+  // (up to 50 tracks), not one each. One each was most of the site's Spotify calls, and on
+  // 16 Nov Spotify answered too many with a six-hour wait.
+  const wanted = results
+    .filter((rec) => !rec.isrc)
+    .map((rec) => rows.find((t) => t.id === rec.spotify_id) ?? rows.find((t) => t.disc === rec.disc && t.position === rec.position))
+    .filter((t): t is (typeof rows)[number] => Boolean(t && !t.isrc));
+  const isrcOf = new Map<string, string>();
+  for (let i = 0; i < wanted.length; i += 50) {
+    const ids = wanted.slice(i, i + 50).map((t) => t.id);
+    const found = await spotify.get<{ tracks: ({ id: string; external_ids?: { isrc?: string } } | null)[] }>(`/tracks?ids=${ids.join(',')}`).catch(() => null);
+    for (const t of found?.tracks ?? []) if (t?.external_ids?.isrc) isrcOf.set(t.id, t.external_ids.isrc);
+  }
   for (const rec of results) {
     const match = rows.find((t) => t.id === rec.spotify_id) ?? rows.find((t) => t.disc === rec.disc && t.position === rec.position);
     if (!match) continue;
@@ -59,8 +72,7 @@ export async function fillFromSpotify(spotify: Getter, albumId: string): Promise
       report.lengths += 1;
     }
     if (!rec.isrc) {
-      // Album listings omit ISRCs; one track lookup each, only where missing.
-      const isrc = match.isrc ?? (await spotify.get<{ external_ids?: { isrc?: string } }>(`/tracks/${match.id}`).catch(() => null))?.external_ids?.isrc ?? null;
+      const isrc = match.isrc ?? isrcOf.get(match.id) ?? null;
       if (isrc && /^[A-Za-z0-9]{12}$/.test(isrc)) {
         statements.push(db.prepare(`UPDATE recording SET isrc = ? WHERE id = ? AND isrc IS NULL`).bind(isrc.toUpperCase(), rec.id));
         report.isrcs += 1;

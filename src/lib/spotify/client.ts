@@ -192,6 +192,36 @@ class RawBody {
 let quietUntil = 0;
 
 /**
+ * A long wait (a minute or more: Spotify's penalty for too many requests,
+ * six hours on 16 Nov) is kept in KV, so every Worker keeps away, patient
+ * clients too: asking during it only prolongs it. Read at most once a
+ * minute per Worker. /manage/health shows it.
+ */
+export const SPOTIFY_PENALTY_KEY = 'spotify-penalty-until';
+let penaltyUntil = 0;
+let penaltyReadAt = 0;
+async function penalty(): Promise<number> {
+  if (Date.now() - penaltyReadAt > 60_000) {
+    penaltyReadAt = Date.now();
+    try {
+      const kept = await env.CACHE.get(SPOTIFY_PENALTY_KEY);
+      penaltyUntil = kept ? Math.max(penaltyUntil, Number(kept)) : penaltyUntil;
+    } catch {
+      /* No KV: this Worker's memory only. */
+    }
+  }
+  return penaltyUntil;
+}
+async function keepAway(seconds: number): Promise<void> {
+  penaltyUntil = Math.max(penaltyUntil, Date.now() + seconds * 1000);
+  try {
+    await env.CACHE.put(SPOTIFY_PENALTY_KEY, String(penaltyUntil), { expirationTtl: Math.max(60, Math.ceil(seconds)) });
+  } catch {
+    /* Kept in this Worker at least. */
+  }
+}
+
+/**
  * An authenticated API client for one user. Patient (the default), it waits
  * out a 429 as Spotify asks, up to 30 s, three times over. Impatient (the
  * work after an import), it gives up at once and keeps away for as long as
@@ -208,6 +238,9 @@ export function spotifyFor(userId: string, { patient = true }: { patient?: boole
     refreshed = false,
   ): Promise<T> {
     if (!patient && Date.now() < quietUntil) throw new SpotifyError(`Spotify asked to wait; ${path.split('?')[0]} left for later`, 429);
+    if (Date.now() < (await penalty())) {
+      throw new SpotifyError(`Spotify asked the site to keep away until ${new Date(penaltyUntil).toISOString().slice(11, 16)} UTC`, 429);
+    }
     const token = await accessToken(userId, refreshed);
     const response = await fetch(`${API}${path}`, {
       method,
@@ -221,8 +254,14 @@ export function spotifyFor(userId: string, { patient = true }: { patient?: boole
     // An access token can be revoked early; refresh once and retry.
     if (response.status === 401 && !refreshed) return request<T>(method, path, body, attempt, true);
 
+    // A minute or more: a penalty, kept for every Worker; nobody waits it out.
+    const retryAfter = Number(response.headers.get('Retry-After') ?? (patient ? '1' : '30'));
+    if (response.status === 429 && retryAfter >= 60) {
+      await keepAway(retryAfter);
+      throw new SpotifyError(`Spotify asked the site to keep away until ${new Date(penaltyUntil).toISOString().slice(11, 16)} UTC`, 429);
+    }
     if (response.status === 429 && !patient) {
-      quietUntil = Date.now() + Number(response.headers.get('Retry-After') ?? '30') * 1000;
+      quietUntil = Date.now() + retryAfter * 1000;
       throw new SpotifyError(`Spotify asked to wait; ${path.split('?')[0]} left for later`, 429);
     }
     if (response.status === 429 && attempt <= 3) {

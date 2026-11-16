@@ -9,6 +9,8 @@ import PageHeader from '../../components/PageHeader.astro';
 import Disclosure from '../../components/Disclosure.astro';
 import { formatRelative } from '../../lib/format';
 import { BACKUP_DUE_HOURS, READ_BUDGET, latestBackup, nightlyRuns, queueState, readsToday, type ReadsToday } from '../../lib/health';
+import { env } from 'cloudflare:workers';
+import { SPOTIFY_PENALTY_KEY } from '../../lib/spotify/client';
 
 let readsError: string | null = null;
 const [backup, queue, nightly, reads] = await Promise.all([
@@ -22,6 +24,9 @@ const [backup, queue, nightly, reads] = await Promise.all([
 ]);
 
 const when = new Intl.DateTimeFormat('en-IE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Dublin' });
+// Spotify's penalty for too many requests, if one is on (spotify/client.ts keeps it).
+const penaltyUntil = Number((await env.CACHE.get(SPOTIFY_PENALTY_KEY).catch(() => null)) ?? 0);
+const spotifyAway = penaltyUntil > Date.now();
 const count = (n: number) => n.toLocaleString('en-GB');
 const millions = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : count(n));
 const size = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -59,6 +64,24 @@ const WORD: Record<Tone, string> = { good: 'Fine', warn: 'Check', bad: 'Needs a 
         )
       }
       <a class="more" href="/manage/backups">Backups</a>
+    </section>
+
+    <section class="form-card" aria-labelledby="spotify-heading">
+      <div class="head">
+        <h2 id="spotify-heading">Spotify</h2>
+        <span class="tone" data-tone={spotifyAway ? 'warn' : 'good'}>{spotifyAway ? 'Waiting' : 'Fine'}</span>
+      </div>
+      {
+        spotifyAway ? (
+          <p>
+            Spotify asked the site to stop for a while after too many requests, until{' '}
+            {new Intl.DateTimeFormat('en-IE', { timeStyle: 'short', timeZone: 'Europe/Dublin' }).format(new Date(penaltyUntil))}. Links, covers and plays from
+            Spotify wait until then; nothing else is affected.
+          </p>
+        ) : (
+          <p>Answering as usual.</p>
+        )
+      }
     </section>
 
     <section class="form-card" aria-labelledby="reads-heading">
