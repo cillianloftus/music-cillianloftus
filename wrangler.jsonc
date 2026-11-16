@@ -60,6 +60,13 @@
 			"binding": "ASSET_STORE",
 			"remote": true,
 			"bucket_name": "music-assets"
+		},
+		// Cillian's own audio files, uploaded by him and played back only to him
+		// (src/lib/audio.ts). Private: nothing here is ever served publicly.
+		{
+			"binding": "AUDIO_STORE",
+			"remote": true,
+			"bucket_name": "music-audio"
 		}
 	],
 	"ai": {

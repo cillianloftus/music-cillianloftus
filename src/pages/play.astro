@@ -1,0 +1,347 @@
+---
+/**
+ * Plays your own uploaded files (src/lib/audio.ts): an album's in order,
+ * or one song, from ?track. Opened in a tab of its own (every Play button
+ * targets the window "music-player"), so it keeps playing while the rest
+ * of the site is browsed in another; the phone's lock screen and
+ * headphones control it (Media Session). The owner's only.
+ */
+import Base from '../layouts/Base.astro';
+import { ownerId } from '../lib/auth/user';
+import { albumQueue, songQueue, type PlayableTrack } from '../lib/audio';
+
+const user = Astro.locals.user;
+const owner = user ? user.id === (await ownerId()) : false;
+const albumId = Astro.url.searchParams.get('album');
+const trackId = Astro.url.searchParams.get('track');
+let queue: PlayableTrack[] = [];
+if (owner) queue = albumId ? await albumQueue(albumId) : trackId ? await songQueue(trackId) : [];
+const start = Math.max(0, trackId ? queue.findIndex((t) => t.recordingId === trackId) : 0);
+const first = queue[start];
+---
+
+<Base title={first ? `${first.title} · Playing` : 'Player'}>
+  <div class="wrap player" data-player data-queue={JSON.stringify(queue)} data-start={start}>
+    {
+      !owner ? (
+        <p class="muted">Your own files play here once you are signed in.</p>
+      ) : queue.length === 0 ? (
+        <div class="none">
+          <h1>Nothing to play here</h1>
+          <p class="muted">
+            None of {albumId ? 'this album' : 'this song'} is uploaded yet. <a href="/manage/files/upload">Upload your music</a>.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div class="art">
+            {first?.artKey ? <img src={`/${first.artKey}/500.jpg`} alt="" width="500" height="500" data-art /> : <div class="no-art" data-art-none />}
+          </div>
+          <div class="now">
+            <p class="eyebrow">Your files</p>
+            <h1 data-title>{first?.title}</h1>
+            <p class="by">
+              <span data-artist>{first?.artist}</span>
+              {first?.album && (
+                <>
+                  {' · '}
+                  <a href={first.albumId ? `/album/${first.albumId}` : '#'} data-album target="_self">
+                    {first.album}
+                  </a>
+                </>
+              )}
+            </p>
+          </div>
+          <div class="seek">
+            <input type="range" min="0" max="1000" value="0" step="1" aria-label="Position in the song" data-seek />
+            <div class="times tabular">
+              <span data-at>0:00</span>
+              <span data-length>0:00</span>
+            </div>
+          </div>
+          <div class="controls">
+            <button type="button" class="ctl" data-prev aria-label="Previous">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M19 5 9 12l10 7z" /></svg>
+            </button>
+            <button type="button" class="ctl main" data-toggle aria-label="Play">
+              <svg viewBox="0 0 24 24" aria-hidden="true" data-icon-play><path d="M8 5.5v13l10.5-6.5z" /></svg>
+              <svg viewBox="0 0 24 24" aria-hidden="true" data-icon-pause style="display: none"><path d="M8 5v14M16 5v14" /></svg>
+            </button>
+            <button type="button" class="ctl" data-next aria-label="Next">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14M5 5l10 7-10 7z" /></svg>
+            </button>
+          </div>
+          <p class="status muted" role="status" data-status></p>
+          {queue.length > 1 && (
+            <ol class="queue" role="list" data-list>
+              {queue.map((t, i) => (
+                <li>
+                  <button type="button" data-index={i} aria-current={i === start ? 'true' : undefined}>
+                    <span class="n tabular">{i + 1}</span>
+                    <span class="t">{t.title}</span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          )}
+          <audio preload="auto" data-audio />
+        </>
+      )
+    }
+  </div>
+</Base>
+
+<script>
+  type Track = { fileId: string; recordingId: string; title: string; artist: string; album: string | null; albumId: string | null; artKey: string | null };
+  const root = document.querySelector<HTMLElement>('[data-player]');
+  const audio = root?.querySelector('[data-audio]') as unknown as HTMLAudioElement | null;
+  if (root && audio) {
+    const queue = JSON.parse(root.dataset.queue || '[]') as Track[];
+    let index = Number(root.dataset.start) || 0;
+    const $ = <T extends HTMLElement>(sel: string) => root.querySelector<T>(sel);
+    const seek = $<HTMLInputElement>('[data-seek]')!;
+    const at = $('[data-at]')!;
+    const length = $('[data-length]')!;
+    const toggle = $<HTMLButtonElement>('[data-toggle]')!;
+    const status = $('[data-status]')!;
+    const time = (s: number) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00');
+    let seeking = false;
+
+    const show = () => {
+      const t = queue[index]!;
+      $('[data-title]')!.textContent = t.title;
+      $('[data-artist]')!.textContent = t.artist;
+      const album = $<HTMLAnchorElement>('[data-album]');
+      if (album) {
+        album.textContent = t.album ?? '';
+        if (t.albumId) album.href = `/album/${t.albumId}`;
+      }
+      const art = $<HTMLImageElement>('[data-art]');
+      if (art && t.artKey) art.src = `/${t.artKey}/500.jpg`;
+      document.title = `${t.title} · Playing`;
+      for (const b of root.querySelectorAll<HTMLButtonElement>('[data-index]')) {
+        if (Number(b.dataset.index) === index) b.setAttribute('aria-current', 'true');
+        else b.removeAttribute('aria-current');
+      }
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: t.title,
+          artist: t.artist,
+          album: t.album ?? '',
+          artwork: t.artKey ? [{ src: new URL(`/${t.artKey}/500.jpg`, location.href).href, sizes: '500x500', type: 'image/jpeg' }] : [],
+        });
+      }
+    };
+
+    const load = (i: number, play: boolean) => {
+      index = (i + queue.length) % queue.length;
+      audio.src = `/audio/${queue[index]!.fileId}`;
+      show();
+      if (play) void start();
+    };
+    const start = async () => {
+      try {
+        await audio.play();
+        status.textContent = '';
+      } catch {
+        // A browser may want a tap first.
+        status.textContent = 'Tap play to start.';
+      }
+    };
+
+    toggle.addEventListener('click', () => (audio.paused ? void start() : audio.pause()));
+    $('[data-prev]')!.addEventListener('click', () => (audio.currentTime > 3 ? (audio.currentTime = 0) : load(index - 1, true)));
+    $('[data-next]')!.addEventListener('click', () => load(index + 1, true));
+    for (const b of root.querySelectorAll<HTMLButtonElement>('[data-index]')) b.addEventListener('click', () => load(Number(b.dataset.index), true));
+    audio.addEventListener('ended', () => {
+      if (index < queue.length - 1) load(index + 1, true);
+    });
+    audio.addEventListener('play', () => {
+      $('[data-icon-play]')!.style.display = 'none';
+      $('[data-icon-pause]')!.style.display = '';
+      toggle.setAttribute('aria-label', 'Pause');
+    });
+    audio.addEventListener('pause', () => {
+      $('[data-icon-play]')!.style.display = '';
+      $('[data-icon-pause]')!.style.display = 'none';
+      toggle.setAttribute('aria-label', 'Play');
+    });
+    audio.addEventListener('error', () => (status.textContent = 'This file would not play here.'));
+    audio.addEventListener('loadedmetadata', () => (length.textContent = time(audio.duration)));
+    audio.addEventListener('timeupdate', () => {
+      at.textContent = time(audio.currentTime);
+      if (!seeking && audio.duration) seek.value = String(Math.round((audio.currentTime / audio.duration) * 1000));
+      if ('mediaSession' in navigator && audio.duration && 'setPositionState' in navigator.mediaSession) {
+        try {
+          navigator.mediaSession.setPositionState({ duration: audio.duration, position: audio.currentTime, playbackRate: audio.playbackRate });
+        } catch {}
+      }
+    });
+    seek.addEventListener('input', () => {
+      seeking = true;
+      at.textContent = time((Number(seek.value) / 1000) * audio.duration);
+    });
+    seek.addEventListener('change', () => {
+      if (audio.duration) audio.currentTime = (Number(seek.value) / 1000) * audio.duration;
+      seeking = false;
+    });
+
+    if ('mediaSession' in navigator) {
+      const actions: [MediaSessionAction, MediaSessionActionHandler][] = [
+        ['play', () => void start()],
+        ['pause', () => audio.pause()],
+        ['previoustrack', () => load(index - 1, true)],
+        ['nexttrack', () => load(index + 1, true)],
+        ['seekto', (d) => d.seekTime !== undefined && (audio.currentTime = d.seekTime)],
+      ];
+      for (const [action, handler] of actions) {
+        try {
+          navigator.mediaSession.setActionHandler(action, handler);
+        } catch {}
+      }
+    }
+
+    load(index, true);
+  }
+</script>
+
+<style>
+  .player {
+    display: grid;
+    gap: var(--space-4);
+    justify-items: center;
+    padding-block: var(--space-6);
+    --content-max: 28rem;
+    text-align: center;
+  }
+
+  .art {
+    width: min(100%, 22rem);
+    aspect-ratio: 1;
+    overflow: hidden;
+    border-radius: var(--radius-l);
+    background: var(--surface-2);
+    box-shadow: 0 24px 60px -16px rgb(0 0 0 / 0.55);
+  }
+
+  .art img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .now {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .now h1 {
+    margin: 0;
+    font-size: var(--step-2);
+    text-wrap: balance;
+  }
+
+  .by {
+    margin: 0;
+    color: var(--text-muted);
+  }
+
+  .seek {
+    width: 100%;
+  }
+
+  .seek input {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  .times {
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+  }
+
+  .ctl {
+    display: grid;
+    place-items: center;
+    width: 3rem;
+    height: 3rem;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .ctl.main {
+    width: 4.25rem;
+    height: 4.25rem;
+    background: var(--text);
+    color: var(--bg);
+  }
+
+  .ctl svg {
+    width: 1.6rem;
+    height: 1.6rem;
+    fill: currentColor;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .ctl [hidden] {
+    display: none;
+  }
+
+  .status:empty {
+    display: none;
+  }
+
+  .queue {
+    display: grid;
+    width: 100%;
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    list-style: none;
+    text-align: left;
+  }
+
+  .queue button {
+    display: flex;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: var(--target);
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .queue button[aria-current] {
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  .queue .n {
+    min-width: 1.5rem;
+    color: var(--text-muted);
+  }
+
+  .none {
+    display: grid;
+    gap: var(--space-2);
+  }
+</style>

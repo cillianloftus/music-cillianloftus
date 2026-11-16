@@ -19,25 +19,28 @@ export const GET: APIRoute = async ({ url, locals }) => {
       `SELECT r.title, r.spotify_id,
               (SELECT x.release_group_id FROM track t JOIN release x ON x.id = t.release_id JOIN release_group g ON g.id = x.release_group_id
                WHERE t.recording_id = r.id ORDER BY g.type <> 'album', g.first_release_date LIMIT 1) AS album_id,
-              (SELECT depth FROM rating WHERE entity_type = 'recording' AND entity_id = r.id AND user_id = ?2 ORDER BY rated_at DESC LIMIT 1) AS depth
+              (SELECT depth FROM rating WHERE entity_type = 'recording' AND entity_id = r.id AND user_id = ?2 ORDER BY rated_at DESC LIMIT 1) AS depth,
+              EXISTS (SELECT 1 FROM file f WHERE f.recording_id = r.id AND f.audio_key IS NOT NULL) AS audio
        FROM recording r WHERE r.id = ?1`,
     )
       .bind(id, user.id)
-      .first<{ title: string; spotify_id: string | null; album_id: string | null; depth: string | null }>();
+      .first<{ title: string; spotify_id: string | null; album_id: string | null; depth: string | null; audio: number }>();
     if (!row) return new Response(null, { status: 404 });
-    return Response.json({ kind, id, title: row.title, spotifyId: row.spotify_id, albumId: row.album_id, depth: row.depth }, { headers });
+    return Response.json({ kind, id, title: row.title, spotifyId: row.spotify_id, albumId: row.album_id, depth: row.depth, audio: row.audio === 1 }, { headers });
   }
 
   if (kind === 'album') {
     const row = await env.DB.prepare(
       `SELECT g.title, g.spotify_id,
-              (SELECT depth FROM rating WHERE entity_type = 'release_group' AND entity_id = g.id AND user_id = ?2 ORDER BY rated_at DESC LIMIT 1) AS depth
+              (SELECT depth FROM rating WHERE entity_type = 'release_group' AND entity_id = g.id AND user_id = ?2 ORDER BY rated_at DESC LIMIT 1) AS depth,
+              EXISTS (SELECT 1 FROM release x JOIN track t ON t.release_id = x.id JOIN file f ON f.recording_id = t.recording_id
+                      WHERE x.release_group_id = g.id AND f.audio_key IS NOT NULL) AS audio
        FROM release_group g WHERE g.id = ?1`,
     )
       .bind(id, user.id)
-      .first<{ title: string; spotify_id: string | null; depth: string | null }>();
+      .first<{ title: string; spotify_id: string | null; depth: string | null; audio: number }>();
     if (!row) return new Response(null, { status: 404 });
-    return Response.json({ kind, id, title: row.title, spotifyId: row.spotify_id, albumId: null, depth: row.depth }, { headers });
+    return Response.json({ kind, id, title: row.title, spotifyId: row.spotify_id, albumId: null, depth: row.depth, audio: row.audio === 1 }, { headers });
   }
 
   return new Response(null, { status: 400 });

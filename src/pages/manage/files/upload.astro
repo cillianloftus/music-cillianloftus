@@ -1,0 +1,280 @@
+---
+/**
+ * Upload your music: choose a folder (or, on a phone, the files), and each
+ * file is read here for its tags and checksum, matched to its song in the
+ * library (src/lib/audio.ts), and its audio uploaded to the private store,
+ * two at a time, those already there skipped. Then any of it plays on
+ * /play, wherever you are signed in. Files that match no song are listed,
+ * to import first (Import from files) and upload again.
+ */
+import BackLink from '../../../components/BackLink.astro';
+import Base from '../../../layouts/Base.astro';
+import { audioTotals } from '../../../lib/audio';
+
+const totals = await audioTotals();
+const gb = (bytes: number) => (bytes / 1024 ** 3).toFixed(bytes > 10 * 1024 ** 3 ? 0 : 1);
+---
+
+<Base title="Upload your music">
+  <div class="wrap page">
+    <header>
+      <p><BackLink href="/manage/files">Files</BackLink></p>
+      <h1>Upload your music</h1>
+      <p class="muted">
+        Your own files, kept privately and played only to you, anywhere you are signed in.
+        {totals.files > 0 && <> {totals.files.toLocaleString('en-GB')} uploaded so far, {gb(totals.bytes)} GB.</>}
+      </p>
+    </header>
+
+    <noscript><p class="notice">Uploading needs JavaScript.</p></noscript>
+
+    <label class="drop" data-drop hidden>
+      <input type="file" {...{ webkitdirectory: true }} multiple class="visually-hidden" data-picker />
+      <strong data-pick-label>Choose a folder</strong>
+      <span class="muted" data-pick-hint>or drop one here. Each file is matched to its song before anything is sent.</span>
+    </label>
+
+    <p class="status" role="status" data-status></p>
+    <progress max="1" value="0" hidden data-progress></progress>
+
+    <section class="result" data-result hidden aria-labelledby="result-heading">
+      <h2 id="result-heading" tabindex="-1">What will be uploaded</h2>
+      <p data-summary></p>
+      <div class="buttons">
+        <button class="button button--primary" type="button" data-upload>Upload</button>
+        <button class="button button--quiet" type="button" data-again>Choose other files</button>
+      </div>
+      <details data-unmatched-box hidden>
+        <summary data-unmatched-summary></summary>
+        <p class="muted small">
+          These match no song in the library. <a href="/manage/import/files">Import them from your files</a> first, then upload them here.
+        </p>
+        <ul role="list" class="unmatched" data-unmatched></ul>
+      </details>
+    </section>
+  </div>
+</Base>
+
+<script>
+  import { AUDIO_EXTENSIONS } from '../../../lib/tags/albums';
+  import { readTags } from '../../../lib/tags/read';
+
+  type Match = { path: string; recordingId: string | null; title: string | null; album: string | null; uploaded: boolean };
+  type Picked = { file: File; path: string; format: string; checksum: string };
+
+  const $ = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
+  const drop = $<HTMLElement>('[data-drop]');
+  const picker = $<HTMLInputElement>('[data-picker]');
+  const status = $<HTMLElement>('[data-status]');
+  const progress = $<HTMLProgressElement>('[data-progress]');
+  const result = $<HTMLElement>('[data-result]');
+  const summary = $<HTMLElement>('[data-summary]');
+  const uploadButton = $<HTMLButtonElement>('[data-upload]');
+  const unmatchedBox = $<HTMLElement>('[data-unmatched-box]');
+  const unmatchedList = $<HTMLElement>('[data-unmatched]');
+  const MAX_BYTES = 100 * 1024 * 1024;
+
+  drop.hidden = false;
+  if (!('webkitdirectory' in picker)) {
+    $('[data-pick-label]').textContent = 'Choose files';
+    $('[data-pick-hint]').textContent = 'Any number at once. Each is matched to its song before anything is sent.';
+  }
+
+  const extension = (name: string) => name.split('.').at(-1)?.toLowerCase() ?? '';
+  const sha256 = async (file: File) =>
+    [...new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const sizeOf = (bytes: number) => (bytes > 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`);
+
+  let toSend: { picked: Picked; match: Match }[] = [];
+
+  async function readAll(files: { file: File; path: string }[]) {
+    const audio = files.filter((f) => extension(f.file.name) in AUDIO_EXTENSIONS);
+    result.hidden = true;
+    if (audio.length === 0) {
+      status.textContent = 'No audio files there (MP3, FLAC, Ogg, Opus or M4A).';
+      return;
+    }
+    progress.hidden = false;
+    progress.max = audio.length;
+    const picked: Picked[] = [];
+    const described: Record<string, unknown>[] = [];
+    for (const [i, { file, path }] of audio.entries()) {
+      progress.value = i;
+      status.textContent = `Reading ${i + 1} of ${audio.length}…`;
+      const tags = await readTags(async (offset, length) => new Uint8Array(await file.slice(offset, offset + length).arrayBuffer())).catch(() => null);
+      const checksum = await sha256(file);
+      const format = tags?.format ?? AUDIO_EXTENSIONS[extension(file.name)]!;
+      picked.push({ file, path, format, checksum });
+      described.push({
+        path,
+        checksum,
+        format,
+        title: tags?.title ?? null,
+        artist: tags?.artist ?? null,
+        albumArtist: tags?.albumArtist ?? null,
+        album: tags?.album ?? null,
+        lengthMs: tags?.lengthMs ?? null,
+        mbRecordingId: tags?.mbRecordingId ?? null,
+      });
+    }
+    status.textContent = 'Matching them to your library…';
+    const matches: Match[] = [];
+    for (let i = 0; i < described.length; i += 500) {
+      const res = await fetch('/api/write/audio/match', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ files: described.slice(i, i + 500) }),
+      }).catch(() => null);
+      if (!res?.ok) {
+        progress.hidden = true;
+        status.textContent = 'Matching failed. Try again in a moment.';
+        return;
+      }
+      matches.push(...((await res.json()) as { matches: Match[] }).matches);
+    }
+    progress.hidden = true;
+    const byPath = new Map(matches.map((m) => [m.path, m]));
+    const all = picked.map((p) => ({ picked: p, match: byPath.get(p.path)! }));
+    const matched = all.filter((a) => a.match?.recordingId);
+    const already = matched.filter((a) => a.match.uploaded);
+    const tooBig = matched.filter((a) => !a.match.uploaded && a.picked.file.size > MAX_BYTES);
+    toSend = matched.filter((a) => !a.match.uploaded && a.picked.file.size <= MAX_BYTES);
+    const unmatched = all.filter((a) => !a.match?.recordingId);
+
+    status.textContent = '';
+    summary.textContent = [
+      toSend.length ? `${toSend.length} ${toSend.length === 1 ? 'file' : 'files'} to upload, ${sizeOf(toSend.reduce((s, a) => s + a.picked.file.size, 0))}.` : 'Nothing new to upload.',
+      already.length ? `${already.length} already uploaded.` : '',
+      tooBig.length ? `${tooBig.length} over 100 MB left out.` : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    uploadButton.hidden = toSend.length === 0;
+    unmatchedBox.hidden = unmatched.length === 0;
+    $('[data-unmatched-summary]').textContent = `${unmatched.length} not matched to a song`;
+    unmatchedList.replaceChildren(...unmatched.map((u) => Object.assign(document.createElement('li'), { textContent: u.picked.path })));
+    result.hidden = false;
+    $<HTMLElement>('#result-heading').focus();
+  }
+
+  async function uploadAll() {
+    uploadButton.disabled = true;
+    progress.hidden = false;
+    progress.max = toSend.length;
+    let done = 0;
+    let failed = 0;
+    const queue = [...toSend];
+    const worker = async () => {
+      for (let next = queue.shift(); next; next = queue.shift()) {
+        const { picked, match } = next;
+        const params = new URLSearchParams({ recording: match.recordingId!, path: picked.path, format: picked.format, checksum: picked.checksum });
+        const res = await fetch(`/api/write/audio/upload?${params}`, { method: 'PUT', body: picked.file }).catch(() => null);
+        if (!res?.ok) failed++;
+        done++;
+        progress.value = done;
+        status.textContent = `Uploaded ${done - failed} of ${toSend.length}${failed ? ` (${failed} failed)` : ''}…`;
+      }
+    };
+    // Two at a time: quicker than one, gentle on a phone's connection.
+    await Promise.all([worker(), worker()]);
+    progress.hidden = true;
+    status.textContent = failed
+      ? `${done - failed} uploaded; ${failed} failed. Choose the folder again to send the rest.`
+      : `All ${done} uploaded. They play from their album or song, or long-press one.`;
+    uploadButton.disabled = false;
+    uploadButton.hidden = true;
+  }
+
+  picker.addEventListener('change', () => {
+    void readAll([...(picker.files ?? [])].map((file) => ({ file, path: file.webkitRelativePath || file.name })));
+  });
+  drop.addEventListener('dragover', (event) => event.preventDefault());
+  drop.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    const entries = [...(event.dataTransfer?.items ?? [])].map((i) => i.webkitGetAsEntry()).filter(Boolean) as FileSystemEntry[];
+    const files: { file: File; path: string }[] = [];
+    const walk = async (entry: FileSystemEntry, prefix: string): Promise<void> => {
+      if (entry.isFile) {
+        files.push({ file: await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject)), path: prefix + entry.name });
+      } else if (entry.isDirectory) {
+        const reader = (entry as FileSystemDirectoryEntry).createReader();
+        for (;;) {
+          const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+          if (batch.length === 0) break;
+          for (const child of batch) await walk(child, `${prefix}${entry.name}/`);
+        }
+      }
+    };
+    for (const entry of entries) await walk(entry, '');
+    void readAll(files);
+  });
+  uploadButton.addEventListener('click', () => void uploadAll());
+  $('[data-again]').addEventListener('click', () => picker.click());
+</script>
+
+<style>
+  .page {
+    display: grid;
+    gap: var(--space-5);
+    --content-max: 44rem;
+  }
+
+  header {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .drop {
+    display: grid;
+    gap: var(--space-1);
+    place-items: center;
+    padding: var(--space-7) var(--space-4);
+    border: 2px dashed var(--border);
+    border-radius: var(--radius-l);
+    text-align: center;
+    cursor: pointer;
+  }
+
+  .drop:hover,
+  .drop:focus-within {
+    border-color: var(--accent);
+  }
+
+  .drop[hidden] {
+    display: none;
+  }
+
+  progress {
+    width: 100%;
+  }
+
+  .result {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .unmatched {
+    display: grid;
+    gap: 2px;
+    margin: var(--space-2) 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--step--1);
+    overflow-wrap: anywhere;
+  }
+
+  .small {
+    font-size: var(--step--1);
+  }
+
+  summary {
+    cursor: pointer;
+    font-weight: 600;
+  }
+</style>

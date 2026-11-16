@@ -26,7 +26,10 @@ const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
 <Base title="Files">
   <div class="wrap page">
     <PageHeader title="Files">
-      <a href="/manage/import/files">Import a folder</a>
+      <span class="head-links">
+        <a href="/manage/files/upload">Upload your music</a>
+        <a href="/manage/import/files">Import a folder</a>
+      </span>
     </PageHeader>
 
     {
@@ -162,6 +165,12 @@ const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
 </script>
 
 <style>
+  .head-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+  }
+
   .page {
     display: grid;
     gap: var(--space-6);

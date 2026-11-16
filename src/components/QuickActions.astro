@@ -28,7 +28,7 @@
 </dialog>
 
 <script>
-  type Info = { kind: 'track' | 'album'; id: string; title: string; spotifyId: string | null; albumId: string | null; depth: string | null };
+  type Info = { kind: 'track' | 'album'; id: string; title: string; spotifyId: string | null; albumId: string | null; depth: string | null; audio?: boolean };
   type Action = { label: string; href?: string; run?: () => void | Promise<void>; icon: string };
 
   const dialog = document.querySelector('[data-quick]') as unknown as HTMLDialogElement | null;
@@ -108,8 +108,13 @@
       const here = `${location.pathname}${location.search}`;
       const rate = `/edit/rate/${kind === 'track' ? 'recording' : 'release_group'}/${id}?return_to=${encodeURIComponent(here)}`;
       const actions: Action[] = [];
+      // Your own uploaded file first, when there is one: it plays in the player tab (/play).
+      if (info?.audio) {
+        const href = kind === 'track' ? `/play?track=${id}${info.albumId ? `&album=${info.albumId}` : ''}` : `/play?album=${id}`;
+        actions.push({ label: kind === 'track' ? 'Play your file' : 'Play your files', icon: 'play', run: () => { dialog.close(); window.open(href, 'music-player'); } });
+      }
       if (info?.spotifyId) {
-        actions.push({ label: kind === 'track' ? 'Play' : 'Play album', icon: 'play', run: play(info, false) });
+        actions.push({ label: kind === 'track' ? (info.audio ? 'Play on Spotify' : 'Play') : info.audio ? 'Play album on Spotify' : 'Play album', icon: 'play', run: play(info, false) });
         if (kind === 'track') actions.push({ label: 'Add to queue', icon: 'queue', run: play(info, true) });
       }
       actions.push({ label: info?.depth === 'gut' ? 'Rate in full' : info?.depth ? 'Rate again' : 'Rate', icon: 'rate', href: rate });

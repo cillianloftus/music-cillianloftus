@@ -19,13 +19,24 @@ interface Props {
   links?: { label: string; href: string; icon: string }[];
   /** An album edition with no Spotify id yet: Listen finds it first (ListenButton). */
   findEdition?: string | null;
+  /** Your own uploaded audio for it: Play your files opens the player tab (/play). */
+  playHref?: string | null;
 }
 
-const { listenHref, spotifyId, kind, editHref = null, links = [], findEdition = null } = Astro.props;
+const { listenHref, spotifyId, kind, editHref = null, links = [], findEdition = null, playHref = null } = Astro.props;
 const elsewhere = links.filter((l) => l.icon !== 'spotify');
 ---
 
 <p class="actions">
+  {
+    playHref && (
+      // One player tab for every Play: it keeps playing while the site is browsed in another.
+      <a class="button button--primary play-files" href={playHref} target="music-player">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" /></svg>
+        {kind === 'album' ? 'Play your files' : 'Play your file'}
+      </a>
+    )
+  }
   <ListenButton href={listenHref} spotifyId={spotifyId} kind={kind} findEdition={findEdition} />
   {
     editHref && (
@@ -40,6 +51,12 @@ const elsewhere = links.filter((l) => l.icon !== 'spotify');
 </p>
 
 <style>
+  .play-files svg {
+    width: 1rem;
+    height: 1rem;
+    fill: currentColor;
+  }
+
   .actions {
     display: flex;
     flex-wrap: wrap;

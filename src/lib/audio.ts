@@ -1,0 +1,241 @@
+/**
+ * Your own audio, uploaded and played back (migration 0079). Files on
+ * Cillian's machine are matched to songs already in the library, uploaded
+ * to a private bucket (AUDIO_STORE) and played on /play, anywhere he is
+ * signed in. Served only to the owner (src/pages/audio/[id].ts); nothing
+ * is public, and nothing is fetched from a streaming service.
+ *
+ * Matching, in order: a file already catalogued (by checksum, then path);
+ * the recording MusicBrainz names in its tags; else a song by the tagged
+ * artist with the same title (case, punctuation and guests aside), the one
+ * on the tagged album first, then the closest in length.
+ */
+
+import { env } from 'cloudflare:workers';
+import { normaliseName, normaliseTitle, withoutFeaturing } from './text';
+
+/** What the browser reads from each file and sends to be matched. */
+export interface FileToMatch {
+  path: string;
+  checksum: string | null;
+  format: string;
+  title: string | null;
+  artist: string | null;
+  albumArtist: string | null;
+  album: string | null;
+  lengthMs: number | null;
+  mbRecordingId: string | null;
+}
+
+export interface FileMatch {
+  path: string;
+  recordingId: string | null;
+  /** The song it was matched to, as the library has it. */
+  title: string | null;
+  album: string | null;
+  /** Its audio is already uploaded (the same file, by checksum): nothing to send. */
+  uploaded: boolean;
+}
+
+export const AUDIO_FORMATS = {
+  mp3: 'audio/mpeg',
+  flac: 'audio/flac',
+  ogg: 'audio/ogg',
+  opus: 'audio/ogg',
+  m4a: 'audio/mp4',
+} as const;
+export type AudioFormat = keyof typeof AUDIO_FORMATS;
+
+/** A Worker takes request bodies up to 100 MB. */
+export const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
+
+const songKey = (title: string) => normaliseTitle(withoutFeaturing(title));
+
+export async function matchFiles(files: FileToMatch[]): Promise<FileMatch[]> {
+  if (files.length === 0) return [];
+  // Already catalogued: by checksum, then by path.
+  const { results: known } = await env.DB.prepare(
+    `SELECT f.path, f.checksum, f.recording_id, f.audio_key IS NOT NULL AS uploaded FROM file f
+     WHERE f.checksum IN (SELECT value ->> '$.checksum' FROM json_each(?1)) OR f.path IN (SELECT value ->> '$.path' FROM json_each(?1))`,
+  )
+    .bind(JSON.stringify(files.map((f) => ({ path: f.path, checksum: f.checksum }))))
+    .all<{ path: string; checksum: string | null; recording_id: string; uploaded: number }>();
+  const byChecksum = new Map(known.filter((k) => k.checksum).map((k) => [k.checksum!, k]));
+  const byPath = new Map(known.map((k) => [k.path, k]));
+
+  // By MusicBrainz recording id.
+  const mbids = [...new Set(files.map((f) => f.mbRecordingId).filter((m): m is string => Boolean(m)))];
+  const { results: byMbid } = mbids.length
+    ? await env.DB.prepare(`SELECT id, mbid FROM recording WHERE mbid IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(mbids)).all<{ id: string; mbid: string }>()
+    : { results: [] as { id: string; mbid: string }[] };
+  const mbidRecording = new Map(byMbid.map((r) => [r.mbid, r.id]));
+
+  // Every song by each tagged artist (and album artist), with the albums it is on and its length.
+  const artists = [...new Set(files.flatMap((f) => [f.artist, f.albumArtist]).filter((a): a is string => Boolean(a)).map((a) => a.split(/\s*(?:,|&|feat\.?|ft\.?)\s*/i)[0]!.trim()))];
+  const { results: songs } = artists.length
+    ? await env.DB.prepare(
+        `WITH who AS (
+           SELECT id, name FROM artist WHERE name COLLATE NOCASE IN (SELECT value FROM json_each(?1))
+           UNION SELECT a.artist_id, x.value FROM artist_alias a JOIN json_each(?1) x ON a.name = x.value
+         )
+         SELECT DISTINCT r.id, r.title, r.length_ms, who.name AS artist,
+                (SELECT group_concat(g.title, '|') FROM track t JOIN release x ON x.id = t.release_id
+                 JOIN release_group g ON g.id = x.release_group_id WHERE t.recording_id = r.id) AS albums
+         FROM who JOIN artist_credit c ON c.artist_id = who.id AND c.entity_type = 'recording' AND c.role = 'primary'
+         JOIN recording r ON r.id = c.entity_id`,
+      )
+        .bind(JSON.stringify(artists))
+        .all<{ id: string; title: string; length_ms: number | null; artist: string; albums: string | null }>()
+    : { results: [] as { id: string; title: string; length_ms: number | null; artist: string; albums: string | null }[] };
+
+  const matched = files.map((file): { file: FileToMatch; recordingId: string | null; uploaded: boolean } => {
+    const same = (file.checksum && byChecksum.get(file.checksum)) || byPath.get(file.path);
+    if (same) return { file, recordingId: same.recording_id, uploaded: same.uploaded === 1 && same.checksum === file.checksum };
+    const viaMbid = file.mbRecordingId ? mbidRecording.get(file.mbRecordingId) : undefined;
+    if (viaMbid) return { file, recordingId: viaMbid, uploaded: false };
+    if (!file.title) return { file, recordingId: null, uploaded: false };
+    const key = songKey(file.title);
+    const names = new Set([file.artist, file.albumArtist].filter((a): a is string => Boolean(a)).map((a) => normaliseName(a.split(/\s*(?:,|&|feat\.?|ft\.?)\s*/i)[0]!.trim())));
+    const album = file.album ? normaliseTitle(file.album) : null;
+    const candidates = songs.filter((s) => names.has(normaliseName(s.artist)) && songKey(s.title) === key);
+    const onAlbum = (s: (typeof songs)[number]) => (album && (s.albums ?? '').split('|').some((a) => normaliseTitle(a) === album) ? 1 : 0);
+    // An unknown length says nothing either way.
+    const gap = (s: (typeof songs)[number]) => (file.lengthMs && s.length_ms ? Math.abs(file.lengthMs - s.length_ms) : 0);
+    const best = candidates.sort((a, b) => onAlbum(b) - onAlbum(a) || gap(a) - gap(b))[0];
+    // A song far longer or shorter is another version (a live take, an edit): not this one.
+    return { file, recordingId: best && gap(best) <= 15_000 ? best.id : null, uploaded: false };
+  });
+
+  const ids = [...new Set(matched.map((m) => m.recordingId).filter((id): id is string => Boolean(id)))];
+  const { results: named } = ids.length
+    ? await env.DB.prepare(
+        `SELECT r.id, r.title, (SELECT g.title FROM v_recording_album ra JOIN release_group g ON g.id = ra.release_group_id WHERE ra.recording_id = r.id) AS album
+         FROM recording r WHERE r.id IN (SELECT value FROM json_each(?))`,
+      )
+        .bind(JSON.stringify(ids))
+        .all<{ id: string; title: string; album: string | null }>()
+    : { results: [] as { id: string; title: string; album: string | null }[] };
+  const names = new Map(named.map((n) => [n.id, n]));
+  return matched.map((m) => ({
+    path: m.file.path,
+    recordingId: m.recordingId,
+    title: m.recordingId ? (names.get(m.recordingId)?.title ?? null) : null,
+    album: m.recordingId ? (names.get(m.recordingId)?.album ?? null) : null,
+    uploaded: m.uploaded,
+  }));
+}
+
+/**
+ * Keeps one uploaded file's audio: catalogued at its path against the song
+ * (a path already catalogued takes the new song and checksum), the bytes
+ * streamed to the private bucket. Returns the file's id.
+ */
+export async function storeAudio(input: {
+  recordingId: string;
+  path: string;
+  format: AudioFormat;
+  checksum: string | null;
+  size: number;
+  body: ReadableStream;
+}): Promise<string> {
+  const row = await env.DB.prepare(
+    `INSERT INTO file (id, recording_id, path, format, checksum) VALUES (?1, ?2, ?3, ?4, ?5)
+     ON CONFLICT (path) DO UPDATE SET recording_id = excluded.recording_id, format = excluded.format, checksum = excluded.checksum
+     RETURNING id`,
+  )
+    .bind(crypto.randomUUID(), input.recordingId, input.path, input.format, input.checksum)
+    .first<{ id: string }>();
+  const id = row!.id;
+  const key = `audio/${id}.${input.format}`;
+  // A stream of known length goes straight through, never held in memory (R2 needs the
+  // length up front; FixedLengthStream is the Workers runtime's, so tests send the stream as it is).
+  if (typeof FixedLengthStream === 'undefined') {
+    await env.AUDIO_STORE.put(key, input.body, { httpMetadata: { contentType: AUDIO_FORMATS[input.format] } });
+  } else {
+    const sized = new FixedLengthStream(input.size);
+    const piping = input.body.pipeTo(sized.writable);
+    await env.AUDIO_STORE.put(key, sized.readable, { httpMetadata: { contentType: AUDIO_FORMATS[input.format] } });
+    await piping;
+  }
+  await env.DB.prepare(`UPDATE file SET audio_key = ?1, audio_bytes = ?2, uploaded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?3`)
+    .bind(key, input.size, id)
+    .run();
+  return id;
+}
+
+export interface PlayableTrack {
+  fileId: string;
+  recordingId: string;
+  title: string;
+  artist: string;
+  album: string | null;
+  albumId: string | null;
+  artKey: string | null;
+  lengthMs: number | null;
+}
+
+const PLAYABLE = `
+  SELECT f.id AS fileId, r.id AS recordingId, coalesce(t.title_on_release, r.title) AS title,
+         (SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+          WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary') AS artist,
+         g.title AS album, g.id AS albumId, coalesce(x.art_key, (SELECT y.art_key FROM release y WHERE y.release_group_id = g.id AND y.art_key IS NOT NULL LIMIT 1)) AS artKey,
+         r.length_ms AS lengthMs`;
+
+/**
+ * An album's songs you have audio for, in order (its standard edition's,
+ * then any others' bonus songs), for the player's queue.
+ */
+export async function albumQueue(albumId: string): Promise<PlayableTrack[]> {
+  const { results } = await env.DB.prepare(
+    `${PLAYABLE}, x.id = (SELECT c.release_id FROM v_release_group_canonical c WHERE c.release_group_id = ?1) AS standard, t.disc, t.position
+     FROM release x JOIN release_group g ON g.id = x.release_group_id
+     JOIN track t ON t.release_id = x.id JOIN recording r ON r.id = t.recording_id
+     JOIN file f ON f.id = (SELECT id FROM file WHERE recording_id = r.id AND audio_key IS NOT NULL ORDER BY uploaded_at DESC LIMIT 1)
+     WHERE x.release_group_id = ?1`,
+  )
+    .bind(albumId)
+    .all<PlayableTrack & { standard: number; disc: number; position: number }>();
+  // Each song once: as the standard edition has it, else as the first other edition does.
+  const order = [...results].sort((a, b) => b.standard - a.standard || a.disc - b.disc || a.position - b.position);
+  const seen = new Set<string>();
+  return order
+    .filter((t) => !seen.has(t.recordingId) && Boolean(seen.add(t.recordingId)))
+    .map(({ standard: _s, disc: _d, position: _p, ...t }) => t);
+}
+
+/** One song, if you have its audio: for a track page, a long-press, or a song alone. */
+export async function songQueue(recordingId: string): Promise<PlayableTrack[]> {
+  const { results } = await env.DB.prepare(
+    `${PLAYABLE}
+     FROM recording r
+     JOIN file f ON f.id = (SELECT id FROM file WHERE recording_id = r.id AND audio_key IS NOT NULL ORDER BY uploaded_at DESC LIMIT 1)
+     LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
+     LEFT JOIN release_group g ON g.id = ra.release_group_id
+     LEFT JOIN track t ON t.recording_id = r.id AND t.release_id = (SELECT c.release_id FROM v_release_group_canonical c WHERE c.release_group_id = g.id)
+     LEFT JOIN release x ON x.id = t.release_id
+     WHERE r.id = ?1 LIMIT 1`,
+  )
+    .bind(recordingId)
+    .all<PlayableTrack>();
+  return results;
+}
+
+/** Which of some songs you have audio for. */
+export async function playableSongs(recordingIds: string[]): Promise<Set<string>> {
+  if (recordingIds.length === 0) return new Set();
+  const { results } = await env.DB.prepare(
+    `SELECT DISTINCT recording_id AS id FROM file WHERE audio_key IS NOT NULL AND recording_id IN (SELECT value FROM json_each(?))`,
+  )
+    .bind(JSON.stringify(recordingIds))
+    .all<{ id: string }>();
+  return new Set(results.map((r) => r.id));
+}
+
+/** How much audio is stored, for the upload page. */
+export async function audioTotals(): Promise<{ files: number; bytes: number }> {
+  const row = await env.DB.prepare(`SELECT count(*) AS files, coalesce(sum(audio_bytes), 0) AS bytes FROM file WHERE audio_key IS NOT NULL`).first<{
+    files: number;
+    bytes: number;
+  }>();
+  return row ?? { files: 0, bytes: 0 };
+}

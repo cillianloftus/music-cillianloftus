@@ -22,6 +22,7 @@ import GenreChips from '../../components/GenreChips.astro';
 import StandingLines from '../../components/StandingLines.astro';
 import Disclosure from '../../components/Disclosure.astro';
 import { ownerId } from '../../lib/auth/user';
+import { playableSongs } from '../../lib/audio';
 import { redirectFor, standardTracklist, trackGenres } from '../../lib/catalogue';
 import AlbumShape from '../../components/AlbumShape.astro';
 import { hasShape, shapeOf } from '../../lib/shape';
@@ -44,6 +45,8 @@ import { trackLinks, type LinkedTrack } from '../../lib/song-links';
 const id = Astro.params.id!;
 const user = Astro.locals.user;
 const viewerId = user?.id ?? (await ownerId());
+// Your own uploaded audio for it: Play your file (the owner only, /play).
+const playHref = user && user.id === (await ownerId()) && (await playableSongs([id])).size > 0 ? `/play?track=${id}` : null;
 const track = await trackDetail(id, viewerId);
 if (!track) {
   const merged = await redirectFor('recording', id);
@@ -226,7 +229,7 @@ function ordinalOf(n: number): string {
           )
         }
 
-        <PageActions listenHref={listenHref} spotifyId={track.spotify_id} kind="track" editHref={user ? `/edit/track/${id}` : null} links={links} />
+        <PageActions listenHref={listenHref} spotifyId={track.spotify_id} kind="track" editHref={user ? `/edit/track/${id}` : null} links={links} playHref={playHref} />
 
         <GenreChips
           genres={genres.genres}
