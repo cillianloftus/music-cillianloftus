@@ -15,7 +15,7 @@ import {
   type TrackKind,
   type Weights,
 } from './scoring';
-import { genresOfRecordings } from './genres';
+import { genreIndex } from './genres';
 
 /** How far from the rest makes a song an album's odd one out: 10–40 points in fives. */
 export const OUTLIER_GAP_RANGE = { min: 10, max: 40, step: 5 } as const;
@@ -208,7 +208,7 @@ export async function scoreInputs(userId: string, { albums = true }: { albums?: 
   const rated = `SELECT DISTINCT entity_id AS recording_id FROM rating WHERE user_id = ?1 AND entity_type = 'recording'`;
   // Rated, or borrowing a version's score (0075): the songs an album's score can count.
   const scored = `${rated} UNION SELECT recording_id FROM inherited_score WHERE user_id = ?1`;
-  const [ratings, tracks, artists, genres, canonical, inherited] = await env.DB.batch([
+  const [[ratings, tracks, artists, canonical, inherited], index] = await Promise.all([env.DB.batch([
     env.DB.prepare(
       // Oldest first, ties by id, as v_gut_calibration and v_latest_rating_axes order them.
       `SELECT id, entity_type, entity_id, rated_at, gut_score, impact,
@@ -230,8 +230,6 @@ export async function scoreInputs(userId: string, { albums = true }: { albums?: 
                ORDER BY c.position LIMIT 1) AS artist
        FROM (${rated}) x`,
     ).bind(userId),
-    // And its genres.
-    env.DB.prepare(`WITH rated AS (${rated}) ${genresOfRecordings('rated')}`).bind(userId),
     // Recordings on each album's standard edition (the preview's albums only).
     env.DB.prepare(
       albums
@@ -242,12 +240,17 @@ export async function scoreInputs(userId: string, { albums = true }: { albums?: 
         : `SELECT NULL AS release_group_id, NULL AS recording_id WHERE ?1 IS NULL`,
     ).bind(userId),
     env.DB.prepare(`SELECT recording_id, from_recording_id FROM inherited_score WHERE user_id = ?1`).bind(userId),
+  ]),
+    // Each rated recording's genres, from the genre index (kept by the hour and the tree):
+    // through v_release_group_genre, built whole each time, it read 760,000 rows (16 Nov).
+    genreIndex(),
   ]);
 
   const inputs: ScoreInputs = { recordings: {}, albums: {}, canonical: {}, kinds: {}, lengths: {}, artists: {}, genres: {}, inherits: {} };
   for (const i of (inherited!.results ?? []) as { recording_id: string; from_recording_id: string }[]) inputs.inherits![i.recording_id] = i.from_recording_id;
   for (const a of (artists!.results ?? []) as { id: string; artist: string | null }[]) if (a.artist) inputs.artists![a.id] = a.artist;
-  for (const g of (genres!.results ?? []) as { recording_id: string; genre_id: string }[]) (inputs.genres![g.recording_id] ??= []).push(g.genre_id);
+  const ratedIds = new Set(((ratings!.results ?? []) as SampleRow[]).filter((r) => r.entity_type === 'recording').map((r) => r.entity_id));
+  for (const [genre, members] of Object.entries(index.tracks)) for (const r of members) if (ratedIds.has(r)) (inputs.genres![r] ??= []).push(genre);
   for (const t of (tracks!.results ?? []) as { id: string; length_ms: number | null; kind: TrackKind | null }[]) {
     if (t.kind && t.kind !== 'song') inputs.kinds![t.id] = t.kind;
     if (t.length_ms != null) inputs.lengths![t.id] = t.length_ms;
