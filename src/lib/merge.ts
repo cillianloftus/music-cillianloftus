@@ -402,6 +402,7 @@ export async function mergeRecordings(keepId: string, goneId: string): Promise<v
     ...moveColumn('definition_exclude'),
     ...moveColumn('recording_kind'),
     ...moveColumn('recording_kind_skip'),
+    ...moveColumn('lyrics_rejected'),
     ...moveEntity('artist_credit'),
     ...moveEntity('genre_tag'),
     ...moveEntity('field_override'),

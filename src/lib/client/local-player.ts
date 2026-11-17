@@ -68,6 +68,23 @@ const SILENCE = 'data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfA
 
 const HELD = 'listens-waiting';
 
+/**
+ * What is on, kept in the tab (sessionStorage) so a reload carries on from
+ * the same second (17 Nov: refreshing to see an edit stopped the music).
+ */
+const RESUME = 'local-player-resume';
+/** A song left playing is picked up after a reload this soon; one left paused, for longer. */
+const RESUME_PLAYING_MS = 10 * 60_000;
+const RESUME_PAUSED_MS = 6 * 3_600_000;
+
+interface Resume {
+  queue: LocalTrack[];
+  index: number;
+  positionMs: number;
+  playing: boolean;
+  at: number;
+}
+
 export class LocalPlayer {
   queue: LocalTrack[] = [];
   index = 0;
@@ -139,6 +156,7 @@ export class LocalPlayer {
     addEventListener('pagehide', () => {
       this.hear();
       this.report(true);
+      this.keep();
       this.channel?.postMessage({ type: 'stopped' } satisfies LocalMessage);
     });
     void this.sendHeld();
@@ -160,7 +178,48 @@ export class LocalPlayer {
     this.go(start, play);
   }
 
-  go(i: number, play: boolean): void {
+  /** Where a reload should carry on from (pagehide, and with each word on the channel). */
+  keep(): void {
+    if (this.queue.length === 0) return;
+    // The whole queue played out: nothing to carry on with.
+    if (this.audio.ended && this.index === this.queue.length - 1) {
+      try {
+        sessionStorage.removeItem(RESUME);
+      } catch {}
+      return;
+    }
+    const saved: Resume = {
+      queue: this.queue,
+      index: this.index,
+      positionMs: Math.round(this.audio.currentTime * 1000),
+      playing: !this.audio.paused,
+      at: Date.now(),
+    };
+    try {
+      sessionStorage.setItem(RESUME, JSON.stringify(saved));
+    } catch {}
+  }
+
+  /** Back where a reload left it: the same song, the same second, playing if it was. */
+  resume(saved: Resume): void {
+    this.queue = saved.queue;
+    this.go(saved.index, saved.playing, saved.positionMs);
+    // A browser that will not start sound by itself after a reload starts it at the first
+    // tap or key anywhere (the frame's pages pass theirs on: wirePlayLinks).
+    if (saved.playing) this.waitingForTap = true;
+  }
+
+  /** A reload's song is to play on, and the browser wants a tap first. */
+  waitingForTap = false;
+
+  /** A tap or key anywhere: carry on, if a reload left the music waiting for one. */
+  tapped(): void {
+    if (!this.waitingForTap) return;
+    this.waitingForTap = false;
+    if (this.audio.paused) void this.play();
+  }
+
+  go(i: number, play: boolean, fromMs = 0): void {
     if (this.queue.length === 0) return;
     // The song leaving (ended or skipped): its listen, as far as it went.
     this.hear();
@@ -168,7 +227,11 @@ export class LocalPlayer {
     this.index = (i + this.queue.length) % this.queue.length;
     const t = this.queue[this.index]!;
     this.audio.src = `/audio/${t.fileId}`;
-    this.listen = { recordingId: t.recordingId, startedAt: null, heardMs: 0, lastAt: null };
+    if (fromMs > 0) {
+      const audio = this.audio;
+      audio.addEventListener('loadedmetadata', () => (audio.currentTime = fromMs / 1000), { once: true });
+    }
+    this.listen ={ recordingId: t.recordingId, startedAt: null, heardMs: 0, lastAt: null };
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: t.title,
@@ -185,6 +248,7 @@ export class LocalPlayer {
     try {
       await this.audio.play();
       this.problem = null;
+      this.waitingForTap = false;
     } catch {
       // A browser may want a tap first.
       this.problem = 'Tap play to start.';
@@ -239,6 +303,7 @@ export class LocalPlayer {
     if (!state) return;
     // Heard by every other channel of the name, this window's own pages included.
     this.channel?.postMessage({ type: 'state', state } satisfies LocalMessage);
+    this.keep();
   }
 
   // Each listen logged like any other play (api/write/audio/played): sent when the song
@@ -339,6 +404,12 @@ function becomeShell(): void {
   frame.className = 'site-frame';
   frame.title = document.title;
   frame.src = location.href;
+  // Reloading with the keys reloads the page in the frame; the music carries on.
+  addEventListener('keydown', (event) => {
+    if (!isReloadKey(event)) return;
+    event.preventDefault();
+    frame.contentWindow?.location.reload();
+  });
   frame.addEventListener('load', () => {
     document.documentElement.setAttribute('data-shell', '');
     // The address and title follow the frame, so a reload or a shared link lands where you are.
@@ -380,6 +451,17 @@ export async function startLocal(params: URLSearchParams): Promise<boolean> {
  * tab, as leaving the frame for them would stop the music. Once per page.
  */
 export function wirePlayLinks(): void {
+  // A reload left the music waiting for a tap (a browser that will not start it alone): this one.
+  // A tap in the frame counts for the shell around it too.
+  for (const type of ['pointerdown', 'keydown'] as const) {
+    document.addEventListener(type, () => (framedHost() ?? window.__localPlayer)?.tapped(), { capture: true });
+  }
+  // In the shell's frame, F5 or Ctrl+R reloads this page only, and the music carries on.
+  document.addEventListener('keydown', (event) => {
+    if (!isReloadKey(event) || !framedHost()) return;
+    event.preventDefault();
+    location.reload();
+  });
   document.addEventListener('click', (event) => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const link = (event.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
@@ -392,4 +474,31 @@ export function wirePlayLinks(): void {
     }
     if (url.origin !== location.origin && framedHost() && (!link.target || link.target === '_self')) link.target = '_blank';
   });
+}
+
+function isReloadKey(event: KeyboardEvent): boolean {
+  return event.key === 'F5' || ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'r');
+}
+
+/**
+ * After a reload (or the shell left and come back to in this tab): the
+ * shell again, carrying on from where the music was. A song left playing
+ * plays on (a phone with the site installed as an app allows it; else the
+ * mini player shows it paused, a tap away); one left paused waits paused.
+ */
+export function resumeAfterReload(): void {
+  if (window.top !== window || window.__localPlayer || location.pathname.startsWith('/play')) return;
+  let saved: Resume | null = null;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(RESUME) || 'null') as Resume | null;
+  } catch {}
+  if (!saved?.queue?.length) return;
+  if (Date.now() - saved.at > (saved.playing ? RESUME_PLAYING_MS : RESUME_PAUSED_MS)) {
+    try {
+      sessionStorage.removeItem(RESUME);
+    } catch {}
+    return;
+  }
+  hostPlayer().resume(saved);
+  becomeShell();
 }

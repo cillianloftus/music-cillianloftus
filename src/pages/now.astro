@@ -117,7 +117,13 @@ const [history, weights, creditRows] = here
         .all<{ label: string; id: string; name: string }>(),
     ])
   : [[], null, null];
-const preview = here && weights ? await scorePreview(user.id, 'recording', here.id, history[0], weights) : null;
+// LRCLIB entries marked wrong for this song (0081): the page's lyrics pass them over.
+const rejectedLyrics = here
+  ? (await env.DB.prepare(`SELECT lrclib_id FROM lyrics_rejected WHERE recording_id = ?`).bind(here.id).all<{ lrclib_id: number }>()).results.map(
+      (r) => r.lrclib_id,
+    )
+  : [];
+const preview = here && weights ?await scorePreview(user.id, 'recording', here.id, history[0], weights) : null;
 const credits = new Map<string, { id: string; name: string }[]>();
 for (const c of creditRows?.results ?? []) credits.set(c.label, [...(credits.get(c.label) ?? []), c]);
 
@@ -229,11 +235,21 @@ const ICON = {
             <ol class="lines" id="lyrics-lines" data-lyrics role="list"></ol>
             <p class="lyrics-foot">
               <button type="button" class="lyrics-toggle" data-lyrics-toggle aria-expanded="false" aria-controls="lyrics-lines">Show all lyrics</button>
-              <span class="muted small">From LRCLIB.</span>
+              <span class="lyrics-source">
+                <span class="muted small">From LRCLIB.</span>
+                <button type="button" class="link-button" data-lyrics-wrong hidden>Wrong lyrics?</button>
+              </span>
             </p>
           </section>
 
-          <div id="now-song" class="song" data-song-id={song?.spotifyId ?? ''} data-links={JSON.stringify(links)}>
+          <div
+            id="now-song"
+            class="song"
+            data-song-id={song?.spotifyId ?? ''}
+            data-links={JSON.stringify(links)}
+            data-recording={here?.id ?? ''}
+            data-lyrics-rejected={JSON.stringify(rejectedLyrics)}
+          >
             {
               song && here && (
                 <>
@@ -298,10 +314,32 @@ const ICON = {
   import { CHANNEL, startLocal, type LocalMessage, type LocalState } from '../lib/client/local-player';
 
   interface Lyrics {
+    id?: number;
+    trackName?: string;
+    artistName?: string;
     syncedLyrics?: string | null;
     plainLyrics?: string | null;
     instrumental?: boolean;
   }
+
+  // Matching LRCLIB's search results to the song: names folded (case, accents, punctuation),
+  // a title's brackets set aside ("(feat. …)", "[Remastered]"), and an artist named on its own
+  // among the entry's ("Logic, Jon Bellion" is Logic's; "Logic Ufo" is not).
+  const fold = (s: string) =>
+    s
+      .normalize('NFKD')
+      .replace(/\p{M}/gu, '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .trim();
+  const bareTitle = (s: string) => fold(s.replace(/\s*[([].*?[)\]]/g, '').replace(/\s+(feat|ft)\.?\s.*$/i, ''));
+  const artistsOf = (s: string) => s.split(/\s*(?:,|&|\+|\/|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b|\bx\b|\band\b)\s*/i).map(fold).filter(Boolean);
+  const sameSong = (entry: Lyrics, title: string, artist: string) =>
+    bareTitle(entry.trackName ?? '') === bareTitle(title) &&
+    // Whole ("Simon & Garfunkel"), or one of several named.
+    (fold(entry.artistName ?? '') === fold(artist) || artistsOf(entry.artistName ?? '').includes(fold(artist)));
+  /** The words, for telling entries apart: the same text under another id is the same wrong lyrics. */
+  const wordsOf = (entry: Lyrics) => fold((entry.plainLyrics || entry.syncedLyrics || '').replace(/\[\d+:\d+(?:\.\d+)?\]/g, '')).slice(0, 400);
 
   /** Where the song's names lead, rendered with its part of the page (#now-song). */
   interface Links {
@@ -321,6 +359,7 @@ const ICON = {
     const localMode = root.dataset.mode === 'local';
     const channel = 'BroadcastChannel' in window ? new BroadcastChannel(CHANNEL) : null;
     let localSeen = false;
+    let playerProblem: string | null = null;
     if (localMode) clock.save = () => {};
     // Timed by the server's clock when the page was made; the first poll puts it right.
     if (clock.state) clock.state.at = Date.now();
@@ -374,26 +413,85 @@ const ICON = {
       toggle.textContent = open ? 'Show less' : 'Show all lyrics';
     };
     toggle.addEventListener('click', () => setOpen(!lyricsBox.classList.contains('open')));
+    // The song's part of the page (rating, credits) once it is this song's: which recording it
+    // is, and the lyrics marked wrong for it. Swapped in a moment after a new song starts.
+    const songPart = async (id: string): Promise<{ recording: string; rejected: number[] } | null> => {
+      for (let i = 0; i < 40; i++) {
+        const part = document.getElementById('now-song');
+        if (part?.dataset.songId === id) {
+          let rejected: number[] = [];
+          try {
+            rejected = JSON.parse(part.dataset.lyricsRejected || '[]') as number[];
+          } catch {}
+          return { recording: part.dataset.recording ?? '', rejected };
+        }
+        if (clock.state?.track?.spotifyId !== id) return null;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return null;
+    };
+
+    const wrongButton = $<HTMLButtonElement>('[data-lyrics-wrong]');
+    /** The lyrics shown now, and whose: what "Wrong lyrics?" marks. */
+    let showing: { recording: string; lrclibId: number; track: Track } | null = null;
+    wrongButton.addEventListener('click', async () => {
+      const marked = showing;
+      if (!marked) return;
+      wrongButton.disabled = true;
+      const res = await fetch('/api/write/lyrics', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ recordingId: marked.recording, lrclibId: marked.lrclibId }),
+      }).catch(() => null);
+      wrongButton.disabled = false;
+      if (!res?.ok) return notice('That could not be saved. Try again.');
+      const part = document.getElementById('now-song');
+      if (part?.dataset.recording === marked.recording) {
+        let rejected: number[] = [];
+        try {
+          rejected = JSON.parse(part.dataset.lyricsRejected || '[]') as number[];
+        } catch {}
+        part.dataset.lyricsRejected = JSON.stringify([...rejected, marked.lrclibId]);
+      }
+      // Another entry with other words, if LRCLIB has one; else none.
+      await loadLyrics(marked.track);
+      if (lyricsBox.hidden) notice('No other lyrics for this song on LRCLIB, so none are shown.');
+    });
+
     async function loadLyrics(track: Track) {
       lines = [];
       lit = -1;
+      showing = null;
       lyricsList.replaceChildren();
       lyricsBox.hidden = true;
+      wrongButton.hidden = true;
       setOpen(false);
+      const artist = track.artists[0] ?? '';
       const params = new URLSearchParams({
         track_name: track.title,
-        artist_name: track.artists[0] ?? '',
+        artist_name: artist,
         album_name: track.album,
         duration: String(Math.round(track.durationMs / 1000)),
       });
       try {
-        let res = await fetch(`https://lrclib.net/api/get?${params}`);
-        let found: Lyrics | null = res.ok ? ((await res.json()) as Lyrics) : null;
+        const [res, part] = await Promise.all([fetch(`https://lrclib.net/api/get?${params}`), songPart(track.spotifyId)]);
+        const rejected = new Set(part?.rejected ?? []);
+        const exact: Lyrics | null = res.ok ? ((await res.json()) as Lyrics) : null;
+        let found: Lyrics | null = exact && !rejected.has(exact.id ?? 0) ? exact : null;
         if (!found) {
-          res = await fetch(`https://lrclib.net/api/search?${new URLSearchParams({ track_name: track.title, artist_name: track.artists[0] ?? '' })}`);
-          found = res.ok ? (((await res.json()) as Lyrics[])[0] ?? null) : null;
+          // LRCLIB's search is loose: only an entry of this title by this artist, never one
+          // marked wrong, nor another with the same words as one marked wrong.
+          const more = await fetch(`https://lrclib.net/api/search?${new URLSearchParams({ track_name: track.title, artist_name: artist })}`);
+          const entries = more.ok ? ((await more.json()) as Lyrics[]) : [];
+          const wrongWords = new Set([...(exact ? [exact] : []), ...entries].filter((e) => rejected.has(e.id ?? 0)).map(wordsOf));
+          found = entries.find((e) => sameSong(e, track.title, artist) && !rejected.has(e.id ?? 0) && !wrongWords.has(wordsOf(e))) ?? null;
         }
         if (!found || clock.state?.track?.spotifyId !== track.spotifyId) return;
+        // Only a song in the library can have its lyrics marked wrong.
+        if (part?.recording && found.id) {
+          showing = { recording: part.recording, lrclibId: found.id, track };
+          wrongButton.hidden = false;
+        }
         const synced = found.syncedLyrics ?? '';
         const plain = found.plainLyrics ?? '';
         if (found.instrumental) {
@@ -500,6 +598,8 @@ const ICON = {
             song.innerHTML = fresh.innerHTML;
             song.dataset.songId = id;
             song.dataset.links = fresh.dataset.links ?? 'null';
+            song.dataset.recording = fresh.dataset.recording ?? '';
+            song.dataset.lyricsRejected = fresh.dataset.lyricsRejected ?? '[]';
             enhanceAxes(song);
             enhancePreviews(song);
             enhanceAutosave(song);
@@ -716,7 +816,11 @@ const ICON = {
         return;
       }
       localSeen = true;
-      status.textContent = m.state.problem ?? '';
+      // Said once when it changes, not every couple of seconds (that wiped other notices).
+      if (m.state.problem !== playerProblem) {
+        playerProblem = m.state.problem;
+        notice(playerProblem ?? '');
+      }
       if (clock.accept(fromLocal(m.state))) songChanged();
       else paint();
     });
@@ -1006,6 +1110,33 @@ const ICON = {
     justify-content: space-between;
     gap: var(--space-3);
     margin: 0;
+  }
+
+  .lyrics-source {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-3);
+  }
+
+  .link-button {
+    min-height: var(--target);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--step--1);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  .link-button:hover {
+    color: var(--text);
+  }
+
+  .link-button[hidden] {
+    display: none;
   }
 
   .lyrics-toggle {

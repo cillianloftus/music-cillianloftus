@@ -58,10 +58,12 @@ const onNow = Astro.url.pathname === '/now';
 <script>
   import { NowClock, STORE_KEY, fetchNow } from '../lib/client/now-clock';
   import type { NowState } from '../lib/spotify/now-state';
-  import { CHANNEL, wirePlayLinks, type LocalMessage, type LocalState as LocalNow } from '../lib/client/local-player';
+  import { CHANNEL, resumeAfterReload, wirePlayLinks, type LocalMessage, type LocalState as LocalNow } from '../lib/client/local-player';
 
   // Play buttons start your files here, and they keep playing from page to page.
   wirePlayLinks();
+  // Reloaded while your files were playing: they carry on.
+  resumeAfterReload();
 
   // How long to stop asking after Spotify says it can't be read (not connected, no scope).
   const QUIET_KEY = 'nowbar-quiet-until';
