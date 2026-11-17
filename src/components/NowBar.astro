@@ -58,7 +58,7 @@ const onNow = Astro.url.pathname === '/now';
 <script>
   import { NowClock, STORE_KEY, fetchNow } from '../lib/client/now-clock';
   import type { NowState } from '../lib/spotify/now-state';
-  import { CHANNEL, resumeAfterReload, wirePlayLinks, type LocalMessage, type LocalState as LocalNow } from '../lib/client/local-player';
+  import { CHANNEL, framedHost, resumeAfterReload, wirePlayLinks, type LocalMessage, type LocalState as LocalNow } from '../lib/client/local-player';
 
   // Play buttons start your files here, and they keep playing from page to page.
   wirePlayLinks();
@@ -140,7 +140,9 @@ const onNow = Astro.url.pathname === '/now';
         event.preventDefault();
         const ok = await this.send({ action: 'start', track: link.dataset.track || undefined, album: link.dataset.album || undefined });
         // Couldn't steer Spotify: open it, as the link always did (same tab, as a pop-up after a wait is blocked).
-        if (!ok) window.location.assign(link.href);
+        // From the whole window, never the music shell's frame: Spotify will not show inside
+        // another site (a broken page, 17 Nov), and on a phone its link wakes the Spotify app.
+        if (!ok) (framedHost() && window.top ? window.top : window).location.assign(link.href);
       });
 
       // The Now playing page draws its own player; the bar stays away there.

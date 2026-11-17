@@ -1,0 +1,79 @@
+---
+/**
+ * Keep on this device: an album's, song's or playlist's own files saved in
+ * this browser to play with no signal (src/lib/client/keep-offline.ts).
+ * Shown only where the browser can (a service worker, room to store), and
+ * only to the owner (callers pass it with Play). Pressed again, it takes
+ * them off.
+ */
+interface Props {
+  /** The Play query: "album=…", "track=…" or "playlist=…". */
+  query: string;
+  /** What the offline page calls it, for a playlist (an album's own name is used for an album). */
+  title?: string;
+}
+const { query, title = '' } = Astro.props;
+---
+
+<span class="keep" data-keep={query} data-keep-title={title} hidden>
+  <button type="button" class="button button--quiet" data-keep-button>Keep on this device</button>
+  <span class="keep-status" role="status" data-keep-status></span>
+</span>
+
+<script>
+  import { canKeep, isKept, keep, unkeep } from '../lib/client/keep-offline';
+
+  for (const box of document.querySelectorAll<HTMLElement>('[data-keep]')) {
+    const query = box.dataset.keep!;
+    const button = box.querySelector<HTMLButtonElement>('[data-keep-button]')!;
+    const status = box.querySelector<HTMLElement>('[data-keep-status]')!;
+    const paint = (kept: boolean) => {
+      button.textContent = kept ? 'Remove from this device' : 'Keep on this device';
+      status.textContent = kept ? 'Plays with no signal.' : '';
+    };
+    if (canKeep()) {
+      box.hidden = false;
+      void isKept(query).then(paint);
+    }
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        if (await isKept(query)) {
+          await unkeep(query);
+          paint(false);
+        } else {
+          const title = box.dataset.keepTitle || document.querySelector('h1')?.textContent?.trim() || 'Your music';
+          const entry = await keep(query, title, (done, total) => (status.textContent = total ? `Saving ${Math.min(done + 1, total)} of ${total}…` : 'Saving…'));
+          paint(true);
+          status.textContent = `${entry.count} ${entry.count === 1 ? 'song' : 'songs'} kept: they play with no signal.`;
+        }
+      } catch {
+        status.textContent = 'Saving stopped (no space, or the network went). Try again.';
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+</script>
+
+<style>
+  .keep {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .keep[hidden] {
+    display: none;
+  }
+
+  .keep-status {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .keep-status:empty {
+    display: none;
+  }
+</style>

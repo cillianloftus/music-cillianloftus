@@ -6,6 +6,7 @@
  * Shared by track and album pages: change it here, both follow.
  */
 import ElsewhereLink from './ElsewhereLink.astro';
+import KeepButton from './KeepButton.astro';
 import ListenButton from './ListenButton.astro';
 
 interface Props {
@@ -49,6 +50,8 @@ const elsewhere = links.filter((l) => l.icon !== 'spotify');
     elsewhere.map((l) => <ElsewhereLink href={l.href} label={l.label} icon={l.icon} iconOnly />)
   }
 </p>
+{/* Under the row (it is full on a phone): your files for it, saved to play with no signal. */}
+{playHref && <KeepButton query={playHref.split('?')[1] ?? ''} />}
 
 <style>
   .play-files svg {

@@ -1,6 +1,7 @@
 ---
 import Base from '../../layouts/Base.astro';
 import Backdrop from '../../components/Backdrop.astro';
+import KeepButton from '../../components/KeepButton.astro';
 import DefinitionChips from '../../components/DefinitionChips.astro';
 import ResultList from '../../components/ResultList.astro';
 import SpotifyPanel from '../../components/SpotifyPanel.astro';
@@ -91,6 +92,8 @@ const summary = [
               </p>
             )
           }
+          {/* Its songs you have files for, saved to play with no signal. */}
+          {user?.id === saved.user_id && playable > 0 && <KeepButton query={`playlist=${saved.id}`} title={saved.name} />}
         </div>
       </div>
     </header>

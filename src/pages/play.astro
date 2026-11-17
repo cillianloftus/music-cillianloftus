@@ -11,6 +11,7 @@ import Base from '../layouts/Base.astro';
 import { ownerId } from '../lib/auth/user';
 import type { PlayableTrack } from '../lib/audio';
 import { playQueue } from '../lib/play-queue';
+import KeepButton from '../components/KeepButton.astro';
 
 const user = Astro.locals.user;
 const owner = user ? user.id === (await ownerId()) : false;
@@ -72,11 +73,8 @@ const first = queue[start];
             </button>
           </div>
           <p class="status muted" role="status" data-status></p>
-          {/* Kept on this device: plays with no signal (the service worker serves it). */}
-          <p class="keep">
-            <button type="button" class="keep-button" data-keep hidden>Keep on this device</button>
-            <span class="muted small" data-keep-status></span>
-          </p>
+          {/* Kept on this device: plays with no signal (keep-offline.ts, the service worker serves it). */}
+          <KeepButton query={Astro.url.search.slice(1)} />
           {queue.length > 1 && (
             <ol class="queue" role="list" data-list>
               {queue.map((t, i) => (
@@ -178,84 +176,6 @@ const first = queue[start];
       seeking = false;
     });
 
-    // Keep on this device: every song in the queue, this page and what it loads, so it all
-    // plays with no network (public/sw.js serves them). Listed on the offline page.
-    const keepButton = $<HTMLButtonElement>('[data-keep]')!;
-    const keepStatus = $('[data-keep-status]')!;
-    const KEPT = 'offline-kept';
-    const here = location.pathname + location.search;
-    const keptList = (): { url: string; title: string; count: number }[] => {
-      try {
-        return JSON.parse(localStorage.getItem(KEPT) || '[]');
-      } catch {
-        return [];
-      }
-    };
-    const setKept = (list: { url: string; title: string; count: number }[]) => {
-      try {
-        localStorage.setItem(KEPT, JSON.stringify(list));
-      } catch {}
-    };
-    const keptHere = async () => {
-      if (!('caches' in window)) return false;
-      const cache = await caches.open('audio-v1');
-      for (const t of queue) if (!(await cache.match(`/audio/${t.fileId}`))) return false;
-      return true;
-    };
-    const paintKeep = async () => {
-      if (!('caches' in window) || !navigator.serviceWorker?.controller) return;
-      const kept = await keptHere();
-      keepButton.hidden = false;
-      keepButton.textContent = kept ? 'Remove from this device' : 'Keep on this device';
-      keepStatus.textContent = kept ? 'Plays with no signal.' : '';
-    };
-    keepButton.addEventListener('click', async () => {
-      const audioCache = await caches.open('audio-v1');
-      const pageCache = await caches.open('player-v1');
-      keepButton.disabled = true;
-      if (await keptHere()) {
-        for (const t of queue) await audioCache.delete(`/audio/${t.fileId}`);
-        await pageCache.delete(here);
-        setKept(keptList().filter((k) => k.url !== here));
-      } else {
-        try {
-          for (const [i, t] of queue.entries()) {
-            keepStatus.textContent = `Saving ${i + 1} of ${queue.length}…`;
-            if (await audioCache.match(`/audio/${t.fileId}`)) continue;
-            // The whole file (no range), kept as it came.
-            const res = await fetch(`/audio/${t.fileId}`, { cache: 'no-store' });
-            if (!res.ok) throw new Error(String(res.status));
-            await audioCache.put(`/audio/${t.fileId}`, res);
-          }
-          // This page, and its scripts, styles and covers, for opening with no network.
-          await pageCache.put(here, await fetch(here, { cache: 'no-store' }));
-          const loaded = performance
-            .getEntriesByType('resource')
-            .map((e) => new URL(e.name))
-            .filter((u) => u.origin === location.origin && (u.pathname.startsWith('/_astro/') || u.pathname.startsWith('/art/')));
-          await Promise.all(
-            loaded.map((u) =>
-              fetch(u)
-                .then(async (r) => {
-                  if (r.ok) await pageCache.put(u.href, r);
-                })
-                .catch(() => {}),
-            ),
-          );
-          const t = queue[0]!;
-          const title = new URLSearchParams(location.search).has('album') ? (t.album ?? t.title) : queue.length > 1 ? `${queue.length} songs` : t.title;
-          setKept([{ url: here, title, count: queue.length }, ...keptList().filter((k) => k.url !== here)]);
-        } catch {
-          keepStatus.textContent = 'Saving stopped (no space, or the network went). Try again.';
-          keepButton.disabled = false;
-          return;
-        }
-      }
-      keepButton.disabled = false;
-      await paintKeep();
-    });
-    void paintKeep();
-
     player.load(queue, start, true);
     const first = player.state();
     if (first) paint(first);
@@ -355,32 +275,6 @@ const first = queue[start];
   }
 
   .ctl [hidden] {
-    display: none;
-  }
-
-  .keep {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2) var(--space-3);
-    margin: 0;
-  }
-
-  .keep-button {
-    min-height: var(--target);
-    padding: 0 var(--space-4);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface-1);
-    color: var(--text);
-    font: inherit;
-    font-size: var(--step--1);
-    font-weight: 650;
-    cursor: pointer;
-  }
-
-  .keep-button[hidden] {
     display: none;
   }
 
