@@ -28,6 +28,8 @@ const albums = [...byAlbum.values()]
   .map((a) => ({ ...a, up: a.files.filter((f) => f.audio_bytes != null).length }))
   .sort((a, b) => Number(a.up === a.files.length) - Number(b.up === b.files.length) || a.title.localeCompare(b.title));
 const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
+// Uploaded but not yet measured for loudness: measured from the stored copy (Level them now).
+const toLevel = files.filter((f) => f.audio_bytes != null && f.loudness_lufs == null).map((f) => ({ id: f.id, path: f.path, checksum: f.checksum, bytes: f.audio_bytes! }));
 const mb = (bytes: number) => (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`);
 const uploaded = files.filter((f) => f.audio_bytes != null);
 const uploadedBytes = uploaded.reduce((sum, f) => sum + (f.audio_bytes ?? 0), 0);
@@ -69,10 +71,23 @@ const done = Astro.url.searchParams.get('done');
             <div>
               <dt>Levelled</dt>
               <dd>{measured.toLocaleString('en-GB')}</dd>
-              <dd class="sub">{uploaded.length - measured ? `${uploaded.length - measured} to measure: import again` : 'with Spotify'}</dd>
+              <dd class="sub">{uploaded.length - measured ? `${uploaded.length - measured} to measure below` : 'with Spotify'}</dd>
             </div>
           </dl>
           {done && <p class="notice" role="status">{done}</p>}
+
+          {toLevel.length > 0 && (
+            <section class="level" aria-labelledby="level-heading" data-level>
+              <h2 id="level-heading">Level the rest with Spotify</h2>
+              <p class="muted">
+                {toLevel.length} uploaded {toLevel.length === 1 ? 'file has' : 'files have'} not been measured for loudness yet, so loud ones play louder than
+                Spotify's songs. Measuring fetches each back from your store once ({mb(toLevel.reduce((sum, f) => sum + f.bytes, 0))}): best on a computer, or on Wi-Fi.
+              </p>
+              <button type="button" class="button button--primary" data-level-start>Level them now</button>
+              <p role="status" class="status" data-level-status></p>
+              <progress hidden data-level-progress></progress>
+            </section>
+          )}
 
           <section aria-labelledby="list-heading" class="list">
             <h2 id="list-heading">By album</h2>
@@ -150,6 +165,7 @@ const done = Astro.url.searchParams.get('done');
       )
     }
 
+    <script is:inline type="application/json" id="to-level" set:html={JSON.stringify(toLevel).replaceAll('<', '\\u003c')} />
     <script is:inline type="application/json" id="known-files" set:html={JSON.stringify(known).replaceAll('<', '\\u003c')} />
   </div>
 </Base>
@@ -222,6 +238,45 @@ const done = Astro.url.searchParams.get('done');
 </script>
 
 <script>
+  import { measureLoudness } from '../../lib/client/loudness';
+
+  // Level them now: each unmeasured upload fetched back from the store, measured here, and
+  // its loudness saved (api/write/audio/loudness), one at a time (decoding takes memory).
+  const level = document.querySelector<HTMLElement>('[data-level]');
+  if (level) {
+    const files = JSON.parse(document.getElementById('to-level')!.textContent!) as { id: string; path: string; checksum: string | null }[];
+    const start = level.querySelector<HTMLButtonElement>('[data-level-start]')!;
+    const status = level.querySelector<HTMLElement>('[data-level-status]')!;
+    const progress = level.querySelector<HTMLProgressElement>('[data-level-progress]')!;
+    start.addEventListener('click', async () => {
+      start.disabled = true;
+      progress.hidden = false;
+      progress.max = files.length;
+      let saved = 0;
+      let failed = 0;
+      for (const [i, f] of files.entries()) {
+        progress.value = i;
+        status.textContent = `Measuring ${i + 1} of ${files.length}…`;
+        const res = await fetch(`/audio/${f.id}`).catch(() => null);
+        const lufs = res?.ok ? await measureLoudness(await res.blob()) : null;
+        if (lufs === null) {
+          failed++;
+          continue;
+        }
+        const sent = await fetch('/api/write/audio/loudness', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ files: [{ path: f.path, checksum: f.checksum, lufs }] }),
+        }).catch(() => null);
+        if (sent?.ok) saved++;
+        else failed++;
+      }
+      progress.hidden = true;
+      status.textContent = `${saved} levelled${failed ? `, ${failed} could not be measured (try again)` : ''}. They now play at Spotify's level.`;
+      start.textContent = 'Done';
+    });
+  }
+
   for (const form of document.querySelectorAll<HTMLFormElement>('form[data-confirm]')) {
     form.addEventListener('submit', (event) => {
       if (!confirm(form.dataset.confirm!)) event.preventDefault();
@@ -276,6 +331,20 @@ const done = Astro.url.searchParams.get('done');
 
   h2 {
     font-size: var(--step-1);
+  }
+
+  .level {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+  }
+
+  .level p {
+    margin: 0;
   }
 
   .verify {
