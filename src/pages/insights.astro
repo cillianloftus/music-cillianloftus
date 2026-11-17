@@ -134,8 +134,9 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
             <a href="#artists">Artists</a>
           </nav>
 
-          <section aria-labelledby="patterns-heading" id="stands-out">
-            <h2 id="patterns-heading">What stands out</h2>
+          {/* A group like the others, so its heading has the same room above its cards. */}
+          <section aria-labelledby="patterns-heading" id="stands-out" class="group">
+            <h2 id="patterns-heading" class="group-heading">What stands out</h2>
             {findings.length > 0 ? <Findings findings={findings} show={4} rotate="insights" /> : <p>Nothing stands out yet.</p>}
           </section>
 
@@ -519,10 +520,6 @@ const impactShare = h && h.ratedTracks ? Math.round((h.impactTracks / h.ratedTra
   .group {
     display: grid;
     gap: var(--space-4);
-    scroll-margin-top: var(--space-5);
-  }
-
-  #stands-out {
     scroll-margin-top: var(--space-5);
   }
 
