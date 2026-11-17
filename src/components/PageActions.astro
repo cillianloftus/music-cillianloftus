@@ -19,7 +19,7 @@ interface Props {
   links?: { label: string; href: string; icon: string }[];
   /** An album edition with no Spotify id yet: Listen finds it first (ListenButton). */
   findEdition?: string | null;
-  /** Your own uploaded audio for it: Play your files starts it here (local-player.ts). */
+  /** Your own uploaded audio for it: Play starts it here, Spotify filling any gaps (local-player.ts). */
   playHref?: string | null;
 }
 
@@ -33,7 +33,7 @@ const elsewhere = links.filter((l) => l.icon !== 'spotify');
       // Started in place by local-player.ts, and kept playing from page to page.
       <a class="button button--primary play-files" href={playHref}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" /></svg>
-        {kind === 'album' ? 'Play your files' : 'Play your file'}
+        Play
       </a>
     )
   }

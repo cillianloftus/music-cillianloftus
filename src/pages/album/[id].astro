@@ -138,7 +138,7 @@ const editionHref = (e: Edition) =>
   e.id === standardId ? `${Astro.url.pathname}#tracklist-heading` : `${Astro.url.pathname}?edition=${e.id}#tracklist-heading`;
 
 // Listening history is private too: play counts only for the signed-in listener.
-// Your own uploaded audio for any of its songs: Play your files (the owner only, /play).
+// Your own uploaded audio for any of its songs: Play (the owner only, local-player.ts).
 const playHref =
   user && user.id === (await ownerId()) && (await playableSongs([...tracks, ...standardTracks].map((t) => t.recording_id))).size > 0 ? `/play?album=${album.id}` : null;
 const [plays, kinds, depths] = await Promise.all([

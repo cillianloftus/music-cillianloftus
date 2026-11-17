@@ -45,7 +45,7 @@ import { trackLinks, type LinkedTrack } from '../../lib/song-links';
 const id = Astro.params.id!;
 const user = Astro.locals.user;
 const viewerId = user?.id ?? (await ownerId());
-// Your own uploaded audio for it: Play your file (the owner only, /play).
+// Your own uploaded audio for it: Play (the owner only, local-player.ts).
 const playHref = user && user.id === (await ownerId()) && (await playableSongs([id])).size > 0 ? `/play?track=${id}` : null;
 const track = await trackDetail(id, viewerId);
 if (!track) {

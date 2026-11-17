@@ -20,7 +20,7 @@ const results = await runDefinition(saved.definition, {
   excludes: saved.excludes,
 });
 const user = Astro.locals.user;
-// Your own uploaded audio for its tracks: Play your files (the owner only, /play).
+// Your own uploaded audio for its tracks (the owner only).
 const mine = Boolean(user && user.id === saved.user_id && saved.definition.entity === 'recording');
 const playable = mine ? (await playableSongs(results.map((r) => r.id))).size : 0;
 // Played here as one queue: your files where you have them, the rest from Spotify (local-player.ts).

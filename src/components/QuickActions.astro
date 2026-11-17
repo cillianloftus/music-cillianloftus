@@ -117,7 +117,7 @@
           dialog.close();
           void startLocal(new URL(href, location.href).searchParams).then((ok) => !ok && location.assign(href));
         };
-        actions.push({ label: kind === 'track' ? 'Play your file' : 'Play your files', icon: 'play', run });
+        actions.push({ label: 'Play', icon: 'play', run });
       }
       if (info?.spotifyId) {
         actions.push({ label: kind === 'track' ? (info.audio ? 'Play on Spotify' : 'Play') : info.audio ? 'Play album on Spotify' : 'Play album', icon: 'play', run: play(info, false) });

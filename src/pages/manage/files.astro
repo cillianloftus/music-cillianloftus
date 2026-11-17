@@ -1,29 +1,39 @@
 ---
 /**
- * The file catalogue (ARCHITECTURE.md §3, "Ownership and files"): every
- * file on disk catalogued against its recording, and a check that a folder
- * still matches, so a missing or damaged rip is noticed before it matters.
- * Checking happens in the browser and changes nothing.
+ * Your files (ARCHITECTURE.md §3, "Ownership and files"): every file
+ * catalogued against its song, album by album, with whether its audio is
+ * uploaded to play anywhere and how loud it plays, so what an import did can
+ * be checked at a glance; albums with something missing come first. Also a
+ * check that a folder still matches, so a missing or damaged rip is noticed
+ * before it matters (in the browser, changing nothing).
  */
 import EmptyState from '../../components/EmptyState.astro';
 import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import { catalogue } from '../../lib/import/files';
+import { levelFor } from '../../lib/client/local-player';
 
 const files = await catalogue();
 const byFormat = new Map<string, number>();
 for (const f of files) byFormat.set(f.format, (byFormat.get(f.format) ?? 0) + 1);
-const albums = new Map<string, { id: string | null; title: string; files: typeof files }>();
+const byAlbum = new Map<string, { id: string | null; title: string; artist: string | null; files: typeof files }>();
 for (const f of files) {
   const key = f.album_id ?? '(none)';
-  const entry = albums.get(key) ?? { id: f.album_id, title: f.album_title ?? 'Not on an album', files: [] };
+  const entry = byAlbum.get(key) ?? { id: f.album_id, title: f.album_title ?? 'Not on an album', artist: f.artist, files: [] };
   entry.files.push(f);
-  albums.set(key, entry);
+  byAlbum.set(key, entry);
 }
+// Something left to upload first, then by title.
+const albums = [...byAlbum.values()]
+  .map((a) => ({ ...a, up: a.files.filter((f) => f.audio_bytes != null).length }))
+  .sort((a, b) => Number(a.up === a.files.length) - Number(b.up === b.files.length) || a.title.localeCompare(b.title));
 const known = files.map((f) => ({ path: f.path, checksum: f.checksum }));
 const mb = (bytes: number) => (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`);
 const uploaded = files.filter((f) => f.audio_bytes != null);
 const uploadedBytes = uploaded.reduce((sum, f) => sum + (f.audio_bytes ?? 0), 0);
+const measured = uploaded.filter((f) => f.loudness_lufs != null).length;
+const lufs = (v: number) => `${v.toFixed(1).replace('-', '−')} LUFS`;
+const playsAt = (v: number | null) => `plays at ${Math.round(levelFor(v) * 100)}%`;
 const done = Astro.url.searchParams.get('done');
 ---
 
@@ -40,12 +50,87 @@ const done = Astro.url.searchParams.get('done');
         <EmptyState>No files catalogued yet.</EmptyState>
       ) : (
         <>
-          <p class="summary tabular">
-            {files.length.toLocaleString('en-GB')} files:{' '}
-            {[...byFormat].map(([format, n]) => `${n} ${format.toUpperCase()}`).join(', ')}
-            {uploaded.length > 0 && <> · {uploaded.length.toLocaleString('en-GB')} uploaded to play anywhere, {mb(uploadedBytes)}</>}
-          </p>
+          <dl class="stats tabular">
+            <div>
+              <dt>Files</dt>
+              <dd>{files.length.toLocaleString('en-GB')}</dd>
+              <dd class="sub">{[...byFormat].map(([format, n]) => `${n} ${format.toUpperCase()}`).join(', ')}</dd>
+            </div>
+            <div>
+              <dt>Uploaded</dt>
+              <dd>{uploaded.length.toLocaleString('en-GB')}</dd>
+              <dd class="sub">{uploaded.length ? `${mb(uploadedBytes)}, play anywhere` : 'none yet'}</dd>
+            </div>
+            <div>
+              <dt>Not uploaded</dt>
+              <dd>{(files.length - uploaded.length).toLocaleString('en-GB')}</dd>
+              <dd class="sub">{files.length - uploaded.length ? 'import their folders' : 'all done'}</dd>
+            </div>
+            <div>
+              <dt>Levelled</dt>
+              <dd>{measured.toLocaleString('en-GB')}</dd>
+              <dd class="sub">{uploaded.length - measured ? `${uploaded.length - measured} to measure: import again` : 'with Spotify'}</dd>
+            </div>
+          </dl>
           {done && <p class="notice" role="status">{done}</p>}
+
+          <section aria-labelledby="list-heading" class="list">
+            <h2 id="list-heading">By album</h2>
+            <ul role="list" class="albums">
+              {albums.map((album) => (
+                <li>
+                  <details>
+                    <summary>
+                      <span class="name">
+                        <span class="title">{album.title}</span>
+                        {album.artist && <span class="muted"> · {album.artist}</span>}
+                      </span>
+                      <span class:list={['badge', 'tabular', album.up === album.files.length ? 'all' : album.up === 0 ? 'none' : 'some']}>
+                        {album.up === album.files.length
+                          ? `${album.up} uploaded`
+                          : `${album.up} of ${album.files.length} uploaded`}
+                      </span>
+                    </summary>
+                    <p class="album-actions">
+                      {album.id && <a href={`/album/${album.id}`}>Open album</a>}
+                      {album.up < album.files.length && <a href="/manage/import/files">Import its folder to upload the rest</a>}
+                      {album.up > 0 && (
+                        <form method="post" action="/api/write/audio/remove" data-confirm="Remove this album's uploaded audio? Your own files are not touched.">
+                          {album.files.filter((f) => f.audio_bytes != null).map((f) => <input type="hidden" name="id" value={f.id} />)}
+                          <button class="link-button" type="submit">Remove this album's uploads</button>
+                        </form>
+                      )}
+                    </p>
+                    <ul role="list" class="songs">
+                      {album.files.map((f) => (
+                        <li>
+                          <span class="song">
+                            <a href={`/track/${f.recording_id}`}>{f.title}</a>
+                            <span class:list={['state', f.audio_bytes != null ? 'up' : 'down']}>
+                              {f.audio_bytes != null ? `Uploaded, ${mb(f.audio_bytes)}` : 'Not uploaded'}
+                            </span>
+                          </span>
+                          <span class="facts muted">
+                            {f.format.toUpperCase()}
+                            {f.bitrate && ` · ${f.bitrate} kbps`}
+                            {f.audio_bytes != null && (f.loudness_lufs != null ? ` · ${lufs(f.loudness_lufs)}, ${playsAt(f.loudness_lufs)}` : ' · loudness not measured yet')}
+                            {!f.checksum && ' · no checksum'}
+                          </span>
+                          <span class="path">{f.path}</span>
+                          {f.audio_bytes != null && (
+                            <form method="post" action="/api/write/audio/remove" class="remove">
+                              <input type="hidden" name="id" value={f.id} />
+                              <button class="link-button" type="submit">Remove upload</button>
+                            </form>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                </li>
+              ))}
+            </ul>
+          </section>
 
           <section class="verify" aria-labelledby="verify-heading" data-verify hidden>
             <h2 id="verify-heading">Check a folder</h2>
@@ -60,51 +145,6 @@ const done = Astro.url.searchParams.get('done');
             <p role="status" class="status" data-status></p>
             <progress hidden data-progress></progress>
             <div data-report></div>
-          </section>
-
-          <section aria-labelledby="list-heading">
-            <h2 id="list-heading">By album</h2>
-            <ul role="list" class="albums">
-              {[...albums.values()].map((album) => (
-                <li>
-                  <details>
-                    <summary>
-                      <span class="title">{album.title}</span>
-                      <span class="muted tabular"> · {album.files.length} {album.files.length === 1 ? 'file' : 'files'}</span>
-                      {album.files.some((f) => f.audio_bytes != null) && <span class="up"> · uploaded</span>}
-                    </summary>
-                    <p class="album-actions">
-                      {album.id && <a href={`/album/${album.id}`}>Open album</a>}
-                      {album.files.some((f) => f.audio_bytes != null) && (
-                        <form method="post" action="/api/write/audio/remove" data-confirm="Remove this album's uploaded audio? Your own files are not touched.">
-                          {album.files.filter((f) => f.audio_bytes != null).map((f) => <input type="hidden" name="id" value={f.id} />)}
-                          <button class="link-button" type="submit">Remove this album's uploads</button>
-                        </form>
-                      )}
-                    </p>
-                    <ul role="list" class="paths">
-                      {album.files.map((f) => (
-                        <li>
-                          <span class="path">{f.path}</span>
-                          <span class="muted">
-                            {f.format.toUpperCase()}
-                            {f.bitrate && ` · ${f.bitrate} kbps`}
-                            {!f.checksum && ' · no checksum'}
-                            {f.audio_bytes != null && <span class="up"> · uploaded, {mb(f.audio_bytes)}</span>}
-                          </span>
-                          {f.audio_bytes != null && (
-                            <form method="post" action="/api/write/audio/remove" class="remove">
-                              <input type="hidden" name="id" value={f.id} />
-                              <button class="link-button" type="submit">Remove upload</button>
-                            </form>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                </li>
-              ))}
-            </ul>
           </section>
         </>
       )
@@ -302,21 +342,125 @@ const done = Astro.url.searchParams.get('done');
     font-weight: 700;
   }
 
-  .paths {
+  /* The four counts: two across on a phone, four on a wide screen. */
+  .stats {
     display: grid;
-    gap: var(--space-2);
-    margin: var(--space-2) 0 var(--space-3);
+    grid-template-columns: repeat(auto-fit, minmax(min(9rem, calc(50% - var(--space-3))), 1fr));
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  .stats div {
+    display: grid;
+    align-content: start;
+    gap: 2px;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    background: var(--surface-1);
+  }
+
+  .stats dt {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+
+  .stats dd {
+    margin: 0;
+    font-size: var(--step-2);
+    font-weight: 800;
+    line-height: 1.1;
+  }
+
+  .stats dd.sub {
+    color: var(--text-muted);
+    font-size: var(--step--1);
+    font-weight: 400;
+  }
+
+  summary {
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .name {
+    min-width: 0;
+  }
+
+  /* How much of the album is uploaded: all (accent), some (outlined), none (quiet). */
+  .badge {
+    flex: none;
+    padding: 0.15rem 0.6rem;
+    border-radius: 999px;
+    font-size: var(--step--1);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .badge.all {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+  }
+
+  .badge.some {
+    outline: 1px dashed var(--accent);
+    outline-offset: -1px;
+    color: var(--text);
+  }
+
+  .badge.none {
+    background: var(--surface-2);
+    color: var(--text-muted);
+  }
+
+  .songs {
+    display: grid;
+    gap: var(--space-3);
+    margin: var(--space-2) 0 var(--space-4);
     padding: 0;
     list-style: none;
     font-size: var(--step--1);
   }
 
-  .paths li {
+  .songs li {
     display: grid;
+    gap: 2px;
+    padding-bottom: var(--space-3);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .song {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-1) var(--space-3);
+    font-size: var(--step-0);
+    font-weight: 650;
+  }
+
+  .state {
+    font-size: var(--step--1);
+    font-weight: 700;
+  }
+
+  .state.up {
+    color: var(--accent);
+  }
+
+  .state.down {
+    color: var(--text-muted);
+  }
+
+  .list {
+    display: grid;
+    gap: var(--space-2);
   }
 
   .path {
+    color: var(--text-subtle);
     font-family: var(--font-mono);
+    font-size: 0.75rem;
     overflow-wrap: anywhere;
   }
 </style>

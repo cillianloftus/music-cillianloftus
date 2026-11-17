@@ -451,17 +451,27 @@ export interface CataloguedFile {
   bitrate: number | null;
   checksum: string | null;
   title: string;
+  recording_id: string;
+  /** The song's artists, as credited. */
+  artist: string | null;
   album_id: string | null;
   album_title: string | null;
   /** Its audio, when uploaded (src/lib/audio.ts): the size kept. */
   audio_bytes: number | null;
+  uploaded_at: string | null;
+  /** Its measured loudness (0082), when uploaded since, or its folder imported again. */
+  loudness_lufs: number | null;
 }
 
 /** Every catalogued file, by path, with what it is a recording of. */
 export async function catalogue(): Promise<CataloguedFile[]> {
   const { results } = await env.DB.prepare(
-    `SELECT f.id, f.path, f.format, f.bitrate, f.checksum, r.title, ra.release_group_id AS album_id, g.title AS album_title,
-            CASE WHEN f.audio_key IS NOT NULL THEN f.audio_bytes END AS audio_bytes
+    `SELECT f.id, f.path, f.format, f.bitrate, f.checksum, r.title, r.id AS recording_id,
+            (SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+             WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary') AS artist,
+            ra.release_group_id AS album_id, g.title AS album_title,
+            CASE WHEN f.audio_key IS NOT NULL THEN f.audio_bytes END AS audio_bytes,
+            CASE WHEN f.audio_key IS NOT NULL THEN f.uploaded_at END AS uploaded_at, f.loudness_lufs
      FROM file f
      JOIN recording r ON r.id = f.recording_id
      LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
