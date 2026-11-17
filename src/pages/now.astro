@@ -203,7 +203,7 @@ const ICON = {
             </div>
 
             <div class="controls">
-              <button type="button" class="ctl small" data-cmd="shuffle" aria-label="Shuffle" aria-pressed={state?.shuffle ? 'true' : 'false'} hidden={Boolean(local)}>
+              <button type="button" class="ctl small" data-cmd="shuffle" aria-label="Shuffle" aria-pressed={state?.shuffle ? 'true' : 'false'}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.shuffle} /></svg>
               </button>
               <button type="button" class="ctl" data-cmd="previous" aria-label="Back">
@@ -216,7 +216,7 @@ const ICON = {
               <button type="button" class="ctl" data-cmd="next" aria-label="Next">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.next} /></svg>
               </button>
-              <button type="button" class="ctl small" data-cmd="repeat" aria-label="Repeat" aria-pressed={state?.repeat !== 'off' ? 'true' : 'false'} data-repeat={state?.repeat ?? 'off'} hidden={Boolean(local)}>
+              <button type="button" class="ctl small" data-cmd="repeat" aria-label="Repeat" aria-pressed={state?.repeat !== 'off' ? 'true' : 'false'} data-repeat={state?.repeat ?? 'off'}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.repeat} /></svg>
               </button>
             </div>
@@ -368,8 +368,9 @@ const ICON = {
       playing: s.playing,
       progressMs: s.positionMs,
       at: Date.now(),
-      shuffle: false,
-      repeat: 'off',
+      shuffle: s.shuffle,
+      // Spotify's names for the same three: the whole album (its "context") again, or one song.
+      repeat: s.repeat === 'all' ? 'context' : s.repeat === 'one' ? 'track' : 'off',
       device: null,
       track: {
         spotifyId: s.recordingId,
@@ -668,6 +669,10 @@ const ICON = {
         const message: LocalMessage | null =
           action === 'seek'
             ? { type: 'command', cmd: 'seek', ms: Number(body.positionMs) }
+            : action === 'shuffle'
+              ? { type: 'command', cmd: 'shuffle', on: Boolean(body.on) }
+              : action === 'repeat'
+                ? { type: 'command', cmd: 'repeat', mode: body.mode === 'context' ? 'all' : body.mode === 'track' ? 'one' : 'off' }
             : action === 'play' || action === 'pause' || action === 'next' || action === 'previous'
               ? { type: 'command', cmd: action }
               : null;
@@ -956,10 +961,6 @@ const ICON = {
     color: var(--text-subtle);
   }
 
-  /* Shuffle and repeat are Spotify's; your files play in order. */
-  .ctl[hidden] {
-    display: none;
-  }
 
   .ctl.small[aria-pressed='true'] {
     color: var(--accent);

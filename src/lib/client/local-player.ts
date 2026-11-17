@@ -43,6 +43,8 @@ export interface LocalState {
   durationMs: number;
   index: number;
   queue: { recordingId: string; title: string }[];
+  shuffle: boolean;
+  repeat: Repeat;
   /** Something to tell the listener (a tap needed, a file that will not play). */
   problem: string | null;
 }
@@ -53,7 +55,12 @@ export type LocalMessage =
   | { type: 'stopped' }
   | { type: 'command'; cmd: 'toggle' | 'play' | 'pause' | 'next' | 'previous' }
   | { type: 'command'; cmd: 'seek'; ms: number }
-  | { type: 'command'; cmd: 'jump'; index: number };
+  | { type: 'command'; cmd: 'jump'; index: number }
+  | { type: 'command'; cmd: 'shuffle'; on: boolean }
+  | { type: 'command'; cmd: 'repeat'; mode: Repeat };
+
+/** Off, the whole queue again, or this song again. */
+export type Repeat = 'off' | 'all' | 'one';
 
 export const CHANNEL = 'local-player';
 
@@ -83,12 +90,19 @@ interface Resume {
   positionMs: number;
   playing: boolean;
   at: number;
+  shuffle?: boolean;
+  repeat?: Repeat;
+  order?: number[];
 }
 
 export class LocalPlayer {
   queue: LocalTrack[] = [];
   index = 0;
   problem: string | null = null;
+  shuffle = false;
+  repeat: Repeat = 'off';
+  /** The queue's songs (their places in it) in the order they play: as listed, or shuffled. */
+  order: number[] = [];
   private readonly channel = 'BroadcastChannel' in window ? new BroadcastChannel(CHANNEL) : null;
   /** The song on now: when it began and how much was heard, seeks aside. */
   private listen: { recordingId: string; startedAt: string | null; heardMs: number; lastAt: number | null } | null = null;
@@ -111,8 +125,19 @@ export class LocalPlayer {
       if (this.listen) this.listen.lastAt = audio.paused ? null : performance.now();
     });
     on('ended', () => {
-      if (this.index < this.queue.length - 1) this.go(this.index + 1, true);
-      else {
+      const at = this.order.indexOf(this.index);
+      if (this.repeat === 'one') {
+        // Heard through: a listen of its own, then from the top.
+        this.hear();
+        this.report();
+        this.listen = { recordingId: this.queue[this.index]!.recordingId, startedAt: null, heardMs: 0, lastAt: null };
+        audio.currentTime = 0;
+        void this.play();
+      } else if (at < this.order.length - 1) this.go(this.order[at + 1]!, true);
+      else if (this.repeat === 'all') {
+        if (this.shuffle) this.order = shuffled(this.queue.length, null);
+        this.go(this.order[0]!, true);
+      } else {
         // The last song: its listen now, nothing follows to send it.
         this.hear();
         this.report();
@@ -175,6 +200,7 @@ export class LocalPlayer {
     this.report();
     // Copied, so a queue made in a page that is then left is not held through it.
     this.queue = queue.map((t) => ({ ...t }));
+    this.order = this.shuffle ? shuffled(this.queue.length, start) : this.queue.map((_, i) => i);
     this.go(start, play);
   }
 
@@ -182,7 +208,7 @@ export class LocalPlayer {
   keep(): void {
     if (this.queue.length === 0) return;
     // The whole queue played out: nothing to carry on with.
-    if (this.audio.ended && this.index === this.queue.length - 1) {
+    if (this.audio.ended && this.repeat === 'off' && this.order.indexOf(this.index) === this.order.length - 1) {
       try {
         sessionStorage.removeItem(RESUME);
       } catch {}
@@ -194,6 +220,9 @@ export class LocalPlayer {
       positionMs: Math.round(this.audio.currentTime * 1000),
       playing: !this.audio.paused,
       at: Date.now(),
+      shuffle: this.shuffle,
+      repeat: this.repeat,
+      order: this.order,
     };
     try {
       sessionStorage.setItem(RESUME, JSON.stringify(saved));
@@ -203,6 +232,9 @@ export class LocalPlayer {
   /** Back where a reload left it: the same song, the same second, playing if it was. */
   resume(saved: Resume): void {
     this.queue = saved.queue;
+    this.shuffle = saved.shuffle ?? false;
+    this.repeat = saved.repeat ?? 'off';
+    this.order = saved.order?.length === saved.queue.length ? saved.order : saved.queue.map((_, i) => i);
     this.go(saved.index, saved.playing, saved.positionMs);
     // A browser that will not start sound by itself after a reload starts it at the first
     // tap or key anywhere (the frame's pages pass theirs on: wirePlayLinks).
@@ -256,13 +288,30 @@ export class LocalPlayer {
     this.broadcast();
   }
 
+  /** The next in play order (round to the first after the last). */
   next(): void {
-    this.go(this.index + 1, true);
+    const at = this.order.indexOf(this.index);
+    this.go(this.order[(at + 1) % this.order.length] ?? 0, true);
   }
 
   previous(): void {
     if (this.audio.currentTime > 3) this.audio.currentTime = 0;
-    else this.go(this.index - 1, true);
+    else {
+      const at = this.order.indexOf(this.index);
+      this.go(this.order[(at - 1 + this.order.length) % this.order.length] ?? 0, true);
+    }
+  }
+
+  /** Shuffled from this song on (it stays playing, the rest in a new order), or back to the listed order. */
+  setShuffle(on: boolean): void {
+    this.shuffle = on;
+    this.order = on ? shuffled(this.queue.length, this.index) : this.queue.map((_, i) => i);
+    this.broadcast();
+  }
+
+  setRepeat(mode: Repeat): void {
+    this.repeat = mode;
+    this.broadcast();
   }
 
   command(m: LocalMessage): void {
@@ -275,6 +324,8 @@ export class LocalPlayer {
     else if (m.cmd === 'previous') this.previous();
     else if (m.cmd === 'seek') this.audio.currentTime = Math.max(0, m.ms / 1000);
     else if (m.cmd === 'jump') this.go(m.index, true);
+    else if (m.cmd === 'shuffle') this.setShuffle(m.on);
+    else if (m.cmd === 'repeat') this.setRepeat(m.mode);
   }
 
   state(): LocalState | null {
@@ -294,6 +345,8 @@ export class LocalPlayer {
       durationMs: Number.isFinite(a.duration) && a.duration > 0 ? Math.round(a.duration * 1000) : (t.lengthMs ?? 0),
       index: this.index,
       queue: this.queue.map((q) => ({ recordingId: q.recordingId, title: q.title })),
+      shuffle: this.shuffle,
+      repeat: this.repeat,
       problem: this.problem,
     };
   }
@@ -343,6 +396,16 @@ export class LocalPlayer {
       localStorage.setItem(HELD, JSON.stringify(left));
     } catch {}
   }
+}
+
+/** The places 0..n-1 in a random order, `first` (the song on now) leading when given. */
+export function shuffled(n: number, first: number | null): number[] {
+  const rest = Array.from({ length: n }, (_, i) => i).filter((i) => i !== first);
+  for (let i = rest.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [rest[i], rest[j]] = [rest[j]!, rest[i]!];
+  }
+  return first === null ? rest : [first, ...rest];
 }
 
 function held(): string[] {

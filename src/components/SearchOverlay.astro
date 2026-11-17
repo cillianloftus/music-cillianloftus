@@ -649,6 +649,10 @@
     .search-box,
     .search-overlay:has(.results:empty) .search-box {
       order: 2;
+      /* Held at the foot even with nothing above it: typing hides the
+         suggestions a moment before results come, and the box jumped to
+         the top of the screen and back (17 Nov). */
+      margin-top: auto;
       padding: var(--space-2) var(--gutter) calc(var(--space-2) + var(--tabbar-space));
       border-top: 1px solid var(--border);
       border-bottom: 0;

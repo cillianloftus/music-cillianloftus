@@ -115,11 +115,26 @@ export async function search(input: string, viewerId: string | null): Promise<Se
        WHERE search_index MATCH ?1 AND kind = ?2
        ORDER BY rank LIMIT ?3`,
     ).bind(match, kind, PER_KIND);
+  // Songs and albums: yours first (rated, or played), then the name exactly as typed, then
+  // the index's own ranking, among its best few hundred. By the index alone, "nasty" gave
+  // eight strangers' songs before Logic's "Nasty", rated and played (17 Nov).
+  const mineFirst = (kind: 'recording' | 'release_group') =>
+    env.DB.prepare(
+      `SELECT h.entity_id FROM (
+         SELECT entity_id, name, rank FROM search_index
+         WHERE search_index MATCH ?1 AND kind = ?2 ORDER BY rank LIMIT 150
+       ) h
+       ORDER BY (EXISTS (SELECT 1 FROM rating r WHERE r.entity_type = ?2 AND r.entity_id = h.entity_id AND r.user_id = ?4)
+                 ${kind === 'recording' ? 'OR EXISTS (SELECT 1 FROM play p WHERE p.recording_id = h.entity_id AND p.user_id = ?4 AND p.counted = 1)' : ''}) DESC,
+                lower(h.name) = lower(?5) DESC,
+                h.rank
+       LIMIT ?3`,
+    ).bind(match, kind, PER_KIND, viewerId, query);
 
   const [artistIds, albumIds, trackIds] = await env.DB.batch<{ entity_id: string }>([
     ranked('artist'),
-    ranked('release_group'),
-    ranked('recording'),
+    mineFirst('release_group'),
+    mineFirst('recording'),
   ]);
   // An artist can match by name and by an alias: keep each once, at its best rank.
   const found = (result: D1Result<{ entity_id: string }> | undefined) => [...new Set(result?.results.map((r) => r.entity_id) ?? [])];

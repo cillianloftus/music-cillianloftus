@@ -161,7 +161,19 @@ async function target(client: SpotifyClient, from: Origin | undefined): Promise<
   return someDevice(client, from).catch(() => undefined);
 }
 
+/**
+ * The album a Spotify track is on, so one song started plays on through its
+ * album rather than stopping when it ends (17 Nov). Undefined if Spotify
+ * cannot say: the song alone, as before.
+ */
+async function albumOf(client: SpotifyClient, track: string): Promise<string | undefined> {
+  const found = await client.get<{ album?: { id?: string } } | undefined>(`/tracks/${track}`).catch(() => undefined);
+  return found?.album?.id ?? undefined;
+}
+
 export async function control(client: SpotifyClient, command: PlayerCommand, from?: Origin): Promise<void> {
+  // A song started on its own plays inside its album (looked up once, not on each try).
+  const album = command.action === 'start' ? (command.album ?? (command.track ? await albumOf(client, command.track) : undefined)) : undefined;
   const send = async (deviceId?: string) => {
     const device = deviceId ? `device_id=${deviceId}` : '';
     const q = (extra: string) => [extra, device].filter(Boolean).join('&');
@@ -183,8 +195,8 @@ export async function control(client: SpotifyClient, command: PlayerCommand, fro
       case 'queue':
         return client.post(`/me/player/queue?${q(`uri=${encodeURIComponent(`spotify:track:${command.track}`)}`)}`, undefined);
       case 'start': {
-        const body = command.album
-          ? { context_uri: `spotify:album:${command.album}`, ...(command.track ? { offset: { uri: `spotify:track:${command.track}` } } : {}) }
+        const body = album
+          ? { context_uri: `spotify:album:${album}`, ...(command.track ? { offset: { uri: `spotify:track:${command.track}` } } : {}) }
           : { uris: [`spotify:track:${command.track}`] };
         return client.put(`/me/player/play?${q('')}`, body);
       }

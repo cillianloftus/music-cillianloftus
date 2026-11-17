@@ -32,6 +32,7 @@ function fakeClient(first?: SpotifyError, devices: unknown[] = [{ id: 'laptop', 
   const call = (method: string) => async (path: string, body?: unknown) => {
     calls.push([method, path, body]);
     if (path === '/me/player/devices') return { devices };
+    if (path.startsWith('/tracks/')) return { album: { id: 'b'.repeat(22) } };
     if (first && !failed) {
       failed = true;
       throw first;
@@ -71,10 +72,24 @@ describe('now playing', () => {
     expect(calls).toEqual([['PUT', '/me/player/play?', { context_uri: `spotify:album:${'a'.repeat(22)}`, offset: { uri: `spotify:track:${'t'.repeat(22)}` } }]]);
   });
 
+  it('starts a song given on its own inside the album Spotify has it on, so the music goes on', async () => {
+    const { client, calls } = fakeClient();
+    await control(client, { action: 'start', track: 't'.repeat(22) });
+    expect(calls).toEqual([
+      ['GET', `/tracks/${'t'.repeat(22)}`, undefined],
+      ['PUT', '/me/player/play?', { context_uri: `spotify:album:${'b'.repeat(22)}`, offset: { uri: `spotify:track:${'t'.repeat(22)}` } }],
+    ]);
+  });
+
   it('wakes a phone when nothing is playing anywhere, and tries once more', async () => {
     const { client, calls } = fakeClient(new SpotifyError('no active device', 404));
     await control(client, { action: 'start', track: 't'.repeat(22) });
-    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual(['PUT /me/player/play?', 'GET /me/player/devices', 'PUT /me/player/play?device_id=phone']);
+    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual([
+      `GET /tracks/${'t'.repeat(22)}`,
+      'PUT /me/player/play?',
+      'GET /me/player/devices',
+      'PUT /me/player/play?device_id=phone',
+    ]);
   });
 
   it('starts on the phone it was tapped on, not the TV Spotify used last', async () => {
@@ -94,7 +109,7 @@ describe('now playing', () => {
       return { is_playing: true };
     };
     await control(client, { action: 'start', track: 't'.repeat(22) }, 'phone');
-    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual(['GET /me/player', 'PUT /me/player/play?']);
+    expect(calls.map(([m, p]) => `${m} ${p}`)).toEqual([`GET /tracks/${'t'.repeat(22)}`, 'GET /me/player', 'PUT /me/player/play?']);
   });
 
   it('says plainly why it cannot', async () => {
