@@ -21,7 +21,7 @@ import { rematchListens } from './lib/listens/store';
 import { fillAlbumsFromDiscogs } from './lib/sources/discogs';
 import { checkOfficialReleases } from './lib/official';
 import { nudgeRatings, pushToUser, vapid } from './lib/nudge';
-import { latestBackup, recordNightly, type TaskRun } from './lib/health';
+import { latestBackup, recordNightly, runTasks } from './lib/health';
 import { rebuildAllGutConversions, rebuildStaleGutConversions } from './lib/gut-calibration';
 import { mergeTwins } from './lib/twins';
 import { rebuildAllInheritedScores } from './lib/inherited';
@@ -96,9 +96,8 @@ export default {
           // Before tonight's: if last night's never landed, say so on the phone.
           await warnIfBackupOverdue().catch((error) => console.error('Backup check failed', error));
           await enqueue('backup', {});
-          const runs: TaskRun[] = [];
-          // Both are housekeeping; neither failing may hold up the jobs.
-          for (const [name, task] of [
+          // Housekeeping: none failing may hold up the others or the jobs.
+          const runs = await runTasks([
             ['Album genre derivation', deriveAlbumGenres],
             // After the genres: a song's conversion follows its artist and genres.
             ['Gut score conversions', rebuildAllGutConversions],
@@ -127,19 +126,13 @@ export default {
             // index on entity_type (62,000 rows for 2,000). Only tables whose
             // statistics have drifted are looked at again.
             ['Planner statistics', async () => void (await env.DB.exec('PRAGMA optimize'))],
-          ] as const) {
-            const started = Date.now();
-            try {
-              await task();
-              runs.push({ name, at: new Date(started).toISOString(), ok: true, ms: Date.now() - started });
-            } catch (error) {
-              console.error(`${name} failed`, error);
-              const message = error instanceof Error ? error.message : String(error);
-              runs.push({ name, at: new Date(started).toISOString(), ok: false, ms: Date.now() - started, error: message.slice(0, 500) });
-            }
-          }
+          ]);
           // What /manage/health shows of the night.
           await recordNightly(runs).catch((error) => console.error('Recording the night failed', error));
+          // The every-minute trigger fires at 04:00 too, in its own run: the jobs
+          // (tonight's backup first) are its. Running them here as well left the
+          // night's tasks, with their waits, short of a cron run's fifteen minutes.
+          return;
         }
         // First, and quick: a nudge for an unrated song playing now (src/lib/nudge.ts).
         await nudgeRatings().catch((error) => console.error('Rating nudges failed', error));

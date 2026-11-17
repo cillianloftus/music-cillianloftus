@@ -7,14 +7,16 @@ import { enqueue } from './queue';
 import { runJobs } from './runner';
 
 // Each backup job does whatever the next queued outcome says.
-const outcomes: Array<'ok' | 'limit' | 'throttled'> = [];
+const outcomes: Array<'ok' | 'limit' | 'throttled' | 'spotify-wait'> = [];
 vi.mock('../backup/store', async () => {
   const { MusicBrainzError } = await import('../musicbrainz/client');
+  const { SpotifyError } = await import('../spotify/client');
   return {
     runBackup: async () => {
       const next = outcomes.shift();
       if (next === 'limit') throw new Error('Too many subrequests by single Worker invocation.');
       if (next === 'throttled') throw new MusicBrainzError('MusicBrainz returned 503 for release/x', 503);
+      if (next === 'spotify-wait') throw new SpotifyError('Spotify asked to wait', 429);
       return { summary: { rows: 1 } };
     },
   };
@@ -102,6 +104,17 @@ describe('running out of requests', () => {
     outcomes.push('throttled', 'throttled', 'throttled');
     expect(await runJobs({ budgetMs: 10_000 })).toBe(0);
     expect(statuses()).toEqual(['queued', 'queued', 'queued', 'queued']);
+  });
+
+  it('stops the run at once when Spotify asks to wait, not counting it a try', async () => {
+    const first = await enqueue('backup', {});
+    for (let i = 0; i < 3; i++) await enqueue('backup', {});
+    outcomes.push('spotify-wait', 'ok', 'ok', 'ok');
+    // Nothing else claimed: the wait holds for every job (43,000 claims on 16 Nov).
+    expect(await runJobs({ budgetMs: 10_000 })).toBe(0);
+    expect(outcomes).toEqual(['ok', 'ok', 'ok']);
+    const row = db.prepare('SELECT status, attempts FROM job WHERE id = ?').get(first) as { status: string; attempts: number };
+    expect(row).toEqual({ status: 'queued', attempts: 0 });
   });
 
   it('fails a job that runs out on a fresh allowance: it is too big on its own', async () => {

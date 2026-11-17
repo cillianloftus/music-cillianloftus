@@ -46,6 +46,47 @@ export interface TaskRun {
 
 const TASKS_KEY = 'health:nightly';
 
+/** D1's answer when a 10-second window's resources are spent: wait it out. */
+export function isOverloaded(error: unknown): boolean {
+  return /overloaded/i.test(error instanceof Error ? error.message : String(error));
+}
+
+/** How long to wait before trying an overloaded task again: past D1's 10 s window. */
+export const OVERLOAD_PAUSE_MS = 12_000;
+
+/**
+ * Runs the nightly tasks in order, each on its own: one failing never stops
+ * the rest. On 17 Nov one heavy task left D1 "overloaded" and the fourteen
+ * after it failed within a second; now a task D1 turns away waits past its
+ * window and tries again, twice at most.
+ */
+export async function runTasks(
+  tasks: readonly (readonly [string, () => Promise<unknown>])[],
+  pause: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<TaskRun[]> {
+  const runs: TaskRun[] = [];
+  for (const [name, task] of tasks) {
+    const started = Date.now();
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await task();
+        runs.push({ name, at: new Date(started).toISOString(), ok: true, ms: Date.now() - started });
+        break;
+      } catch (error) {
+        if (isOverloaded(error) && attempt < 2) {
+          await pause(OVERLOAD_PAUSE_MS);
+          continue;
+        }
+        console.error(`${name} failed`, error);
+        const message = error instanceof Error ? error.message : String(error);
+        runs.push({ name, at: new Date(started).toISOString(), ok: false, ms: Date.now() - started, error: message.slice(0, 500) });
+        break;
+      }
+    }
+  }
+  return runs;
+}
+
 export async function recordNightly(runs: TaskRun[]): Promise<void> {
   await env.CACHE.put(TASKS_KEY, JSON.stringify(runs), { expirationTtl: 14 * 86_400 });
 }

@@ -14,6 +14,20 @@ import { env } from 'cloudflare:workers';
 import { ReviewError } from './review';
 import { normaliseTitle } from './text';
 
+/**
+ * Closes every open anomaly naming a merged-away record, one lookup a side
+ * (0080): as entity_a = ?1 OR entity_b = ?1 SQLite read the whole table,
+ * 2.7 million rows on 16 Nov.
+ */
+function closeAnomaliesOf(type: 'artist' | 'release_group' | 'recording', goneId: string): D1PreparedStatement {
+  return env.DB.prepare(
+    `UPDATE anomaly SET status = 'resolved', resolution = 'merged'
+     WHERE id IN (SELECT id FROM anomaly WHERE status = 'open' AND entity_type = ?1 AND entity_a = ?2
+                  UNION ALL
+                  SELECT id FROM anomaly WHERE status = 'open' AND entity_type = ?1 AND entity_b = ?2)`,
+  ).bind(type, goneId);
+}
+
 /** The redirect from a merged-away id, carrying the row as it was. */
 /**
  * Takes one album's or song's entry out of the search index. By entity_id
@@ -97,10 +111,7 @@ export async function mergeArtists(keepId: string, goneId: string): Promise<void
     // Anything pointing at the old id now points on.
     db.prepare(`UPDATE entity_redirect SET new_id = ?1 WHERE entity_type = 'artist' AND new_id = ?2`).bind(keepId, goneId),
     redirect('artist', goneId, keepId, gone),
-    db.prepare(
-      `UPDATE anomaly SET status = 'resolved', resolution = 'merged'
-       WHERE status = 'open' AND entity_type = 'artist' AND (entity_a = ?1 OR entity_b = ?1)`,
-    ).bind(goneId),
+    closeAnomaliesOf('artist', goneId),
     db.prepare(`DELETE FROM confirmed_distinct WHERE entity_type = 'artist' AND (id_a = ?1 OR id_b = ?1)`).bind(goneId),
     db.prepare(`DELETE FROM search_index WHERE kind = 'artist' AND entity_id = ?`).bind(goneId),
     db.prepare(`DELETE FROM artist WHERE id = ?`).bind(goneId),
@@ -184,10 +195,7 @@ export async function mergeAlbums(keepId: string, goneId: string): Promise<void>
     db.prepare(`DELETE FROM lookup_log WHERE entity_id = ?`).bind(goneId),
     db.prepare(`UPDATE entity_redirect SET new_id = ?1 WHERE entity_type = 'release_group' AND new_id = ?2`).bind(keepId, goneId),
     redirect('release_group', goneId, keepId, gone),
-    db.prepare(
-      `UPDATE anomaly SET status = 'resolved', resolution = 'merged'
-       WHERE status = 'open' AND entity_type = 'release_group' AND (entity_a = ?1 OR entity_b = ?1)`,
-    ).bind(goneId),
+    closeAnomaliesOf('release_group', goneId),
     db.prepare(`DELETE FROM confirmed_distinct WHERE entity_type = 'release_group' AND (id_a = ?1 OR id_b = ?1)`).bind(goneId),
     dropFromSearch('release_group', goneId, gone.title),
     db.prepare(`DELETE FROM release_group WHERE id = ?`).bind(goneId),
@@ -404,10 +412,7 @@ export async function mergeRecordings(keepId: string, goneId: string): Promise<v
     db.prepare(`DELETE FROM lookup_log WHERE entity_id = ?`).bind(goneId),
     db.prepare(`UPDATE entity_redirect SET new_id = ?1 WHERE entity_type = 'recording' AND new_id = ?2`).bind(keepId, goneId),
     redirect('recording', goneId, keepId, gone),
-    db.prepare(
-      `UPDATE anomaly SET status = 'resolved', resolution = 'merged'
-       WHERE status = 'open' AND entity_type = 'recording' AND (entity_a = ?1 OR entity_b = ?1)`,
-    ).bind(goneId),
+    closeAnomaliesOf('recording', goneId),
     db.prepare(`DELETE FROM confirmed_distinct WHERE entity_type = 'recording' AND (id_a = ?1 OR id_b = ?1)`).bind(goneId),
     dropFromSearch('recording', goneId, gone.title),
     db.prepare(`DELETE FROM recording WHERE id = ?`).bind(goneId),

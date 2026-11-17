@@ -42,17 +42,20 @@ const albumArtist = `(SELECT group_concat(a.name, ', ') FROM artist_credit c JOI
                       WHERE c.entity_type = 'release_group' AND c.entity_id = p.id AND c.role = 'primary')`;
 
 /**
- * Kept for the hour, or until something is edited or merged by hand (what
+ * Kept for the day, or until something is edited or merged by hand (what
  * fills a gap; moves the stamp at once). Worked out on every visit, the
  * six lists read about 300,000 rows; kept until the library changed, they
  * were worked out again after every import (113 times on 15 Nov, 75
- * million rows), though an import only adds to the lists' far end.
+ * million rows), though an import only adds to the lists' far end. Kept
+ * for the hour, the writers list alone read 10 million rows on 16 Nov
+ * (860,000 a time, a check per track; now one list of credited songs,
+ * 350,000): what fills these gaps by itself runs nightly.
  */
 export async function missingInfo(now = new Date()): Promise<GapGroup[]> {
   const row = await env.DB.prepare(
     `SELECT (SELECT max(edited_at) FROM field_override) AS edits, (SELECT max(rowid) FROM entity_redirect) AS merges`,
   ).first<{ edits: string | null; merges: number | null }>();
-  return byStamp('missing-info', [now.toISOString().slice(0, 13), row?.edits, row?.merges].join(':'), workOutMissingInfo);
+  return byStamp('missing-info', [now.toISOString().slice(0, 10), row?.edits, row?.merges].join(':'), workOutMissingInfo);
 }
 
 async function workOutMissingInfo(): Promise<GapGroup[]> {
@@ -68,7 +71,8 @@ async function workOutMissingInfo(): Promise<GapGroup[]> {
        FROM release_group g
        JOIN v_release_group_canonical c ON c.release_group_id = g.id
        JOIN track t ON t.release_id = c.release_id
-       WHERE NOT EXISTS (SELECT 1 FROM artist_credit w WHERE w.entity_type = 'recording' AND w.entity_id = t.recording_id AND w.role IN (SELECT id FROM credit_role WHERE family = 'writing'))
+       WHERE t.recording_id NOT IN (SELECT w.entity_id FROM artist_credit w
+                                    WHERE w.entity_type = 'recording' AND w.role IN (SELECT id FROM credit_role WHERE family = 'writing'))
        GROUP BY g.id
        ORDER BY ${RATED_FIRST}, n DESC, g.title`,
     ),
