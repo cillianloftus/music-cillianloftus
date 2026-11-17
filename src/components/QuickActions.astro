@@ -28,7 +28,9 @@
 </dialog>
 
 <script>
-  type Info = { kind: 'track' | 'album'; id: string; title: string; spotifyId: string | null; albumId: string | null; depth: string | null; audio?: boolean };
+  import { startLocal } from '../lib/client/local-player';
+
+  type Info ={ kind: 'track' | 'album'; id: string; title: string; spotifyId: string | null; albumId: string | null; depth: string | null; audio?: boolean };
   type Action = { label: string; href?: string; run?: () => void | Promise<void>; icon: string };
 
   const dialog = document.querySelector('[data-quick]') as unknown as HTMLDialogElement | null;
@@ -108,10 +110,14 @@
       const here = `${location.pathname}${location.search}`;
       const rate = `/edit/rate/${kind === 'track' ? 'recording' : 'release_group'}/${id}?return_to=${encodeURIComponent(here)}`;
       const actions: Action[] = [];
-      // Your own uploaded file first, when there is one: it plays in the player tab (/play).
+      // Your own uploaded file first, when there is one: it plays on from page to page (local-player.ts).
       if (info?.audio) {
         const href = kind === 'track' ? `/play?track=${id}${info.albumId ? `&album=${info.albumId}` : ''}` : `/play?album=${id}`;
-        actions.push({ label: kind === 'track' ? 'Play your file' : 'Play your files', icon: 'play', run: () => { dialog.close(); window.open(href, 'music-player'); } });
+        const run = () => {
+          dialog.close();
+          void startLocal(new URL(href, location.href).searchParams).then((ok) => !ok && location.assign(href));
+        };
+        actions.push({ label: kind === 'track' ? 'Play your file' : 'Play your files', icon: 'play', run });
       }
       if (info?.spotifyId) {
         actions.push({ label: kind === 'track' ? (info.audio ? 'Play on Spotify' : 'Play') : info.audio ? 'Play album on Spotify' : 'Play album', icon: 'play', run: play(info, false) });

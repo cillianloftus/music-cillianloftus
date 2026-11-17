@@ -58,6 +58,10 @@ const onNow = Astro.url.pathname === '/now';
 <script>
   import { NowClock, STORE_KEY, fetchNow } from '../lib/client/now-clock';
   import type { NowState } from '../lib/spotify/now-state';
+  import { CHANNEL, wirePlayLinks, type LocalMessage, type LocalState as LocalNow } from '../lib/client/local-player';
+
+  // Play buttons start your files here, and they keep playing from page to page.
+  wirePlayLinks();
 
   // How long to stop asking after Spotify says it can't be read (not connected, no scope).
   const QUIET_KEY = 'nowbar-quiet-until';
@@ -81,14 +85,14 @@ const onNow = Astro.url.pathname === '/now';
     }
   };
 
-  /** What your own player (/play, another tab) says is on: shown here before Spotify. */
-  type LocalState = { title: string; artist: string; art: string | null; playing: boolean; positionMs: number; durationMs: number; at: number };
+  /** What your own files' player (local-player.ts) says is on: shown here before Spotify. */
+  type LocalState = LocalNow & { at: number };
 
   class NowBar extends HTMLElement {
     clock = new NowClock(stored());
     lastEnd = 0;
     local: LocalState | null = null;
-    channel = 'BroadcastChannel' in window ? new BroadcastChannel('local-player') : null;
+    channel = 'BroadcastChannel' in window ? new BroadcastChannel(CHANNEL) : null;
 
     /** The player tab spoke in the last few seconds (it says what is on every two). */
     localOn(): LocalState | null {
@@ -98,25 +102,19 @@ const onNow = Astro.url.pathname === '/now';
     connectedCallback() {
       const onNow = this.hasAttribute('data-on-now');
       this.channel?.addEventListener('message', (event) => {
-        const m = event.data as { type?: string; state?: Omit<LocalState, 'at'> };
-        if (m.type === 'state' && m.state) this.local = { ...m.state, at: Date.now() };
+        const m = event.data as LocalMessage;
+        if (m.type === 'state') this.local = { ...m.state, at: Date.now() };
         if (m.type === 'stopped') this.local = null;
         this.paint();
       });
-      // Ask a player already open to say what it is playing.
-      this.channel?.postMessage({ type: 'hello' });
-      // The bar opens the player tab rather than Now playing while your own files play.
-      this.querySelector('.nb-link')!.addEventListener('click', (event) => {
-        if (!this.localOn()) return;
-        event.preventDefault();
-        window.open('', 'music-player')?.focus();
-      });
+      // Ask a player already going to say what it is playing.
+      this.channel?.postMessage({ type: 'hello' } satisfies LocalMessage);
       this.querySelector('[data-nb-toggle]')!.addEventListener('click', () => {
         const local = this.localOn();
         if (local) {
           local.playing = !local.playing;
           this.paint();
-          this.channel?.postMessage({ type: 'command', cmd: 'toggle' });
+          this.channel?.postMessage({ type: 'command', cmd: 'toggle' } satisfies LocalMessage);
           return;
         }
         if (!this.clock.state) return;
@@ -126,7 +124,7 @@ const onNow = Astro.url.pathname === '/now';
       });
       this.querySelector('[data-nb-next]')!.addEventListener('click', () => {
         if (this.localOn()) {
-          this.channel?.postMessage({ type: 'command', cmd: 'next' });
+          this.channel?.postMessage({ type: 'command', cmd: 'next' } satisfies LocalMessage);
           return;
         }
         if (this.clock.advance()) this.paint();
@@ -169,6 +167,8 @@ const onNow = Astro.url.pathname === '/now';
     }
 
     async poll() {
+      // The shell under the site's frame (local-player.ts): the frame's own bar asks.
+      if (document.documentElement.hasAttribute('data-shell')) return;
       if (quiet() && !this.clock.state) return;
       try {
         // The queue only matters near the end of a song.
@@ -206,6 +206,8 @@ const onNow = Astro.url.pathname === '/now';
 
     paint() {
       const local = this.localOn();
+      // Tapped, the bar opens Now playing for whichever is on: your file, or Spotify's song.
+      this.querySelector<HTMLAnchorElement>('.nb-link')!.href = local ? `/now?recording=${encodeURIComponent(local.recordingId)}` : '/now';
       if (local && !this.hasAttribute('data-on-now')) {
         this.hidden = false;
         document.documentElement.toggleAttribute('data-nowbar', true);

@@ -19,16 +19,55 @@ import { nowPlaying, PlayerError, type NowState } from '../lib/spotify/player';
 import { activeWeights } from '../lib/weights';
 import { findRecording } from '../lib/recording-match';
 import { scorePreview } from '../lib/score-preview';
+import { songQueue } from '../lib/audio';
 
 const user = Astro.locals.user;
 if (!user) return Astro.redirect('/manage');
 
+// ?recording: one of your own files playing (local-player.ts), not Spotify. The page is the
+// same (rating, credits, lyrics); the player's state comes from the browser, so the song is
+// drawn from the catalogue, its id standing where Spotify's would.
+const localId = Astro.url.searchParams.get('recording');
+const local = localId ? (await songQueue(localId))[0] ?? null : null;
+// Each credited artist on their own, so each name links to its page.
+const localArtists = local
+  ? (
+      await env.DB.prepare(
+        `SELECT a.name FROM artist_credit c JOIN artist a ON a.id = c.artist_id
+         WHERE c.entity_type = 'recording' AND c.entity_id = ? AND c.role = 'primary' ORDER BY c.position`,
+      )
+        .bind(local.recordingId)
+        .all<{ name: string }>()
+    ).results.map((a) => a.name)
+  : [];
+
 let state: NowState | null = null;
 let problem: string | null = null;
-try {
-  state = await nowPlaying(spotifyFor(user.id));
-} catch (error) {
-  problem = error instanceof PlayerError ? error.message : 'Spotify could not be reached. Is it connected on Manage › Spotify?';
+if (local) {
+  state = {
+    playing: false,
+    progressMs: 0,
+    at: Date.now(),
+    shuffle: false,
+    repeat: 'off',
+    device: null,
+    track: {
+      spotifyId: local.recordingId,
+      title: local.title,
+      artists: localArtists.length ? localArtists : local.artist ? [local.artist] : [],
+      artistIds: [],
+      album: local.album ?? '',
+      albumSpotifyId: '',
+      art: local.artKey ? `/${local.artKey}/500.jpg` : null,
+      durationMs: local.lengthMs ?? 0,
+    },
+  };
+} else {
+  try {
+    state = await nowPlaying(spotifyFor(user.id));
+  } catch (error) {
+    problem = error instanceof PlayerError ? error.message : 'Spotify could not be reached. Is it connected on Manage › Spotify?';
+  }
 }
 const song = state?.track ?? null;
 
@@ -42,9 +81,11 @@ interface Here {
 }
 
 // The song in the catalogue: by Spotify id, a matched listen, or title and artist (recording-match.ts).
-const hereId = song
-  ? await findRecording({ spotifyId: song.spotifyId, title: song.title, artists: song.artists, artistIds: song.artistIds, album: song.album })
-  : null;
+const hereId = local
+  ? local.recordingId
+  : song
+    ? await findRecording({ spotifyId: song.spotifyId, title: song.title, artists: song.artists, artistIds: song.artistIds, album: song.album })
+    : null;
 const here = hereId
   ? await env.DB.prepare(
       `SELECT rec.id, rec.title, g.id AS album_id, g.title AS album_title,
@@ -121,7 +162,7 @@ const ICON = {
 ---
 
 <Base title="Now playing">
-  <div class="wrap now" data-now={JSON.stringify(state)}>
+  <div class="wrap now" data-now={JSON.stringify(state)} data-mode={local ? 'local' : 'spotify'}>
     {
       problem ? (
         <section class="empty">
@@ -156,7 +197,7 @@ const ICON = {
             </div>
 
             <div class="controls">
-              <button type="button" class="ctl small" data-cmd="shuffle" aria-label="Shuffle" aria-pressed={state?.shuffle ? 'true' : 'false'}>
+              <button type="button" class="ctl small" data-cmd="shuffle" aria-label="Shuffle" aria-pressed={state?.shuffle ? 'true' : 'false'} hidden={Boolean(local)}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.shuffle} /></svg>
               </button>
               <button type="button" class="ctl" data-cmd="previous" aria-label="Back">
@@ -169,11 +210,11 @@ const ICON = {
               <button type="button" class="ctl" data-cmd="next" aria-label="Next">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.next} /></svg>
               </button>
-              <button type="button" class="ctl small" data-cmd="repeat" aria-label="Repeat" aria-pressed={state?.repeat !== 'off' ? 'true' : 'false'} data-repeat={state?.repeat ?? 'off'}>
+              <button type="button" class="ctl small" data-cmd="repeat" aria-label="Repeat" aria-pressed={state?.repeat !== 'off' ? 'true' : 'false'} data-repeat={state?.repeat ?? 'off'} hidden={Boolean(local)}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.repeat} /></svg>
               </button>
             </div>
-            <p class="device muted" data-device>{state?.device ? `On ${state.device.name}` : ''}</p>
+            <p class="device muted" data-device>{local ? 'Your files' : state?.device ? `On ${state.device.name}` : ''}</p>
             <p class="status" role="status" data-status></p>
           </div>
 
@@ -254,6 +295,7 @@ const ICON = {
   import { enhanceAutosave, flushAutosave } from '../lib/client/rating-autosave';
   import { enhancePreviews } from '../lib/client/rating-preview';
   import type { NowState } from '../lib/spotify/now-state';
+  import { CHANNEL, startLocal, type LocalMessage, type LocalState } from '../lib/client/local-player';
 
   interface Lyrics {
     syncedLyrics?: string | null;
@@ -273,9 +315,35 @@ const ICON = {
   const player = root?.querySelector<HTMLElement>('[data-player]');
   if (root && player) {
     const clock = new NowClock(JSON.parse(root.dataset.now || 'null') as NowState | null);
+    // Your own files (?recording): the player in the browser says what is on, over its
+    // channel, and takes the commands; Spotify is not asked. The mini player's stored
+    // Spotify state is left alone.
+    const localMode = root.dataset.mode === 'local';
+    const channel = 'BroadcastChannel' in window ? new BroadcastChannel(CHANNEL) : null;
+    let localSeen = false;
+    if (localMode) clock.save = () => {};
     // Timed by the server's clock when the page was made; the first poll puts it right.
     if (clock.state) clock.state.at = Date.now();
     clock.save();
+    const fromLocal = (s: LocalState, was = clock.state?.track): NowState => ({
+      playing: s.playing,
+      progressMs: s.positionMs,
+      at: Date.now(),
+      shuffle: false,
+      repeat: 'off',
+      device: null,
+      track: {
+        spotifyId: s.recordingId,
+        // The names as the page drew them (each artist apart) while it is the same song.
+        title: s.title,
+        artists: was && was.spotifyId === s.recordingId ? was.artists : [s.artist],
+        artistIds: [],
+        album: s.album ?? '',
+        albumSpotifyId: '',
+        art: s.artKey ? `/${s.artKey}/500.jpg` : null,
+        durationMs: s.durationMs,
+      },
+    });
     const $ = <T extends HTMLElement>(sel: string) => root.querySelector<T>(sel)!;
     const seek = $<HTMLInputElement>('[data-seek]');
     const elapsed = $('[data-elapsed]');
@@ -283,6 +351,10 @@ const ICON = {
     const status = $('[data-status]');
     const idle = $('[data-idle]');
     const art = $<HTMLImageElement>('[data-art]');
+    // A cover that will not load leaves the plain square, not a broken image.
+    art.addEventListener('error', () => (art.style.visibility = 'hidden'));
+    art.addEventListener('load', () => (art.style.visibility = ''));
+    if (art.complete && art.getAttribute('src') && art.naturalWidth === 0) art.style.visibility = 'hidden';
     let dragging = false;
 
     const time = (ms: number) => {
@@ -396,7 +468,7 @@ const ICON = {
       if (!track || !state) return;
       if (art.getAttribute('src') !== (track.art ?? '')) art.src = track.art ?? '';
       paintTitles(track);
-      $('[data-device]').textContent = state.device ? `On ${state.device.name}` : '';
+      $('[data-device]').textContent = localMode ? 'Your files' : state.device ? `On ${state.device.name}` : '';
       seek.max = String(track.durationMs);
       length.textContent = time(track.durationMs);
       player.classList.toggle('is-playing', state.playing);
@@ -417,9 +489,12 @@ const ICON = {
       swapping = id;
       // Whatever was being rated is saved before its form goes.
       flushAutosave(song);
+      // Your file's song has its own address: kept in the address bar, for a reload or Back.
+      const url = localMode ? `/now?recording=${encodeURIComponent(id)}` : '/now';
+      if (localMode) history.replaceState(history.state, '', url);
       for (let attempt = 0; attempt < 5 && clock.state?.track?.spotifyId === id; attempt++) {
         try {
-          const html = await (await fetch('/now', { headers: { accept: 'text/html' } })).text();
+          const html = await (await fetch(url, { headers: { accept: 'text/html' } })).text();
           const fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('now-song');
           if (fresh?.dataset.songId === id) {
             song.innerHTML = fresh.innerHTML;
@@ -459,6 +534,8 @@ const ICON = {
 
     let polling = false;
     async function poll() {
+      // Your files' player answers a hello with what is on (the channel's listener below).
+      if (localMode) return void channel?.postMessage({ type: 'hello' } satisfies LocalMessage);
       if (polling) return;
       polling = true;
       try {
@@ -480,6 +557,23 @@ const ICON = {
     }
 
     async function send(body: Record<string, unknown>) {
+      if (localMode) {
+        const id = clock.state?.track?.spotifyId;
+        // No player going (the page was opened afresh): Play starts this song from your files.
+        if (!localSeen) {
+          if (body.action === 'play' && id) void startLocal(new URLSearchParams({ track: id }));
+          return;
+        }
+        const action = String(body.action);
+        const message: LocalMessage | null =
+          action === 'seek'
+            ? { type: 'command', cmd: 'seek', ms: Number(body.positionMs) }
+            : action === 'play' || action === 'pause' || action === 'next' || action === 'previous'
+              ? { type: 'command', cmd: action }
+              : null;
+        if (message) channel?.postMessage(message);
+        return;
+      }
       try {
         const res = await fetch('/api/write/player', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
         if (!res.ok) {
@@ -501,7 +595,8 @@ const ICON = {
     const frame = () => {
       const now = Date.now();
       // The song ran out: on to the next in Spotify's queue, then check with Spotify.
-      if (clock.ended(now) && now - lastEnd > 1500) {
+      // (Your files' player moves on by itself, and says so.)
+      if (!localMode && clock.ended(now) && now - lastEnd > 1500) {
         lastEnd = now;
         if (clock.advance(now)) songChanged();
         else paint();
@@ -604,6 +699,26 @@ const ICON = {
         window.dispatchEvent(new CustomEvent('job:watch', { detail: { id: data.jobId, label: data.label ?? 'Album' } }));
         button.textContent = 'Importing… it can be rated once it lands';
       } else button.disabled = false;
+    });
+
+    // Your files' player, wherever it runs: followed here in your files' mode; in Spotify's,
+    // a song of yours starting to play brings its own Now playing.
+    channel?.addEventListener('message', (event) => {
+      const m = event.data as LocalMessage;
+      if (m.type === 'stopped' && localMode) {
+        localSeen = false;
+        clock.set({ playing: false });
+        paint();
+      }
+      if (m.type !== 'state') return;
+      if (!localMode) {
+        if (m.state.playing) location.replace(`/now?recording=${encodeURIComponent(m.state.recordingId)}`);
+        return;
+      }
+      localSeen = true;
+      status.textContent = m.state.problem ?? '';
+      if (clock.accept(fromLocal(m.state))) songChanged();
+      else paint();
     });
 
     paint();
@@ -735,6 +850,11 @@ const ICON = {
 
   .ctl.small {
     color: var(--text-subtle);
+  }
+
+  /* Shuffle and repeat are Spotify's; your files play in order. */
+  .ctl[hidden] {
+    display: none;
   }
 
   .ctl.small[aria-pressed='true'] {

@@ -1,31 +1,22 @@
 ---
 /**
- * Plays your own uploaded files (src/lib/audio.ts): an album's in order,
- * or one song, from ?track. Opened in a tab of its own (every Play button
- * targets the window "music-player"), so it keeps playing while the rest
- * of the site is browsed in another; the phone's lock screen and
- * headphones control it (Media Session). The owner's only.
+ * Your own uploaded files (src/lib/audio.ts), as a page: an album's in
+ * order, a playlist's, or one song, from ?track. Play buttons elsewhere
+ * start the music in place and it plays on from page to page
+ * (src/lib/client/local-player.ts); this page is where they go without
+ * script, and what is kept on the device to play with no signal, so it can
+ * host the player itself. The owner's only.
  */
 import Base from '../layouts/Base.astro';
 import { ownerId } from '../lib/auth/user';
-import { albumQueue, songQueue, songsQueue, type PlayableTrack } from '../lib/audio';
-import { getDefinition } from '../lib/definitions';
-import { selectIds } from '../lib/query/run';
+import type { PlayableTrack } from '../lib/audio';
+import { playQueue } from '../lib/play-queue';
 
 const user = Astro.locals.user;
 const owner = user ? user.id === (await ownerId()) : false;
 const albumId = Astro.url.searchParams.get('album');
-const trackId = Astro.url.searchParams.get('track');
 const playlistId = Astro.url.searchParams.get('playlist');
-let queue: PlayableTrack[] = [];
-if (owner && playlistId) {
-  // A playlist of tracks: its songs you have audio for, in its order.
-  const saved = await getDefinition(playlistId);
-  if (saved && saved.definition.entity === 'recording') {
-    queue = await songsQueue(await selectIds(saved.definition, { userId: saved.user_id, pins: saved.pins, excludes: saved.excludes }));
-  }
-} else if (owner) queue = albumId ? await albumQueue(albumId) : trackId ? await songQueue(trackId) : [];
-const start = Math.max(0, trackId ? queue.findIndex((t) => t.recordingId === trackId) : 0);
+const { queue, start }: { queue: PlayableTrack[]; start: number } = owner ? await playQueue(Astro.url.searchParams) : { queue: [], start: 0 };
 const first = queue[start];
 ---
 
@@ -98,7 +89,6 @@ const first = queue[start];
               ))}
             </ol>
           )}
-          <audio preload="auto" data-audio />
         </>
       )
     }
@@ -106,88 +96,26 @@ const first = queue[start];
 </Base>
 
 <script>
-  type Track = { fileId: string; recordingId: string; title: string; artist: string; album: string | null; albumId: string | null; artKey: string | null };
+  import { CHANNEL, framedHost, hostPlayer, type LocalMessage, type LocalState, type LocalTrack } from '../lib/client/local-player';
+
   const root = document.querySelector<HTMLElement>('[data-player]');
-  const audio = root?.querySelector('[data-audio]') as unknown as HTMLAudioElement | null;
-  if (root && audio) {
-    const queue = JSON.parse(root.dataset.queue || '[]') as Track[];
-    let index = Number(root.dataset.start) || 0;
+  if (root && root.querySelector('[data-seek]')) {
+    const queue = JSON.parse(root.dataset.queue || '[]') as LocalTrack[];
+    const start = Number(root.dataset.start) || 0;
     const $ = <T extends HTMLElement>(sel: string) => root.querySelector<T>(sel);
     const seek = $<HTMLInputElement>('[data-seek]')!;
     const at = $('[data-at]')!;
     const length = $('[data-length]')!;
     const toggle = $<HTMLButtonElement>('[data-toggle]')!;
     const status = $('[data-status]')!;
-    const time = (s: number) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00');
+    const time = (ms: number) => (Number.isFinite(ms) ? `${Math.floor(ms / 60000)}:${String(Math.floor((ms / 1000) % 60)).padStart(2, '0')}` : '0:00');
     let seeking = false;
 
-    // Each listen logged like any other play (api/write/audio/played): when it began and how
-    // much was heard, seeks aside. Sent when the song ends or changes, or the tab is left.
-    let listen: { recordingId: string; startedAt: string | null; heardMs: number; lastAt: number | null } | null = null;
-    const report = (beacon = false) => {
-      if (!listen?.startedAt || listen.heardMs < 1000) return;
-      const body = JSON.stringify({ recordingId: listen.recordingId, playedAt: listen.startedAt, msPlayed: Math.round(listen.heardMs) });
-      listen = null;
-      if (!navigator.onLine) return hold(body);
-      if (beacon && navigator.sendBeacon) navigator.sendBeacon('/api/write/audio/played', new Blob([body], { type: 'application/json' }));
-      else
-        void fetch('/api/write/audio/played', { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true })
-          .then((res) => !res.ok && res.status >= 500 && hold(body))
-          .catch(() => hold(body));
-    };
-    // Listens heard offline wait on this device and go when there is a network again.
-    const HELD = 'listens-waiting';
-    const held = (): string[] => {
-      try {
-        return JSON.parse(localStorage.getItem(HELD) || '[]') as string[];
-      } catch {
-        return [];
-      }
-    };
-    const hold = (body: string) => {
-      try {
-        localStorage.setItem(HELD, JSON.stringify([...held(), body].slice(-500)));
-      } catch {}
-    };
-    const sendHeld = async () => {
-      const waiting = held();
-      if (!waiting.length || !navigator.onLine) return;
-      const left: string[] = [];
-      for (const body of waiting) {
-        const res = await fetch('/api/write/audio/played', { method: 'POST', headers: { 'content-type': 'application/json' }, body }).catch(() => null);
-        if (!res || res.status >= 500) left.push(body);
-      }
-      try {
-        localStorage.setItem(HELD, JSON.stringify(left));
-      } catch {}
-    };
-    void sendHeld();
-    addEventListener('online', () => void sendHeld());
-    const hear = () => {
-      if (!listen) return;
-      const now = performance.now();
-      // Time heard while playing, a second at most between updates (a seek is not listening).
-      if (listen.lastAt !== null && !audio.paused) listen.heardMs += Math.min(1000, now - listen.lastAt);
-      listen.lastAt = audio.paused ? null : now;
-    };
-
-    // The rest of the site's tabs show what is playing here (NowBar) and can pause or skip it.
-    const channel = 'BroadcastChannel' in window ? new BroadcastChannel('local-player') : null;
-    const broadcast = () => {
-      const t = queue[index];
-      if (!channel || !t) return;
-      channel.postMessage({
-        type: 'state',
-        state: {
-          title: t.title,
-          artist: t.artist,
-          art: t.artKey ? `/${t.artKey}/250.jpg` : null,
-          playing: !audio.paused,
-          positionMs: Math.round(audio.currentTime * 1000),
-          durationMs: Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : 0,
-        },
-      });
-    };
+    // The player itself (local-player.ts): the shell's, when this page is in its frame, so it
+    // plays on from page to page; else this page's own (opened directly, or with no signal).
+    const player = framedHost() ?? hostPlayer();
+    const channel = 'BroadcastChannel' in window ? new BroadcastChannel(CHANNEL) : null;
+    const send = (m: LocalMessage) => (channel ? channel.postMessage(m) : player.command(m));
 
     // A cover that will not load leaves the plain square, not a broken image.
     const artImage = $<HTMLImageElement>('[data-art]');
@@ -195,138 +123,59 @@ const first = queue[start];
     artImage?.addEventListener('load', () => (artImage.style.visibility = ''));
     if (artImage?.complete && artImage.naturalWidth === 0) artImage.style.visibility = 'hidden';
 
-    const show = () => {
-      const t = queue[index]!;
-      $('[data-title]')!.textContent = t.title;
-      $('[data-artist]')!.textContent = t.artist;
-      const album = $<HTMLAnchorElement>('[data-album]');
-      if (album) {
-        album.textContent = t.album ?? '';
-        if (t.albumId) album.href = `/album/${t.albumId}`;
+    let shown = '';
+    const paint = (s: LocalState) => {
+      if (s.recordingId !== shown) {
+        shown = s.recordingId;
+        $('[data-title]')!.textContent = s.title;
+        $('[data-artist]')!.textContent = s.artist;
+        const album = $<HTMLAnchorElement>('[data-album]');
+        if (album) {
+          album.textContent = s.album ?? '';
+          if (s.albumId) album.href = `/album/${s.albumId}`;
+        }
+        if (artImage && s.artKey) artImage.src = `/${s.artKey}/500.jpg`;
+        document.title = `${s.title} · Playing`;
+        for (const b of root.querySelectorAll<HTMLButtonElement>('[data-index]')) {
+          if (Number(b.dataset.index) === s.index) b.setAttribute('aria-current', 'true');
+          else b.removeAttribute('aria-current');
+        }
       }
-      const art = $<HTMLImageElement>('[data-art]');
-      if (art && t.artKey) art.src = `/${t.artKey}/500.jpg`;
-      document.title = `${t.title} · Playing`;
-      for (const b of root.querySelectorAll<HTMLButtonElement>('[data-index]')) {
-        if (Number(b.dataset.index) === index) b.setAttribute('aria-current', 'true');
-        else b.removeAttribute('aria-current');
-      }
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: t.title,
-          artist: t.artist,
-          album: t.album ?? '',
-          artwork: t.artKey ? [{ src: new URL(`/${t.artKey}/500.jpg`, location.href).href, sizes: '500x500', type: 'image/jpeg' }] : [],
-        });
+      $('[data-icon-play]')!.style.display = s.playing ? 'none' : '';
+      $('[data-icon-pause]')!.style.display = s.playing ? '' : 'none';
+      toggle.setAttribute('aria-label', s.playing ? 'Pause' : 'Play');
+      status.textContent = s.problem ?? '';
+      length.textContent = time(s.durationMs);
+      if (!seeking) {
+        at.textContent = time(s.positionMs);
+        seek.value = s.durationMs ? String(Math.round((s.positionMs / s.durationMs) * 1000)) : '0';
       }
     };
+    channel?.addEventListener('message', (event) => {
+      const m = event.data as LocalMessage;
+      if (m.type === 'state') paint(m.state);
+    });
+    // Between the player's word every couple of seconds, the clock from its audio.
+    setInterval(() => {
+      const s = player.state();
+      if (s) paint(s);
+    }, 500);
 
-    const load = (i: number, play: boolean) => {
-      // The song leaving (ended or skipped): its listen, as far as it went.
-      hear();
-      report();
-      index = (i + queue.length) % queue.length;
-      audio.src = `/audio/${queue[index]!.fileId}`;
-      listen = { recordingId: queue[index]!.recordingId, startedAt: null, heardMs: 0, lastAt: null };
-      show();
-      broadcast();
-      if (play) void start();
-    };
-    const start = async () => {
-      try {
-        await audio.play();
-        status.textContent = '';
-      } catch {
-        // A browser may want a tap first.
-        status.textContent = 'Tap play to start.';
-      }
-    };
-
-    toggle.addEventListener('click', () => (audio.paused ? void start() : audio.pause()));
-    $('[data-prev]')!.addEventListener('click', () => (audio.currentTime > 3 ? (audio.currentTime = 0) : load(index - 1, true)));
-    $('[data-next]')!.addEventListener('click', () => load(index + 1, true));
-    for (const b of root.querySelectorAll<HTMLButtonElement>('[data-index]')) b.addEventListener('click', () => load(Number(b.dataset.index), true));
-    audio.addEventListener('ended', () => {
-      if (index < queue.length - 1) load(index + 1, true);
-      else {
-        // The last song: its listen now, nothing follows to send it.
-        hear();
-        report();
-        broadcast();
-      }
-    });
-    audio.addEventListener('play', () => {
-      $('[data-icon-play]')!.style.display = 'none';
-      $('[data-icon-pause]')!.style.display = '';
-      toggle.setAttribute('aria-label', 'Pause');
-      if (listen && !listen.startedAt) listen.startedAt = new Date().toISOString();
-      if (listen) listen.lastAt = performance.now();
-      broadcast();
-    });
-    audio.addEventListener('pause', () => {
-      $('[data-icon-play]')!.style.display = '';
-      $('[data-icon-pause]')!.style.display = 'none';
-      toggle.setAttribute('aria-label', 'Play');
-      hear();
-      broadcast();
-    });
-    audio.addEventListener('seeking', () => {
-      // Listening resumes from the new place; the jump itself is not heard.
-      hear();
-      if (listen) listen.lastAt = audio.paused ? null : performance.now();
-    });
-    audio.addEventListener('error', () => (status.textContent = 'This file would not play here.'));
-    audio.addEventListener('loadedmetadata', () => (length.textContent = time(audio.duration)));
-    audio.addEventListener('timeupdate', () => {
-      hear();
-      at.textContent = time(audio.currentTime);
-      if (!seeking && audio.duration) seek.value = String(Math.round((audio.currentTime / audio.duration) * 1000));
-      if ('mediaSession' in navigator && audio.duration && 'setPositionState' in navigator.mediaSession) {
-        try {
-          navigator.mediaSession.setPositionState({ duration: audio.duration, position: audio.currentTime, playbackRate: audio.playbackRate });
-        } catch {}
-      }
-    });
+    toggle.addEventListener('click', () => send({ type: 'command', cmd: 'toggle' }));
+    $('[data-prev]')!.addEventListener('click', () => send({ type: 'command', cmd: 'previous' }));
+    $('[data-next]')!.addEventListener('click', () => send({ type: 'command', cmd: 'next' }));
+    for (const b of root.querySelectorAll<HTMLButtonElement>('[data-index]')) {
+      b.addEventListener('click', () => send({ type: 'command', cmd: 'jump', index: Number(b.dataset.index) }));
+    }
     seek.addEventListener('input', () => {
       seeking = true;
-      at.textContent = time((Number(seek.value) / 1000) * audio.duration);
+      const s = player.state();
+      if (s) at.textContent = time((Number(seek.value) / 1000) * s.durationMs);
     });
     seek.addEventListener('change', () => {
-      if (audio.duration) audio.currentTime = (Number(seek.value) / 1000) * audio.duration;
+      const s = player.state();
+      if (s?.durationMs) send({ type: 'command', cmd: 'seek', ms: (Number(seek.value) / 1000) * s.durationMs });
       seeking = false;
-    });
-
-    if ('mediaSession' in navigator) {
-      const actions: [MediaSessionAction, MediaSessionActionHandler][] = [
-        ['play', () => void start()],
-        ['pause', () => audio.pause()],
-        ['previoustrack', () => load(index - 1, true)],
-        ['nexttrack', () => load(index + 1, true)],
-        ['seekto', (d) => d.seekTime !== undefined && (audio.currentTime = d.seekTime)],
-      ];
-      for (const [action, handler] of actions) {
-        try {
-          navigator.mediaSession.setActionHandler(action, handler);
-        } catch {}
-      }
-    }
-
-    // Other tabs: say what is on every couple of seconds (so a closed player is noticed),
-    // answer a tab that has just opened, and take its play, pause and next.
-    if (channel) {
-      setInterval(broadcast, 2000);
-      channel.addEventListener('message', (event) => {
-        const m = event.data as { type?: string; cmd?: string };
-        if (m.type === 'hello') broadcast();
-        if (m.type === 'command' && m.cmd === 'toggle') audio.paused ? void start() : audio.pause();
-        if (m.type === 'command' && m.cmd === 'next') load(index + 1, true);
-      });
-    }
-    // Leaving the tab: the listen so far, and the bars elsewhere let go.
-    addEventListener('pagehide', () => {
-      hear();
-      report(true);
-      channel?.postMessage({ type: 'stopped' });
     });
 
     // Keep on this device: every song in the queue, this page and what it loads, so it all
@@ -407,7 +256,9 @@ const first = queue[start];
     });
     void paintKeep();
 
-    load(index, true);
+    player.load(queue, start, true);
+    const first = player.state();
+    if (first) paint(first);
   }
 </script>
 
