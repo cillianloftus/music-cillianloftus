@@ -29,6 +29,21 @@ export interface LocalTrack {
   albumId: string | null;
   artKey: string | null;
   lengthMs: number | null;
+  /** Your file's measured loudness (LUFS), to play it as loud as Spotify plays its songs. */
+  loudness?: number | null;
+}
+
+/**
+ * The loudness Spotify plays songs at (its "normal" setting, -14 LUFS).
+ * Your files are turned down to it, so a loud master (Griptape, 17 Nov)
+ * sits with the Spotify songs around it rather than jumping out.
+ */
+const TARGET_LUFS = -14;
+
+/** How loud to play a file: down to the target, never up (that would clip). */
+export function levelFor(loudness: number | null | undefined): number {
+  if (loudness == null || !Number.isFinite(loudness)) return 1;
+  return Math.min(1, Math.max(0.05, 10 ** ((TARGET_LUFS - loudness) / 20)));
 }
 
 /** What the player says is on, every couple of seconds and at each change. */
@@ -115,14 +130,44 @@ export class LocalPlayer {
    * follows when it ends. Meanwhile silence plays here, so a phone keeps the
    * page awake with its screen off and the lock screen shows this song.
    */
-  private remote: { id: string; offsetMs: number; at: number; playing: boolean; durationMs: number; startedAt: number } | null = null;
+  private remote: {
+    id: string;
+    offsetMs: number;
+    at: number;
+    playing: boolean;
+    durationMs: number;
+    startedAt: number;
+    /** Spotify was told to stop just before the end, so what follows starts clean. */
+    pauseSent?: boolean;
+  } | null = null;
+  /**
+   * The audio that plays now, and a second that loads the next of your files
+   * while this one plays: at the end they swap, and the next starts at once
+   * rather than after its first bytes arrive (17 Nov: gaps between files).
+   */
+  audio: HTMLAudioElement;
+  private spare: HTMLAudioElement;
+  private spareFor: string | null = null;
+  /** The timers that end a song a moment early, for Spotify's sake (schedule()). */
+  private timers: ReturnType<typeof setTimeout>[] = [];
+  /** A Spotify song started ahead, as your file before it ends, so it begins as that one stops. */
+  private prestarted: { id: string; sentAt: number } | null = null;
+  /** How long Spotify takes to act on each kind of command, learnt as it goes. */
+  private latency: Record<string, number> = { start: 900, pause: 400, play: 400, seek: 400 };
   private remoteFailures = 0;
   private lastPoll = 0;
   /** The song on now: when it began and how much was heard, seeks aside. */
   private listen: { recordingId: string; startedAt: string | null; heardMs: number; lastAt: number | null } | null = null;
 
-  constructor(readonly audio: HTMLAudioElement) {
-    const on = (type: string, handler: () => void) => audio.addEventListener(type, () => this.queue.length > 0 && handler());
+  constructor(audio: HTMLAudioElement) {
+    this.audio = audio;
+    this.spare = audio.cloneNode() as HTMLAudioElement;
+    this.spare.removeAttribute('src');
+    (audio.parentNode ?? document.body).appendChild(this.spare);
+    // Both elements heard; only the one playing now counts.
+    const on = (type: string, handler: () => void) => {
+      for (const el of [audio, this.spare]) el.addEventListener(type, () => el === this.audio && this.queue.length > 0 && handler());
+    };
     on('play', () => {
       this.problem = null;
       const remote = this.remote;
@@ -133,8 +178,10 @@ export class LocalPlayer {
       }
       if (this.listen && !this.listen.startedAt) this.listen.startedAt = new Date().toISOString();
       if (this.listen) this.listen.lastAt = performance.now();
+      this.schedule();
       this.broadcast();
     });
+    on('seeked', () => this.schedule());
     on('pause', () => {
       const remote = this.remote;
       if (remote?.playing) {
@@ -143,13 +190,14 @@ export class LocalPlayer {
         remote.playing = false;
         void this.sendSpotify({ action: 'pause' });
       }
+      this.clearTimers();
       this.hear();
       this.broadcast();
     });
     on('seeking', () => {
       // Listening resumes from the new place; the jump itself is not heard.
       this.hear();
-      if (this.listen) this.listen.lastAt = audio.paused ? null : performance.now();
+      if (this.listen) this.listen.lastAt = this.audio.paused ? null : performance.now();
     });
     on('ended', () => this.finished());
     on('error', () => {
@@ -160,6 +208,9 @@ export class LocalPlayer {
     on('loadedmetadata', () => this.broadcast());
     on('timeupdate', () => {
       this.hear();
+      // A couple of seconds in, the next file starts loading on the spare.
+      if (!this.remote && this.audio.currentTime > 2) this.prepareNext();
+      const audio = this.audio;
       if (!this.remote && 'mediaSession' in navigator && audio.duration && 'setPositionState' in navigator.mediaSession) {
         try {
           navigator.mediaSession.setPositionState({ duration: audio.duration, position: audio.currentTime, playbackRate: audio.playbackRate });
@@ -171,7 +222,7 @@ export class LocalPlayer {
     if ('mediaSession' in navigator) {
       const actions: [MediaSessionAction, MediaSessionActionHandler][] = [
         ['play', () => void this.play()],
-        ['pause', () => audio.pause()],
+        ['pause', () => this.audio.pause()],
         ['previoustrack', () => this.previous()],
         ['nexttrack', () => this.next()],
         ['seekto', (d) => d.seekTime !== undefined && this.seekTo(d.seekTime * 1000)],
@@ -197,6 +248,8 @@ export class LocalPlayer {
     });
     void this.sendHeld();
     addEventListener('online', () => void this.sendHeld());
+    // Back on the site after opening Spotify: a song left waiting for it starts.
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && this.retrySpotify());
   }
 
   /** Inside the tap that started it: lets the phone play once the queue has arrived. */
@@ -272,10 +325,24 @@ export class LocalPlayer {
     // Leaving a Spotify song for one of your files: Spotify stops (a Spotify song next replaces it anyway).
     const leaving = this.remote;
     this.remote = null;
-    if (leaving?.playing && t.fileId) void this.sendSpotify({ action: 'pause' });
+    this.clearTimers();
+    if (leaving?.playing && t.fileId && !leaving.pauseSent) void this.sendSpotify({ action: 'pause' });
     if (t.fileId) {
+      if (this.spareFor === t.fileId && fromMs === 0) {
+        // Loaded already: the spare plays, and what played becomes the spare.
+        const was = this.audio;
+        this.audio = this.spare;
+        this.spare = was;
+        was.pause();
+        was.removeAttribute('src');
+        was.load();
+      } else {
+        this.audio.loop = false;
+        this.audio.src = `/audio/${t.fileId}`;
+      }
+      this.spareFor = null;
       this.audio.loop = false;
-      this.audio.src = `/audio/${t.fileId}`;
+      this.audio.volume = levelFor(t.loudness);
       if (fromMs > 0) {
         const audio = this.audio;
         audio.addEventListener('loadedmetadata', () => (audio.currentTime = fromMs / 1000), { once: true });
@@ -287,18 +354,16 @@ export class LocalPlayer {
       this.remote = { id: t.spotifyId ?? '', offsetMs: fromMs, at: Date.now(), playing: play, durationMs: t.lengthMs ?? 0, startedAt: Date.now() };
       this.audio.loop = true;
       this.audio.src = silence();
+      const ahead = this.prestarted?.id === this.remote.id && Date.now() - this.prestarted.sentAt < 15_000 ? this.prestarted : null;
+      this.prestarted = null;
       if (resuming) {
         // After a reload Spotify is still playing it: only catch up with where it is.
         this.lastPoll = 0;
-      } else if (play) {
-        const id = this.remote.id;
-        void this.sendSpotify({ action: 'start', track: id, alone: true }).then((ok) => {
-          if (this.remote?.id !== id) return;
-          if (!ok) return this.remoteFailed(t.title);
-          this.remoteFailures = 0;
-          if (fromMs > 1000) void this.sendSpotify({ action: 'seek', positionMs: Math.round(fromMs) });
-        });
-      }
+      } else if (ahead) {
+        // Started a moment before your file ended: already under way.
+        this.remote.offsetMs = Math.max(0, Date.now() - (ahead.sentAt + this.latency.start!));
+        void this.startRemote(t.title, 0, true, true);
+      } else if (play) void this.startRemote(t.title, fromMs);
     }
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
@@ -426,6 +491,7 @@ export class LocalPlayer {
       this.remote.offsetMs = to;
       this.remote.at = Date.now();
       void this.sendSpotify({ action: 'seek', positionMs: to });
+      this.schedule();
       this.broadcast();
     } else this.audio.currentTime = to / 1000;
   }
@@ -442,7 +508,9 @@ export class LocalPlayer {
     const r = this.remote;
     if (!r) return;
     const now = Date.now();
-    if (r.playing && r.durationMs && r.offsetMs + (now - r.at) >= r.durationMs - 250) return this.finished();
+    // The timers (schedule()) end it on time; this only if they were held up.
+    if (r.playing && r.durationMs && r.offsetMs + (now - r.at) >= r.durationMs + 1500) return this.finished();
+    if (now - r.startedAt > 3000) this.prepareNext();
     if ('mediaSession' in navigator && r.durationMs && 'setPositionState' in navigator.mediaSession) {
       try {
         navigator.mediaSession.setPositionState({ duration: r.durationMs / 1000, position: this.remotePosition(now) / 1000, playbackRate: 1 });
@@ -479,6 +547,7 @@ export class LocalPlayer {
         r.playing = true;
         void this.audio.play().catch(() => {});
       }
+      this.schedule();
       this.broadcast();
     } else if (r.playing && Date.now() - r.startedAt > 8000) {
       // Spotify has moved on from it (skipped on Spotify, or its own autoplay after it ended): on with the queue.
@@ -486,26 +555,173 @@ export class LocalPlayer {
     }
   }
 
-  private remoteFailed(title: string): void {
+  /**
+   * Has Spotify play the song, and makes sure it did: Spotify takes a start
+   * for a device that has gone to sleep and plays nothing (17 Nov: a
+   * playlist was silence with nothing on Spotify), so a few seconds on it is
+   * asked what is playing, and the start is tried once more if it is not this.
+   */
+  private async startRemote(title: string, fromMs: number, retry = true, sent = false): Promise<void> {
+    const r = this.remote;
+    if (!r) return;
+    if (!sent) {
+      const answer = await this.sendSpotify({ action: 'start', track: r.id, alone: true });
+      if (this.remote !== r) return;
+      if (!answer.ok) return this.remoteFailed(title, answer.reason, answer.error);
+      // Counted from when Spotify took it.
+      r.at = Date.now();
+      r.offsetMs = fromMs;
+      if (fromMs > 1000) void this.sendSpotify({ action: 'seek', positionMs: Math.round(fromMs) });
+    }
+    this.schedule();
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    if (this.remote !== r || !r.playing) return;
+    const res = await fetch('/api/write/player', { headers: { accept: 'application/json' } }).catch(() => null);
+    const now = res?.ok ? ((await res.json().catch(() => null)) as { track?: { spotifyId?: string } | null } | null) : null;
+    if (this.remote !== r) return;
+    if (now?.track?.spotifyId === r.id) {
+      this.remoteFailures = 0;
+      this.waitingForSpotify = null;
+      this.lastPoll = Date.now();
+      return;
+    }
+    if (retry) return this.startRemote(title, fromMs, false);
+    this.remoteFailed(title, 'no-device', null);
+  }
+
+  /** The Spotify song waiting for Spotify to be opened somewhere: tried again on coming back to the site. */
+  waitingForSpotify: string | null = null;
+
+  /**
+   * Spotify would not play it. With nowhere to play (the app not open on any
+   * device), skipping on would only skip everything: the queue waits on this
+   * song, says so, and starts it when the site is looked at again (after
+   * Spotify has been opened). Otherwise it is said and the queue moves on,
+   * stopping after three in a row.
+   */
+  private remoteFailed(title: string, reason: string | null, error: string | null): void {
+    const r = this.remote;
+    if (reason === 'no-device' || reason === 'premium' || reason === 'scope') {
+      this.problem =
+        reason === 'no-device' ? 'Open Spotify on this phone to play its songs; the music carries on when you come back.' : (error ?? 'Spotify would not play.');
+      this.waitingForSpotify = reason === 'no-device' ? (r?.id ?? null) : null;
+      if (r) {
+        r.playing = false;
+        this.audio.pause();
+      }
+      this.broadcast();
+      return;
+    }
     this.remoteFailures++;
     this.problem = `Spotify would not play “${title}”.`;
     this.broadcast();
-    // Past a few in a row Spotify is not reachable (not connected, no device awake): stop.
     if (this.remoteFailures < 3) setTimeout(() => this.next(), 1500);
-    else if (this.remote) {
-      this.remote.playing = false;
+    else if (r) {
+      r.playing = false;
       this.audio.pause();
     }
   }
 
-  /** A command to Spotify (api/write/player): true when it took it. */
-  private async sendSpotify(body: Record<string, unknown>): Promise<boolean> {
+  /** Back on the site after opening Spotify: the waiting song starts. */
+  retrySpotify(): void {
+    const r = this.remote;
+    if (!r || !this.waitingForSpotify || this.waitingForSpotify !== r.id) return;
+    this.waitingForSpotify = null;
+    this.problem = null;
+    r.playing = true;
+    r.at = Date.now();
+    void this.audio.play().catch(() => {});
+    void this.startRemote(this.queue[this.index]?.title ?? '', r.offsetMs);
+  }
+
+  /** A command to Spotify (api/write/player): whether it took it, and why not if not. */
+  private async sendSpotify(body: Record<string, unknown>): Promise<{ ok: boolean; reason: string | null; error: string | null }> {
+    const action = String(body.action);
+    const sent = performance.now();
     const res = await fetch('/api/write/player', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     }).catch(() => null);
-    return Boolean(res?.ok);
+    if (res?.ok) {
+      // Spotify acts about when the site hears back: learnt per kind of command, steadily.
+      const took = performance.now() - sent;
+      const was = this.latency[action] ?? took;
+      this.latency[action] = Math.round(Math.min(3000, Math.max(150, was * 0.6 + took * 0.4)));
+      return { ok: true, reason: null, error: null };
+    }
+    const data = (await res?.json().catch(() => null)) as { reason?: string; error?: string } | null;
+    return { ok: false, reason: data?.reason ?? null, error: data?.error ?? null };
+  }
+
+  /** The place in the queue that plays next by order and repeat, or null for none (or this one again). */
+  private upcoming(): number | null {
+    if (this.repeat === 'one' || this.queue.length === 0) return null;
+    const at = this.order.indexOf(this.index);
+    if (at < this.order.length - 1) return this.order[at + 1] ?? null;
+    return this.repeat === 'all' && !this.shuffle ? (this.order[0] ?? null) : null;
+  }
+
+  /** The next of your files, loading on the spare while this song plays. */
+  private prepareNext(): void {
+    const next = this.upcoming();
+    const t = next === null ? null : this.queue[next];
+    if (!t?.fileId || this.spareFor === t.fileId) return;
+    this.spareFor = t.fileId;
+    this.spare.loop = false;
+    this.spare.preload = 'auto';
+    this.spare.src = `/audio/${t.fileId}`;
+    this.spare.load();
+  }
+
+  private clearTimers(): void {
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers = [];
+  }
+
+  /**
+   * Times the change to what follows wherever Spotify is involved, by how
+   * long Spotify takes to act (learnt from its answers):
+   *  - a Spotify song before one of yours: Spotify is told to stop just
+   *    before the end, and yours starts as it does (checking once a second,
+   *    Spotify was a moment late and began the song again, 17 Nov);
+   *  - a Spotify song before another: the next is started just before the end;
+   *  - one of yours before a Spotify song: that song is started just before
+   *    yours ends, so it begins as yours stops.
+   */
+  private schedule(): void {
+    this.clearTimers();
+    const later = (ms: number, run: () => void) => this.timers.push(setTimeout(run, Math.max(0, ms)));
+    const nextAt = this.upcoming();
+    const next = nextAt === null ? null : this.queue[nextAt];
+    const r = this.remote;
+    if (r) {
+      if (!r.playing || !r.durationMs) return;
+      const left = r.durationMs - this.remotePosition();
+      if (this.repeat === 'one' || (next && !next.fileId)) {
+        later(left - this.latency.start!, () => this.remote === r && this.finished());
+      } else {
+        later(left - this.latency.pause! - 100, () => {
+          if (this.remote !== r || !r.playing) return;
+          r.pauseSent = true;
+          void this.sendSpotify({ action: 'pause' });
+        });
+        later(left - 60, () => this.remote === r && this.finished());
+      }
+      return;
+    }
+    const a = this.audio;
+    if (a.paused || !Number.isFinite(a.duration) || !next || next.fileId || !next.spotifyId) return;
+    const left = (a.duration - a.currentTime) * 1000;
+    const id = next.spotifyId;
+    later(left - this.latency.start!, () => {
+      if (this.remote || this.audio !== a || a.paused) return;
+      this.prestarted = { id, sentAt: Date.now() };
+      void this.sendSpotify({ action: 'start', track: id, alone: true }).then((answer) => {
+        // Refused: the song is tried again in the ordinary way when yours ends.
+        if (!answer.ok && this.prestarted?.id === id) this.prestarted = null;
+      });
+    });
   }
 
   broadcast(): void {

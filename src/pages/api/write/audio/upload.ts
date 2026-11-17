@@ -24,5 +24,10 @@ export const PUT: APIRoute = async ({ request, url, locals }) => {
   const known = await env.DB.prepare(`SELECT 1 AS yes FROM recording WHERE id = ?`).bind(recordingId).first();
   if (!known) return Response.json({ error: 'That song is not in the library.' }, { status: 404 });
   const id = await storeAudio({ recordingId, path, format: format as AudioFormat, checksum, size, body: request.body });
+  // Its loudness, measured in the browser before sending (0082): the player levels it with Spotify.
+  const lufs = Number(url.searchParams.get('lufs'));
+  if (url.searchParams.has('lufs') && Number.isFinite(lufs) && lufs > -70 && lufs < 5) {
+    await env.DB.prepare(`UPDATE file SET loudness_lufs = ? WHERE id = ?`).bind(lufs, id).run();
+  }
   return Response.json({ id });
 };

@@ -139,6 +139,7 @@ type Device = { id: string | null; type: string; is_active: boolean; is_restrict
 async function someDevice(client: SpotifyClient, from?: Origin): Promise<string> {
   const { devices } = await client.get<{ devices: Device[] }>('/me/player/devices');
   const usable = devices.filter((d) => d.id && !d.is_restricted);
+  console.log('Spotify devices', JSON.stringify(devices.map((d) => ({ type: d.type, active: d.is_active, restricted: d.is_restricted }))));
   const pick =
     (from && usable.find((d) => d.type === KIND[from])) ??
     usable.find((d) => d.is_active) ??
@@ -206,7 +207,10 @@ export async function control(client: SpotifyClient, command: PlayerCommand, fro
   };
   const starting = command.action === 'start' || command.action === 'play';
   try {
-    await send(starting ? await target(client, from) : undefined);
+    const device = starting ? await target(client, from) : undefined;
+    // Where a start went, for the logs (17 Nov: a mixed playlist's song was taken and never played).
+    if (command.action === 'start') console.log('Spotify start', JSON.stringify({ track: command.track, album, alone: command.alone ?? false, from, device: device ?? 'active' }));
+    await send(device);
   } catch (error) {
     // Nothing active (Spotify not playing anywhere just now): wake a device and try once more.
     if (error instanceof SpotifyError && error.status === 404) {

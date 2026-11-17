@@ -216,7 +216,9 @@ const onNow = Astro.url.pathname === '/now';
         const art = this.querySelector<HTMLImageElement>('[data-nb-art]')!;
         if (art.getAttribute('src') !== (local.art ?? '')) art.src = local.art ?? '';
         this.querySelector('[data-nb-title]')!.textContent = local.title;
-        this.querySelector('[data-nb-by]')!.textContent = local.artist;
+        // The player's own word when it has one (Spotify would not play, a tap needed), else who it is by.
+        this.querySelector('[data-nb-by]')!.textContent = local.problem ?? local.artist;
+        this.classList.toggle('has-problem', Boolean(local.problem));
         this.classList.toggle('is-playing', local.playing);
         this.querySelector('[data-nb-toggle]')!.setAttribute('aria-label', local.playing ? 'Pause' : 'Play');
         this.paintProgress();
@@ -348,6 +350,12 @@ const onNow = Astro.url.pathname === '/now';
   .nb-by {
     color: var(--text-muted);
     font-size: 0.78rem;
+  }
+
+  /* A problem says so where the artist was, and can wrap to be read whole. */
+  now-bar.has-problem .nb-by {
+    color: var(--danger);
+    white-space: normal;
   }
 
   .nb-btn {

@@ -7,6 +7,7 @@
  */
 
 import { MAX_AUDIO_BYTES } from './audio-limits';
+import { measureLoudness } from './client/loudness';
 
 export interface LocalAudio {
   file: File;
@@ -30,9 +31,11 @@ export interface UploadReport {
   tooBig: number;
   /** Matched no song (an album still importing from MusicBrainz, say). */
   unmatched: string[];
+  /** Uploaded before, and measured for loudness now. */
+  levelled?: number;
 }
 
-type Match = { path: string; recordingId: string | null; uploaded: boolean };
+type Match = { path: string; recordingId: string | null; uploaded: boolean; measured?: boolean };
 
 export async function uploadAudio(files: LocalAudio[], progress: (done: number, total: number) => void): Promise<UploadReport> {
   const report: UploadReport = { uploaded: 0, already: 0, failed: 0, tooBig: 0, unmatched: [] };
@@ -63,21 +66,29 @@ export async function uploadAudio(files: LocalAudio[], progress: (done: number, 
   }
 
   const queue: { local: LocalAudio; recordingId: string }[] = [];
+  // Uploaded before their loudness was measured (0082): measured now, nothing re-sent but that.
+  const unmeasured: LocalAudio[] = [];
   for (const local of files) {
     const m = matches.get(local.path);
     if (!m?.recordingId) report.unmatched.push(local.path);
-    else if (m.uploaded) report.already++;
+    else if (m.uploaded) {
+      report.already++;
+      if (!m.measured) unmeasured.push(local);
+    }
     else if (local.file.size > MAX_AUDIO_BYTES) report.tooBig++;
     else queue.push({ local, recordingId: m.recordingId });
   }
 
-  const total = queue.length;
+  const total = queue.length + unmeasured.length;
   let done = 0;
   progress(0, total);
   const worker = async () => {
     for (let next = queue.shift(); next; next = queue.shift()) {
       const { local, recordingId } = next;
       const params = new URLSearchParams({ recording: recordingId, path: local.path, format: local.format, checksum: local.checksum });
+      // How loud it is, so the player can level it with Spotify's songs.
+      const lufs = await measureLoudness(local.file);
+      if (lufs !== null) params.set('lufs', String(lufs));
       const res = await fetch(`/api/write/audio/upload?${params}`, { method: 'PUT', body: local.file }).catch(() => null);
       if (res?.ok) report.uploaded++;
       else report.failed++;
@@ -86,6 +97,22 @@ export async function uploadAudio(files: LocalAudio[], progress: (done: number, 
   };
   // Two at a time: quicker than one, gentle on a phone's connection.
   await Promise.all([worker(), worker()]);
+
+  // One at a time: decoding a whole file takes memory.
+  const levels: { path: string; checksum: string; lufs: number }[] = [];
+  for (const local of unmeasured) {
+    const lufs = await measureLoudness(local.file);
+    if (lufs !== null) levels.push({ path: local.path, checksum: local.checksum, lufs });
+    progress(++done, total);
+  }
+  for (let i = 0; i < levels.length; i += 500) {
+    await fetch('/api/write/audio/loudness', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ files: levels.slice(i, i + 500) }),
+    }).catch(() => null);
+  }
+  report.levelled = levels.length;
   return report;
 }
 

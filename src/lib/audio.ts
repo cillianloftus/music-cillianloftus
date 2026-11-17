@@ -37,6 +37,8 @@ export interface FileMatch {
   album: string | null;
   /** Its audio is already uploaded (the same file, by checksum): nothing to send. */
   uploaded: boolean;
+  /** Its loudness is known (0082): uploaded before that, it is measured and sent on its own. */
+  measured: boolean;
 }
 
 export const AUDIO_FORMATS = {
@@ -82,11 +84,11 @@ export async function matchFiles(input: FileToMatch[]): Promise<FileMatch[]> {
   });
   // Already catalogued: by checksum, then by path.
   const { results: known } = await env.DB.prepare(
-    `SELECT f.path, f.checksum, f.recording_id, f.audio_key IS NOT NULL AS uploaded FROM file f
+    `SELECT f.path, f.checksum, f.recording_id, f.audio_key IS NOT NULL AS uploaded, f.loudness_lufs IS NOT NULL AS measured FROM file f
      WHERE f.checksum IN (SELECT value ->> '$.checksum' FROM json_each(?1)) OR f.path IN (SELECT value ->> '$.path' FROM json_each(?1))`,
   )
     .bind(JSON.stringify(files.map((f) => ({ path: f.path, checksum: f.checksum }))))
-    .all<{ path: string; checksum: string | null; recording_id: string; uploaded: number }>();
+    .all<{ path: string; checksum: string | null; recording_id: string; uploaded: number; measured: number }>();
   const byChecksum = new Map(known.filter((k) => k.checksum).map((k) => [k.checksum!, k]));
   const byPath = new Map(known.map((k) => [k.path, k]));
 
@@ -138,9 +140,9 @@ export async function matchFiles(input: FileToMatch[]): Promise<FileMatch[]> {
     return onAlbum.length === 1 ? onAlbum[0]!.id : null;
   };
 
-  const matched = files.map((file): { file: FileToMatch; recordingId: string | null; uploaded: boolean } => {
+  const matched = files.map((file): { file: FileToMatch; recordingId: string | null; uploaded: boolean; measured?: boolean } => {
     const same = (file.checksum && byChecksum.get(file.checksum)) || byPath.get(file.path);
-    if (same) return { file, recordingId: same.recording_id, uploaded: same.uploaded === 1 && same.checksum === file.checksum };
+    if (same) return { file, recordingId: same.recording_id, uploaded: same.uploaded === 1 && same.checksum === file.checksum, measured: same.measured === 1 };
     const viaMbid = file.mbRecordingId ? mbidRecording.get(file.mbRecordingId) : undefined;
     if (viaMbid) return { file, recordingId: viaMbid, uploaded: false };
     if (!file.title) return { file, recordingId: null, uploaded: false };
@@ -172,6 +174,7 @@ export async function matchFiles(input: FileToMatch[]): Promise<FileMatch[]> {
     title: m.recordingId ? (names.get(m.recordingId)?.title ?? null) : null,
     album: m.recordingId ? (names.get(m.recordingId)?.album ?? null) : null,
     uploaded: m.uploaded,
+    measured: m.measured ?? false,
   }));
 }
 
@@ -225,6 +228,8 @@ export interface PlayableTrack {
   albumId: string | null;
   artKey: string | null;
   lengthMs: number | null;
+  /** Your file's measured loudness (LUFS, 0082): the player plays it at Spotify's level. */
+  loudness: number | null;
 }
 
 const PLAYABLE = `
@@ -232,7 +237,7 @@ const PLAYABLE = `
          (SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
           WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary') AS artist,
          g.title AS album, g.id AS albumId, coalesce(x.art_key, (SELECT y.art_key FROM release y WHERE y.release_group_id = g.id AND y.art_key IS NOT NULL LIMIT 1)) AS artKey,
-         r.length_ms AS lengthMs, r.spotify_id AS spotifyId`;
+         r.length_ms AS lengthMs, r.spotify_id AS spotifyId, f.loudness_lufs AS loudness`;
 
 /** Where a queue may take songs from: your files only, or Spotify too for the rest. */
 export interface QueueSources {
