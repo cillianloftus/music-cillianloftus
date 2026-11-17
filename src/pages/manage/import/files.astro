@@ -14,7 +14,7 @@ import { MAX_FILES } from '../../../lib/import/files';
     <header>
       <p><BackLink href="/manage/import">Import</BackLink></p>
       <h1>Import from files</h1>
-      <p class="muted">Only tags, file names and checksums leave this device.</p>
+      <p class="muted">Choose a folder: its albums join your library and their audio is uploaded privately, to play anywhere you are signed in.</p>
     </header>
 
     <noscript>
@@ -72,6 +72,7 @@ import { MAX_FILES } from '../../../lib/import/files';
   import { groupAlbums, type AlbumGroup, type FileRecord } from '../../../lib/tags/albums';
   import { AUDIO_EXTENSIONS } from '../../../lib/tags/albums';
   import { readTags } from '../../../lib/tags/read';
+  import { describeUpload, uploadAudio } from '../../../lib/audio-upload';
 
   const MAX_FILES = 2000;
   const $ = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
@@ -106,6 +107,8 @@ import { MAX_FILES } from '../../../lib/import/files';
   });
 
   let records: FileRecord[] = [];
+  /** Each record's file, for uploading its audio once the albums are in. */
+  const fileFor = new Map<string, File>();
 
   const extension = (name: string) => name.split('.').at(-1)?.toLowerCase() ?? '';
   const isAudio = (file: File) => extension(file.name) in AUDIO_EXTENSIONS;
@@ -129,6 +132,7 @@ import { MAX_FILES } from '../../../lib/import/files';
     progress.hidden = false;
     progress.max = audio.length;
     records = [];
+    fileFor.clear();
     let unreadable = 0;
     for (const [i, { file, path }] of audio.entries()) {
       progress.value = i;
@@ -139,6 +143,7 @@ import { MAX_FILES } from '../../../lib/import/files';
         continue;
       }
       records.push({ ...tags, path, size: file.size, checksum: await sha256(file) });
+      fileFor.set(path, file);
     }
     progress.hidden = true;
     const albums = groupAlbums(records);
@@ -241,7 +246,9 @@ import { MAX_FILES } from '../../../lib/import/files';
       list.appendChild(item);
     }
     $('[data-preview-heading]').textContent = `${albums.length} ${albums.length === 1 ? 'album' : 'albums'} found`;
-    addButton.textContent = albums.length === 1 ? 'Import it' : `Import all ${albums.length}`;
+    const size = records.reduce((sum, r) => sum + r.size, 0);
+    const amount = size > 1024 ** 3 ? `${(size / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(size / 1024 ** 2))} MB`;
+    addButton.textContent = `${albums.length === 1 ? 'Import it' : `Import all ${albums.length}`} and upload ${amount}`;
     addButton.disabled = false;
     preview.hidden = false;
     $<HTMLElement>('#preview-heading').focus();
@@ -287,14 +294,51 @@ import { MAX_FILES } from '../../../lib/import/files';
         }
         list.appendChild(li);
       }
-      $('[data-preview-heading]').textContent = 'Done';
       addButton.hidden = true;
-      status.textContent = '';
+      await uploadAll();
+      $('[data-preview-heading]').textContent = 'Done';
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : 'The import failed.';
       addButton.disabled = false;
     }
   });
+
+  /** Every file's audio, to the private store (src/lib/audio-upload.ts), as catalogued. */
+  async function uploadAll() {
+    const prefix = rootInput.value.trim().replace(/[\\/]+$/, '');
+    const local = records.flatMap((r) => {
+      const file = fileFor.get(r.path);
+      if (!file || !r.checksum) return [];
+      return [
+        {
+          file,
+          path: prefix ? `${prefix}/${r.path}` : r.path,
+          format: r.format,
+          checksum: r.checksum,
+          title: r.title,
+          artist: r.artist,
+          albumArtist: r.albumArtist,
+          album: r.album,
+          lengthMs: r.lengthMs,
+          mbRecordingId: r.mbRecordingId,
+        },
+      ];
+    });
+    $('[data-preview-heading]').textContent = 'Uploading the audio…';
+    progress.hidden = false;
+    try {
+      const report = await uploadAudio(local, (done, total) => {
+        progress.max = Math.max(1, total);
+        progress.value = done;
+        status.textContent = total ? `Uploading the audio: ${done} of ${total}…` : '';
+      });
+      status.textContent = describeUpload(report);
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : 'The audio could not be uploaded. Import the folder again to retry.';
+    } finally {
+      progress.hidden = true;
+    }
+  }
 
   $('[data-again]').addEventListener('click', () => {
     addButton.hidden = false;

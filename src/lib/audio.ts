@@ -48,8 +48,7 @@ export const AUDIO_FORMATS = {
 } as const;
 export type AudioFormat = keyof typeof AUDIO_FORMATS;
 
-/** A Worker takes request bodies up to 100 MB. */
-export const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
+export { MAX_AUDIO_BYTES } from './audio-limits';
 
 const songKey = (title: string) => normaliseTitle(withoutCredits(title));
 
