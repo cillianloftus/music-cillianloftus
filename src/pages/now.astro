@@ -28,7 +28,7 @@ if (!user) return Astro.redirect('/manage');
 // same (rating, credits, lyrics); the player's state comes from the browser, so the song is
 // drawn from the catalogue, its id standing where Spotify's would.
 const localId = Astro.url.searchParams.get('recording');
-const local = localId ? (await songQueue(localId))[0] ?? null : null;
+const local = localId ? (await songQueue(localId, { spotify: true }))[0] ?? null : null;
 // Each credited artist on their own, so each name links to its page.
 const localArtists = local
   ? (
@@ -220,7 +220,7 @@ const ICON = {
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.repeat} /></svg>
               </button>
             </div>
-            <p class="device muted" data-device>{local ? 'Your files' : state?.device ? `On ${state.device.name}` : ''}</p>
+            <p class="device muted" data-device>{local ? (local.fileId ? 'Your files' : 'On Spotify') : state?.device ? `On ${state.device.name}` : ''}</p>
             <p class="status" role="status" data-status></p>
           </div>
 
@@ -359,6 +359,8 @@ const ICON = {
     const localMode = root.dataset.mode === 'local';
     const channel = 'BroadcastChannel' in window ? new BroadcastChannel(CHANNEL) : null;
     let localSeen = false;
+    /** Where a mixed queue's song is playing: your file here, or Spotify. */
+    let localSource: LocalState['source'] = root.querySelector('[data-device]')?.textContent === 'On Spotify' ? 'spotify' : 'file';
     let playerProblem: string | null = null;
     if (localMode) clock.save = () => {};
     // Timed by the server's clock when the page was made; the first poll puts it right.
@@ -567,7 +569,7 @@ const ICON = {
       if (!track || !state) return;
       if (art.getAttribute('src') !== (track.art ?? '')) art.src = track.art ?? '';
       paintTitles(track);
-      $('[data-device]').textContent = localMode ? 'Your files' : state.device ? `On ${state.device.name}` : '';
+      $('[data-device]').textContent = localMode ? (localSource === 'spotify' ? 'On Spotify' : 'Your files') : state.device ? `On ${state.device.name}` : '';
       seek.max = String(track.durationMs);
       length.textContent = time(track.durationMs);
       player.classList.toggle('is-playing', state.playing);
@@ -821,6 +823,7 @@ const ICON = {
         return;
       }
       localSeen = true;
+      localSource = m.state.source;
       // Said once when it changes, not every couple of seconds (that wiped other notices).
       if (m.state.problem !== playerProblem) {
         playerProblem = m.state.problem;

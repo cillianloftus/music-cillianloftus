@@ -81,6 +81,12 @@ describe('now playing', () => {
     ]);
   });
 
+  it('starts a song alone when a mixed queue asks: the queue plays what follows', async () => {
+    const { client, calls } = fakeClient();
+    await control(client, { action: 'start', track: 't'.repeat(22), alone: true });
+    expect(calls).toEqual([['PUT', '/me/player/play?', { uris: [`spotify:track:${'t'.repeat(22)}`] }]]);
+  });
+
   it('wakes a phone when nothing is playing anywhere, and tries once more', async () => {
     const { client, calls } = fakeClient(new SpotifyError('no active device', 404));
     await control(client, { action: 'start', track: 't'.repeat(22) });

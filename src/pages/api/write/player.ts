@@ -18,7 +18,8 @@ const command = z.discriminatedUnion('action', [
   z.object({ action: z.literal('repeat'), mode: z.enum(['off', 'track', 'context']) }),
   z.object({ action: z.literal('queue'), track: spotifyId }),
   z
-    .object({ action: z.literal('start'), track: spotifyId.optional(), album: spotifyId.optional() })
+    // alone: the song by itself, not its album (a mixed queue plays what follows itself).
+    .object({ action: z.literal('start'), track: spotifyId.optional(), album: spotifyId.optional(), alone: z.boolean().optional() })
     .refine((c) => c.track || c.album, 'A track or an album to start.'),
 ]);
 

@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { ownerId } from '../../lib/auth/user';
-import { playQueue } from '../../lib/play-queue';
+import { playQueue, queueSources } from '../../lib/play-queue';
 
 /**
  * The songs a Play button asks for (?album, ?track, ?playlist), from your
@@ -9,5 +9,5 @@ import { playQueue } from '../../lib/play-queue';
  */
 export const GET: APIRoute = async ({ url, locals }) => {
   if (!locals.user || locals.user.id !== (await ownerId())) return Response.json({ error: 'Sign in to play your files.' }, { status: 403 });
-  return Response.json(await playQueue(url.searchParams), { headers: { 'cache-control': 'private, no-store' } });
+  return Response.json(await playQueue(url.searchParams, await queueSources(locals.user.id)), { headers: { 'cache-control': 'private, no-store' } });
 };

@@ -101,3 +101,21 @@ describe('your files, matched to songs', () => {
     expect(await albumQueue('rg-b')).toEqual([]);
   });
 });
+
+describe('one queue for your files and Spotify', () => {
+  it('plays your file where there is one and the song on Spotify where not, in album order', async () => {
+    const bytes = new TextEncoder().encode('not really a flac');
+    const id = await storeAudio({ recordingId: 'b2', path: 'Xavier/Album B/02.flac', format: 'flac', checksum: null, size: bytes.byteLength, body: new Response(bytes).body! });
+    db.prepare(`UPDATE recording SET spotify_id = ? WHERE id = 'b1'`).run('s'.repeat(22));
+    const mixed = (await albumQueue('rg-b', { spotify: true })).map((t) => [t.recordingId, t.fileId, t.spotifyId]);
+    expect(mixed).toEqual([
+      ['b1', null, 's'.repeat(22)],
+      ['b2', id, null],
+    ]);
+    // Without Spotify, only what you have files for.
+    expect((await albumQueue('rg-b')).map((t) => t.recordingId)).toEqual(['b2']);
+    // A song with neither is left out either way.
+    db.prepare(`UPDATE recording SET spotify_id = NULL WHERE id = 'b1'`).run();
+    expect((await albumQueue('rg-b', { spotify: true })).map((t) => t.recordingId)).toEqual(['b2']);
+  });
+});

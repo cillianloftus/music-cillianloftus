@@ -214,7 +214,10 @@ export async function storeAudio(input: {
 }
 
 export interface PlayableTrack {
-  fileId: string;
+  /** Your uploaded file, which plays in the browser; or, with none, */
+  fileId: string | null;
+  /** the song on Spotify, which Spotify plays (a mixed queue, local-player.ts). */
+  spotifyId: string | null;
   recordingId: string;
   title: string;
   artist: string;
@@ -229,19 +232,29 @@ const PLAYABLE = `
          (SELECT group_concat(a.name, ', ') FROM artist_credit c JOIN artist a ON a.id = c.artist_id
           WHERE c.entity_type = 'recording' AND c.entity_id = r.id AND c.role = 'primary') AS artist,
          g.title AS album, g.id AS albumId, coalesce(x.art_key, (SELECT y.art_key FROM release y WHERE y.release_group_id = g.id AND y.art_key IS NOT NULL LIMIT 1)) AS artKey,
-         r.length_ms AS lengthMs`;
+         r.length_ms AS lengthMs, r.spotify_id AS spotifyId`;
+
+/** Where a queue may take songs from: your files only, or Spotify too for the rest. */
+export interface QueueSources {
+  spotify?: boolean;
+}
+
+/** Your latest upload of the song, required unless Spotify may play what has none. */
+const fileJoin = (spotify: boolean) =>
+  `${spotify ? 'LEFT ' : ''}JOIN file f ON f.id = (SELECT id FROM file WHERE recording_id = r.id AND audio_key IS NOT NULL ORDER BY uploaded_at DESC LIMIT 1)`;
+const playableRow = (spotify: boolean) => (spotify ? 'AND (f.id IS NOT NULL OR r.spotify_id IS NOT NULL)' : '');
 
 /**
  * An album's songs you have audio for, in order (its standard edition's,
  * then any others' bonus songs), for the player's queue.
  */
-export async function albumQueue(albumId: string): Promise<PlayableTrack[]> {
+export async function albumQueue(albumId: string, { spotify = false }: QueueSources = {}): Promise<PlayableTrack[]> {
   const { results } = await env.DB.prepare(
     `${PLAYABLE}, x.id = (SELECT c.release_id FROM v_release_group_canonical c WHERE c.release_group_id = ?1) AS standard, t.disc, t.position
      FROM release x JOIN release_group g ON g.id = x.release_group_id
      JOIN track t ON t.release_id = x.id JOIN recording r ON r.id = t.recording_id
-     JOIN file f ON f.id = (SELECT id FROM file WHERE recording_id = r.id AND audio_key IS NOT NULL ORDER BY uploaded_at DESC LIMIT 1)
-     WHERE x.release_group_id = ?1`,
+     ${fileJoin(spotify)}
+     WHERE x.release_group_id = ?1 ${playableRow(spotify)}`,
   )
     .bind(albumId)
     .all<PlayableTrack & { standard: number; disc: number; position: number }>();
@@ -254,26 +267,29 @@ export async function albumQueue(albumId: string): Promise<PlayableTrack[]> {
 }
 
 /** One song, if you have its audio: for a track page, a long-press, or a song alone. */
-export async function songQueue(recordingId: string): Promise<PlayableTrack[]> {
-  return songsQueue([recordingId]);
+export async function songQueue(recordingId: string, sources: QueueSources = {}): Promise<PlayableTrack[]> {
+  return songsQueue([recordingId], sources);
 }
 
 /**
  * Songs you have audio for, in the order given (a playlist's), each once,
  * the rest left out: for playing a playlist from your own files.
  */
-export async function songsQueue(recordingIds: string[]): Promise<PlayableTrack[]> {
-  const playable = await playableSongs(recordingIds);
-  const ids = [...new Set(recordingIds.filter((id) => playable.has(id)))].slice(0, 500);
+export async function songsQueue(recordingIds: string[], { spotify = false }: QueueSources = {}): Promise<PlayableTrack[]> {
+  // Your files only: those you have audio for, found first. With Spotify, the query keeps
+  // whichever of the two each song has.
+  const playable = spotify ? null : await playableSongs(recordingIds);
+  const ids = [...new Set(recordingIds.filter((id) => !playable || playable.has(id)))].slice(0, 500);
   if (ids.length === 0) return [];
   const { results } = await env.DB.prepare(
     `${PLAYABLE}
      FROM json_each(?1) j JOIN recording r ON r.id = j.value
-     JOIN file f ON f.id = (SELECT id FROM file WHERE recording_id = r.id AND audio_key IS NOT NULL ORDER BY uploaded_at DESC LIMIT 1)
+     ${fileJoin(spotify)}
      LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
      LEFT JOIN release_group g ON g.id = ra.release_group_id
      LEFT JOIN track t ON t.recording_id = r.id AND t.release_id = (SELECT c.release_id FROM v_release_group_canonical c WHERE c.release_group_id = g.id)
-     LEFT JOIN release x ON x.id = t.release_id`,
+     LEFT JOIN release x ON x.id = t.release_id
+     WHERE true ${playableRow(spotify)}`,
   )
     .bind(JSON.stringify(ids))
     .all<PlayableTrack>();

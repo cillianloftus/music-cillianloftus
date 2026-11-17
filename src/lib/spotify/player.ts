@@ -120,7 +120,7 @@ export type PlayerCommand =
   | { action: 'shuffle'; on: boolean }
   | { action: 'repeat'; mode: 'off' | 'track' | 'context' }
   /** A track (in its album, so the album plays on after it) or a whole album. */
-  | { action: 'start'; track?: string; album?: string }
+  | { action: 'start'; track?: string; album?: string; alone?: boolean }
   /** A track after the one playing (long-press, Add to queue). */
   | { action: 'queue'; track: string };
 
@@ -173,7 +173,9 @@ async function albumOf(client: SpotifyClient, track: string): Promise<string | u
 
 export async function control(client: SpotifyClient, command: PlayerCommand, from?: Origin): Promise<void> {
   // A song started on its own plays inside its album (looked up once, not on each try).
-  const album = command.action === 'start' ? (command.album ?? (command.track ? await albumOf(client, command.track) : undefined)) : undefined;
+  // One a mixed queue starts (alone) plays by itself: the queue says what follows.
+  const album =
+    command.action === 'start' && !command.alone ? (command.album ?? (command.track ? await albumOf(client, command.track) : undefined)) : undefined;
   const send = async (deviceId?: string) => {
     const device = deviceId ? `device_id=${deviceId}` : '';
     const q = (extra: string) => [extra, device].filter(Boolean).join('&');
