@@ -142,11 +142,18 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
   let plays: ParsedPlay[] = [];
   const n = (x: number) => x.toLocaleString('en-GB');
 
-  async function post<T>(url: string, body: unknown): Promise<T> {
-    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    const json = (await response.json()) as T & { error?: string };
-    if (!response.ok) throw new Error(json.error ?? 'The server refused that.');
-    return json;
+  // A batch the server could not take just then (D1 saying it is overloaded answers with an
+  // error page, 19 Nov) is sent again after its ten-second window, three times at most.
+  async function post<T>(url: string, body: unknown, tries = 4): Promise<T> {
+    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
+    const json = (await response?.json().catch(() => null)) as (T & { error?: string }) | null;
+    if (response?.ok && json) return json;
+    if ((!response || response.status >= 500) && tries > 1) {
+      status.textContent = `${status.textContent?.replace(/ Waiting a moment…$/, '')} Waiting a moment…`;
+      await new Promise((resolve) => setTimeout(resolve, 12_000));
+      return post<T>(url, body, tries - 1);
+    }
+    throw new Error(json?.error ?? 'The server refused that.');
   }
 
   async function load(files: File[]) {
