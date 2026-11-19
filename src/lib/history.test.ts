@@ -145,3 +145,37 @@ describe('divergence', () => {
     expect(await divergence('u-new')).toEqual({ underplayed: [], overplayed: [] });
   });
 });
+
+describe("Spotify's Account Data export (the last year, by name)", () => {
+  const named = (artist: string, name: string, played_at: string, ms_played = 200_000) => ({ ...stream(0, played_at, ms_played), uri: null, artist, name });
+
+  it('keeps tracks named only, matched to songs by title and artist, and their plays as spotify_account', async () => {
+    const matched = await addTracks([{ uri: null, name: 'Song A2', artist: 'Xavier', album: null }]);
+    expect(matched).toBe(1);
+    const added = await addPlays('u-owner', [named('Xavier', 'Song A2', '2026-03-01T21:10:00.000Z'), named('Xavier', 'Song A2', '2026-03-02T21:10:00.000Z')]);
+    expect(added).toBe(2);
+    const plays = db.prepare(`SELECT source, recording_id, counted FROM play WHERE user_id = 'u-owner' AND source = 'spotify_account'`).all();
+    expect(plays).toEqual([
+      { source: 'spotify_account', recording_id: 'a2', counted: 1 },
+      { source: 'spotify_account', recording_id: 'a2', counted: 1 },
+    ]);
+    // The same export again: nothing new.
+    expect(await addPlays('u-owner', [named('Xavier', 'Song A2', '2026-03-01T21:10:00.000Z')])).toBe(0);
+  });
+
+  it('counts a listen once when the extended history has it too, the extended copy counting', async () => {
+    db.exec(`UPDATE recording SET spotify_id = '${uri(7).slice(14)}' WHERE id = 'a2'`);
+    await addTracks([
+      { uri: null, name: 'Song A2', artist: 'Xavier', album: null },
+      { uri: uri(7), name: 'Song A2', artist: 'Xavier', album: 'Album A' },
+    ]);
+    // Its end to the minute: the start lands 40 seconds off the extended export's.
+    await addPlays('u-owner', [named('Xavier', 'Song A2', '2026-03-01T21:10:00.000Z')]);
+    await addPlays('u-owner', [stream(7, '2026-03-01T21:10:40.000Z')]);
+    const rows = db.prepare(`SELECT source, counted FROM play WHERE user_id = 'u-owner' AND source LIKE 'spotify%' ORDER BY source`).all();
+    expect(rows).toEqual([
+      { source: 'spotify_account', counted: 0 },
+      { source: 'spotify_export', counted: 1 },
+    ]);
+  });
+});

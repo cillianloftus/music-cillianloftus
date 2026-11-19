@@ -74,3 +74,29 @@ describe('collectHistory', () => {
     expect(isAudioHistory('MyData/endsong_3.json')).toBe(true);
   });
 });
+
+describe("the Account Data export's short history", () => {
+  it('reads artist, title, its end (UTC, to the minute) and length; plays start that long before', async () => {
+    const { collectAnyHistory } = await import('./history-parse');
+    const tracks = new Map<string, ParsedTrack>();
+    const plays: ParsedPlay[] = [];
+    const n = collectAnyHistory(
+      [
+        { endTime: '2025-11-17 04:41', artistName: 'Logic', trackName: 'Hit My Line', msPlayed: 29760 },
+        { endTime: '2025-11-17 04:47', artistName: 'Logic', trackName: 'Hit My Line', msPlayed: 180000 },
+        { endTime: 'yesterday', artistName: 'Logic', trackName: 'Bad', msPlayed: 1000 },
+      ],
+      tracks,
+      plays,
+    );
+    expect(n).toBe(2);
+    expect([...tracks.values()]).toEqual([{ uri: null, name: 'Hit My Line', artist: 'Logic', album: null }]);
+    expect(plays[1]).toMatchObject({ uri: null, artist: 'Logic', name: 'Hit My Line', played_at: '2025-11-17T04:44:00.000Z', ms_played: 180000 });
+    expect(playsRequest.safeParse({ plays }).success).toBe(true);
+  });
+
+  it('reads the music files of the Account Data export, never its podcasts', () => {
+    expect(isAudioHistory('Spotify Account Data/StreamingHistory_music_2.json')).toBe(true);
+    expect(isAudioHistory('Spotify Account Data/StreamingHistory_podcast_0.json')).toBe(false);
+  });
+});

@@ -69,7 +69,7 @@ const months = (span?.months ?? []).slice().reverse();
 const years = [...new Set(months.map((m) => m.month.slice(0, 4)))];
 const today = localDay(Date.now());
 
-const SOURCE_NAME: Record<string, string> = { spotify_export: 'Spotify export', lastfm: 'Last.fm', listenbrainz: 'ListenBrainz', manual: 'Added by hand' };
+const SOURCE_NAME: Record<string, string> = { spotify_export: 'Spotify export', spotify_account: 'Spotify (last year)', lastfm: 'Last.fm', listenbrainz: 'ListenBrainz', manual: 'Added by hand' };
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /**

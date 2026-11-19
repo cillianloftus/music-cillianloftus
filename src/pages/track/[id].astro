@@ -133,7 +133,7 @@ const homeOrder = homeTracks.map((t) => ({ id: t.recording_id, position: t.posit
 const homeShape = homeOrder.some((t) => t.id === id) && hasShape(homeOrder.map((t) => t.score)) ? shapeOf(homeOrder.map((t) => t.score)) : null;
 const monthName = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' });
 const dayName = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Dublin' });
-const SOURCE: Record<string, string> = { spotify_export: 'Spotify', lastfm: 'Last.fm', listenbrainz: 'ListenBrainz', manual: 'by hand' };
+const SOURCE: Record<string, string> = { spotify_export: 'Spotify', spotify_account: 'Spotify', lastfm: 'Last.fm', listenbrainz: 'ListenBrainz', manual: 'by hand' };
 // How loud it was mastered, from Deezer's replay gain: how far a player turns
 // it down, so the more negative, the louder.
 function loudnessWords(gain: number | null): string | null {

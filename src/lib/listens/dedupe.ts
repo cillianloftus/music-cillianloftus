@@ -28,7 +28,8 @@
  *    five times pairs five to five, not five to one.
  *
  * 5. The copy that counts is the one with the most detail: the Spotify
- *    export (length, skips, shuffle, device) first, then ListenBrainz,
+ *    export (length, skips, shuffle, device) first, then Spotify's Account
+ *    Data export (length only, its end to the minute), then ListenBrainz,
  *    then Last.fm, then manual. The others name it in duplicate_of and are
  *    never counted anywhere: recaps, play counts, the rating queue.
  *
@@ -42,7 +43,7 @@ export const MIN_COUNTED_MS = 30_000;
 const NEAR_MS = 6 * 3_600_000;
 
 /** Most detail first. */
-export const SOURCE_RANK = ['spotify_export', 'listenbrainz', 'lastfm', 'manual'] as const;
+export const SOURCE_RANK = ['spotify_export', 'spotify_account', 'listenbrainz', 'lastfm', 'manual'] as const;
 export type PlaySource = (typeof SOURCE_RANK)[number];
 
 export interface DedupePlay {

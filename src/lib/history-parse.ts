@@ -1,5 +1,8 @@
 /**
- * Turns Spotify's extended streaming history JSON into tracks and plays.
+ * Turns Spotify's streaming history JSON into tracks and plays: the
+ * extended history (every listen ever, with track ids), or the Account
+ * Data export's short one (the last year, by artist and title, its end to
+ * the minute: collectAccountHistory).
  * Runs in the browser. Podcasts and audiobooks are left out; every music
  * stream is kept, short ones too (they are skips, and never count as
  * plays: see listens/dedupe.ts). Kept from each entry: the track, when,
@@ -12,14 +15,18 @@
  */
 
 export interface ParsedTrack {
-  uri: string;
+  /** The Spotify track; null from the Account Data export, which names it only. */
+  uri: string | null;
   name: string;
   artist: string;
   album: string | null;
 }
 
 export interface ParsedPlay {
-  uri: string;
+  uri: string | null;
+  /** With no uri, the track as named (ParsedTrack's artist and name). */
+  artist?: string;
+  name?: string;
   played_at: string;
   ms_played: number;
   skipped: boolean | null;
@@ -103,5 +110,54 @@ export function collectHistory(json: unknown, tracks: Map<string, ParsedTrack>, 
   return counted;
 }
 
-/** Export files worth reading: the audio history, under any folder. */
-export const isAudioHistory = (name: string) => /Streaming_History_Audio[^/]*\.json$/i.test(name) || /endsong[^/]*\.json$/i.test(name);
+/**
+ * Adds one file of the Account Data export (StreamingHistory_music_N.json):
+ * { endTime: "2025-11-17 04:41" (UTC), artistName, trackName, msPlayed }.
+ * Tracks are keyed by artist and title. Returns how many entries were read.
+ */
+export function collectAccountHistory(json: unknown, tracks: Map<string, ParsedTrack>, plays: ParsedPlay[]): number {
+  if (!Array.isArray(json)) throw new Error('Not a streaming history file.');
+  let counted = 0;
+  for (const entry of json as Record<string, unknown>[]) {
+    const artist = entry.artistName;
+    const name = entry.trackName;
+    const ms = entry.msPlayed;
+    const end = entry.endTime;
+    if (typeof artist !== 'string' || typeof name !== 'string' || !artist || !name) continue;
+    if (typeof ms !== 'number' || ms < 0 || typeof end !== 'string') continue;
+    const match = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})$/.exec(end);
+    if (!match) continue;
+    const ended = new Date(`${match[1]}T${match[2]}:00Z`);
+    if (Number.isNaN(ended.getTime())) continue;
+    const key = `${artist}\u0000${name}`;
+    if (!tracks.has(key)) tracks.set(key, { uri: null, name: name.slice(0, 500), artist: artist.slice(0, 500), album: null });
+    const ms_played = Math.min(Math.round(ms), 86_400_000);
+    plays.push({
+      uri: null,
+      artist: artist.slice(0, 500),
+      name: name.slice(0, 500),
+      played_at: new Date(ended.getTime() - ms_played).toISOString(),
+      ms_played,
+      skipped: null,
+      shuffle: null,
+      offline: null,
+      incognito: null,
+      platform: null,
+      country: null,
+      reason_start: null,
+      reason_end: null,
+    });
+    counted += 1;
+  }
+  return counted;
+}
+
+/** Either export's history file: whichever shape it has. */
+export function collectAnyHistory(json: unknown, tracks: Map<string, ParsedTrack>, plays: ParsedPlay[]): number {
+  const first = Array.isArray(json) ? (json[0] as Record<string, unknown> | undefined) : undefined;
+  return first && 'endTime' in first && 'msPlayed' in first ? collectAccountHistory(json, tracks, plays) : collectHistory(json, tracks, plays);
+}
+
+/** Export files worth reading: the audio history, under any folder (the Account Data export's music only, not podcasts). */
+export const isAudioHistory = (name: string) =>
+  /Streaming_History_Audio[^/]*\.json$/i.test(name) || /endsong[^/]*\.json$/i.test(name) || /StreamingHistory_music_\d+\.json$/i.test(name);

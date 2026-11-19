@@ -27,7 +27,8 @@ export const tracksRequest = z
       .array(
         z
           .object({
-            uri: spotifyUri,
+            // Null from the Account Data export: the track is named, not identified.
+            uri: spotifyUri.nullable(),
             name: z.string().min(1).max(500),
             artist: z.string().min(1).max(500),
             album: z.string().max(500).nullable(),
@@ -48,7 +49,10 @@ export const playsRequest = z
       .array(
         z
           .object({
-            uri: spotifyUri,
+            uri: spotifyUri.nullable(),
+            // With no uri: the track as named, as sent in the tracks.
+            artist: z.string().min(1).max(500).optional(),
+            name: z.string().min(1).max(500).optional(),
             played_at: z.iso.datetime(),
             ms_played: z.number().int().min(0).max(24 * 60 * 60 * 1000),
             skipped: flag,
@@ -72,16 +76,23 @@ const keyOf = (uri: string) => `spotify:${uri.slice('spotify:track:'.length)}`;
 
 /** Keeps the export's tracks. Returns how many are in the catalogue. */
 export async function addTracks(tracks: z.infer<typeof tracksRequest>['tracks']): Promise<number> {
-  const rows = tracks.map((t) => listenTrack({ artist: t.artist, title: t.name, album: t.album, spotify_id: t.uri.slice('spotify:track:'.length) }));
+  const rows = tracks.map((t) => listenTrack({ artist: t.artist, title: t.name, album: t.album, spotify_id: t.uri ? t.uri.slice('spotify:track:'.length) : null }));
   return saveTracks(rows, await catalogueIndex());
 }
 
-/** Adds plays, skipping any already held. Returns how many were new. */
+/**
+ * Adds plays, skipping any already held. Returns how many were new. Those
+ * with a track id are the extended history's ('spotify_export'); those
+ * named only are the Account Data export's ('spotify_account', 0083), kept
+ * apart so a listen both carry is paired, not counted twice.
+ */
 export async function addPlays(userId: string, plays: PlaysRequest['plays']): Promise<number> {
-  return savePlays(
-    userId,
-    'spotify_export',
-    plays.map(({ uri, ...p }) => ({ ...p, track_key: keyOf(uri) })),
+  const strip = <T extends { uri: string | null; artist?: string; name?: string }>({ uri: _u, artist: _a, name: _n, ...p }: T) => p;
+  const extended = plays.filter((p) => p.uri);
+  const account = plays.filter((p) => !p.uri && p.artist && p.name);
+  return (
+    (await savePlays(userId, 'spotify_export', extended.map((p) => ({ ...strip(p), track_key: keyOf(p.uri!) })))) +
+    (await savePlays(userId, 'spotify_account', account.map((p) => ({ ...strip(p), track_key: listenTrack({ artist: p.artist!, title: p.name! }).key }))))
   );
 }
 
@@ -138,7 +149,7 @@ export async function divergence(userId: string, limit = 10): Promise<{ underpla
          -- is not "rarely played", just not streamable. Certain means its
          -- own Spotify track, or a play in the Spotify export.
          AND (EXISTS (SELECT 1 FROM recording x WHERE x.id = s.recording_id AND x.spotify_id IS NOT NULL)
-              OR EXISTS (SELECT 1 FROM play p WHERE p.recording_id = s.recording_id AND p.user_id = ?1 AND p.source = 'spotify_export'))
+              OR EXISTS (SELECT 1 FROM play p WHERE p.recording_id = s.recording_id AND p.user_id = ?1 AND p.source IN ('spotify_export', 'spotify_account')))
      ),
      ranked AS (
        SELECT *, percent_rank() OVER (ORDER BY plays) AS play_rank,

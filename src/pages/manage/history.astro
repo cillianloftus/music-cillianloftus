@@ -126,7 +126,7 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
 </Base>
 
 <script>
-  import { collectHistory, isAudioHistory, PLAY_BATCH, TRACK_BATCH, type ParsedPlay, type ParsedTrack } from '../../lib/history-parse';
+  import { collectAnyHistory, isAudioHistory, PLAY_BATCH, TRACK_BATCH, type ParsedPlay, type ParsedTrack } from '../../lib/history-parse';
   import { zipEntries } from '../../lib/zip';
 
   const $ = <T extends Element>(s: string) => document.querySelector<T>(s)!;
@@ -160,10 +160,10 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
         if (file.name.toLowerCase().endsWith('.zip')) {
           for (const entry of zipEntries(bytes).filter((e) => isAudioHistory(e.name))) {
             status.textContent = `Reading ${entry.name.split('/').at(-1)}…`;
-            collectHistory(JSON.parse(new TextDecoder().decode(await entry.read())), found, read);
+            collectAnyHistory(JSON.parse(new TextDecoder().decode(await entry.read())), found, read);
           }
         } else {
-          collectHistory(JSON.parse(new TextDecoder().decode(bytes)), found, read);
+          collectAnyHistory(JSON.parse(new TextDecoder().decode(bytes)), found, read);
         }
       }
     } catch (error) {
