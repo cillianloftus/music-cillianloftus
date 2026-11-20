@@ -30,6 +30,8 @@ export interface JobPayloads {
         label?: string;
         result?: { releaseGroupId: string; via: 'musicbrainz' | 'spotify' };
       };
+  /** Albums found and queued: here those of songs played but not in the library (import/played.ts). */
+  import_discography: import('../import/played').PlayedPayload;
   spotify_push: { definitionId: string; result?: import('../spotify/push').PushReport };
   backup: { result?: import('../backup/store').BackupReport };
 }

@@ -33,7 +33,7 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
     <PageHeader title="Listening history">
       {summary.plays > 0 && <a href="/recap">Your recap →</a>}
     </PageHeader>
-    <p class="muted">Spotify → Privacy settings → Download your data → Extended streaming history.</p>
+    <p class="muted">Spotify → Privacy settings → Download your data: Account data (the last year) or Extended streaming history (everything).</p>
 
     <section class="summary" aria-labelledby="summary-heading">
       <h2 id="summary-heading" class="visually-hidden">So far</h2>
@@ -69,12 +69,30 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
       }
     </section>
 
+    {
+      summary.tracks > summary.recordings && (
+        <section class="missing" aria-labelledby="missing-heading">
+          <h2 id="missing-heading">Not in the library</h2>
+          <p class="muted">
+            {Astro.url.searchParams.get('played') === 'none'
+              ? 'Every song played is in the library already, or waiting to be matched tonight.'
+              : 'Each song played and not in the library, looked up on Spotify, its album imported. Its plays join it once it lands.'}
+          </p>
+          <form method="post" action="/api/write/import/played" data-native>
+            <button class="button" type="submit">
+              Import their albums
+            </button>
+          </form>
+        </section>
+      )
+    }
+
     <section class="import" aria-labelledby="import-heading" data-import hidden>
       <h2 id="import-heading">Import</h2>
       <label class="drop" data-drop>
         <input type="file" accept=".zip,.json,application/zip,application/json" multiple class="visually-hidden" data-picker />
         <strong>Choose the export</strong>
-        <span class="muted">The zip as downloaded, or the Streaming_History_Audio JSON files from it.</span>
+        <span class="muted">The zip as downloaded, or the streaming history JSON files from it.</span>
       </label>
       <p class="status" role="status" data-status></p>
       <progress hidden data-progress></progress>
@@ -267,6 +285,16 @@ const lists: { id: string; heading: string; explain: string; rows: Divergence[] 
     margin: 0;
     font-size: var(--step-1);
     font-weight: 750;
+  }
+
+  .missing {
+    display: grid;
+    gap: var(--space-2);
+    justify-items: start;
+  }
+
+  .missing p {
+    margin: 0;
   }
 
   .import {

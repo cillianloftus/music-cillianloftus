@@ -7,7 +7,7 @@
 
 import { env } from 'cloudflare:workers';
 import { normaliseName, normaliseTitle } from '../text';
-import type { TrackNaming } from './keys';
+import { titleKey, type TrackNaming } from './keys';
 
 interface IndexRow {
   id: string;
@@ -42,12 +42,15 @@ export function indexOf(rows: IndexRow[]): CatalogueIndex {
   for (const row of rows) {
     if (row.spotify_id) bySpotify.set(row.spotify_id, row);
     if (row.mbid) byMbid.set(row.mbid, row);
-    const title = normaliseTitle(row.title);
+    // As titled, and without "feat. X" (one source names the guest, another not).
+    const titles = new Set([normaliseTitle(row.title), titleKey(row.title)]);
     for (const artist of JSON.parse(row.artists ?? '[]') as string[]) {
-      const key = `${normaliseName(artist)}\u0000${title}`;
-      const list = byName.get(key);
-      if (list) list.push(row);
-      else byName.set(key, [row]);
+      for (const title of titles) {
+        const key = `${normaliseName(artist)}\u0000${title}`;
+        const list = byName.get(key);
+        if (!list) byName.set(key, [row]);
+        else if (!list.includes(row)) list.push(row);
+      }
     }
   }
   return { bySpotify, byMbid, byName };
@@ -75,13 +78,15 @@ export function matchTrack(index: CatalogueIndex, t: TrackNaming): IndexRow | nu
     const exact = index.byMbid.get(t.mbid);
     if (exact) return exact;
   }
-  const title = normaliseTitle(t.title);
+  const titles = [...new Set([normaliseTitle(t.title), titleKey(t.title)])];
   const album = t.album ? normaliseTitle(t.album) : null;
-  for (const artist of artistNames(t.artist)) {
-    const candidates = index.byName.get(`${artist}\u0000${title}`);
-    if (!candidates?.length) continue;
-    const onAlbum = album ? candidates.find((c) => (JSON.parse(c.albums ?? '[]') as string[]).some((a) => normaliseTitle(a) === album)) : undefined;
-    return onAlbum ?? candidates[0]!;
+  for (const title of titles) {
+    for (const artist of artistNames(t.artist)) {
+      const candidates = index.byName.get(`${artist}\u0000${title}`);
+      if (!candidates?.length) continue;
+      const onAlbum = album ? candidates.find((c) => (JSON.parse(c.albums ?? '[]') as string[]).some((a) => normaliseTitle(a) === album)) : undefined;
+      return onAlbum ?? candidates[0]!;
+    }
   }
   return null;
 }

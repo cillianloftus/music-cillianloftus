@@ -137,25 +137,43 @@ export async function queueSpotifyDiscography(
     path = result.next ? result.next.replace(/^https:\/\/api\.spotify\.com\/v1/, '') : null;
   }
   const today = new Date().toISOString().slice(0, 10);
-  const wantedAlbums = [...new Map(albums.map((a) => [a.id, a])).values()].filter((a) => kinds.has(spotifyKind(a)) && a.release_date <= today);
-  const ids = JSON.stringify(wantedAlbums.map((a) => a.id));
+  const wantedAlbums = [...new Map(albums.map((a) => [a.id, a])).values()]
+    .filter((a) => kinds.has(spotifyKind(a)) && a.release_date <= today)
+    .sort((a, b) => a.release_date.localeCompare(b.release_date));
+  const queued = await queueSpotifyAlbums(wantedAlbums, priority, batchId);
+  return { ...queued, found: wantedAlbums.length, name: artist.name };
+}
+
+/**
+ * Queues an ordinary Spotify import for each album not already here (by
+ * its Spotify id, on the album or any edition) or already waiting, in the
+ * order given. Shared by an artist's Spotify discography and the albums of
+ * songs played (played.ts).
+ */
+export async function queueSpotifyAlbums(
+  albums: { id: string; name: string }[],
+  priority: Priority,
+  batchId: string | null,
+): Promise<Queued & { skipped: number }> {
+  const unique = [...new Map(albums.map((a) => [a.id, a])).values()];
+  if (unique.length === 0) return { queued: [], promoted: 0, skipped: 0 };
   const held = new Set(
     (
       await env.DB.prepare(
         `SELECT spotify_id FROM release_group WHERE spotify_id IN (SELECT value FROM json_each(?1))
          UNION SELECT spotify_id FROM release WHERE spotify_id IN (SELECT value FROM json_each(?1))`,
       )
-        .bind(ids)
+        .bind(JSON.stringify(unique.map((a) => a.id)))
         .all<{ spotify_id: string }>()
     ).results.map((r) => r.spotify_id),
   );
-  const fresh = wantedAlbums.filter((a) => !held.has(a.id)).sort((a, b) => a.release_date.localeCompare(b.release_date));
+  const fresh = unique.filter((a) => !held.has(a.id));
   const queued = await queueImports(
     fresh.map((a) => ({ key: a.id, title: a.name, payload: { source: 'spotify' as const, target: { kind: 'album' as const, id: a.id }, label: a.name } })),
     priority,
     batchId,
   );
-  return { ...queued, skipped: wantedAlbums.length - fresh.length, found: wantedAlbums.length, name: artist.name };
+  return { ...queued, skipped: unique.length - fresh.length };
 }
 
 /** Whether a release group is one of the kinds asked for. */

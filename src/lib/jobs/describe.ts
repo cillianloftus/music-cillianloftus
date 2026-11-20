@@ -68,6 +68,18 @@ function describe(
       hasArt: false,
     };
   }
+  if (job.kind === 'import_discography') {
+    const done = payload.result;
+    return {
+      title: done ? 'Albums of songs you played, found' : 'Finding the albums of songs you played',
+      detail: done
+        ? `${done.looked} songs looked up, ${done.found} found on Spotify, ${done.queued} albums queued`
+        : `${payload.keys?.length ?? 0} songs to look up on Spotify`,
+      href: '/manage/history',
+      artKey: null,
+      hasArt: false,
+    };
+  }
   if (job.kind === 'backup') return { title: 'Backup', detail: 'Every table, copied', href: '/manage/backups', artKey: null, hasArt: false };
   const album = payload.result?.releaseGroupId ? albums.get(payload.result.releaseGroupId) : null;
   const t = payload.target;

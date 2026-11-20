@@ -23,6 +23,9 @@ import { claimNext, complete, fail, requeue, toBack, type JobPayloads, type JobR
 import { MusicBrainzError, mbStats } from '../musicbrainz/client';
 import { mergeTwins } from '../twins';
 import { inheritForNewSongs } from '../inherited';
+import { findPlayedAlbums } from '../import/played';
+import { catalogueIndex } from '../listens/match';
+import { rematchListens } from '../listens/store';
 
 /** An imported release's songs joined to the same recordings already here (twins.ts), so their ratings show. */
 async function joinTwins(releaseId: string): Promise<void> {
@@ -173,6 +176,8 @@ export async function settleIfIdle(now = new Date()): Promise<boolean> {
     .run();
   await detectAnomalies().catch((error) => console.warn('Review check after imports failed', error));
   await deriveAlbumGenres().catch((error) => console.warn('Genre derivation after imports failed', error));
+  // Plays of songs the imports brought in point at them now, not overnight.
+  await rematchListens(await catalogueIndex()).catch((error) => console.warn('Listen rematch after imports failed', error));
   return true;
 }
 
@@ -247,6 +252,7 @@ async function backup(job: JobRow): Promise<void> {
 
 const handlers: Partial<Record<JobRow['kind'], (job: JobRow) => Promise<void>>> = {
   import_release: importRelease,
+  import_discography: findPlayedAlbums,
   spotify_push: spotifyPush,
   backup,
 };
