@@ -74,3 +74,27 @@ describe('listens outside the catalogue', () => {
     expect(db.prepare(`SELECT recording_id FROM listen_track WHERE key = ?`).get(track.key)).toEqual({ recording_id: 'z1' });
   });
 });
+
+describe('a track matched after its plays were saved', () => {
+  // As on 22 Nov: heard first in an export under a name the catalogue lacked, then
+  // matched when a scrobble named it and the catalogue had it.
+  const named = listenTrack({ artist: 'Xavier', title: 'Song A1 (with Yolanda)' });
+  const linked = () => db.prepare(`SELECT count(*) AS n FROM play WHERE recording_id IS NOT NULL`).get();
+
+  it('points its earlier plays at the song when a later save matches it', async () => {
+    await saveTracks([named], { bySpotify: new Map(), byMbid: new Map(), byName: new Map() });
+    await savePlays('u-owner', 'spotify_account', [{ track_key: named.key, played_at: at(0), ms_played: 200_000 }]);
+    expect(linked()).toEqual({ n: 0 });
+    await saveTracks([named], await catalogueIndex());
+    expect(linked()).toEqual({ n: 1 });
+  });
+
+  it('the rematch repairs plays left behind before', async () => {
+    await saveTracks([named], await catalogueIndex());
+    await savePlays('u-owner', 'spotify_account', [{ track_key: named.key, played_at: at(0), ms_played: 200_000 }]);
+    db.exec(`UPDATE play SET recording_id = NULL`); // as saveTracks left them before 22 Nov
+    expect(linked()).toEqual({ n: 0 });
+    await rematchListens(await catalogueIndex());
+    expect(linked()).toEqual({ n: 1 });
+  });
+});

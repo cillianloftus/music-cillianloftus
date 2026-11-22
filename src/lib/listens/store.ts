@@ -50,7 +50,32 @@ export async function saveTracks(rows: ListenTrackRow[], index: CatalogueIndex):
       .bind(JSON.stringify(withMatch.slice(i, i + 1000)))
       .run();
   }
+  // A track held unmatched and matched now (a scrobble naming one first heard in an
+  // export): its earlier plays point at the song too. Without this, 22 Nov, 1,500
+  // plays of matched tracks pointed at nothing, and the rematch, looking only at
+  // unmatched tracks, never saw them again.
+  const keys = withMatch.filter((r) => r.recording_id).map((r) => r.key);
+  if (keys.length) await linkPlays(keys);
   return matched;
+}
+
+/**
+ * Points plays at their track's recording where the track is matched and the
+ * play is not: for the tracks given, or every one (the rematch's repair).
+ * Returns how many plays it pointed.
+ */
+export async function linkPlays(keys?: string[]): Promise<number> {
+  const statement = keys
+    ? env.DB.prepare(
+        `UPDATE play SET recording_id = (SELECT t.recording_id FROM listen_track t WHERE t.key = play.track_key)
+         WHERE recording_id IS NULL AND track_key IN (SELECT value FROM json_each(?1))`,
+      ).bind(JSON.stringify(keys))
+    : env.DB.prepare(
+        `UPDATE play SET recording_id = (SELECT t.recording_id FROM listen_track t WHERE t.key = play.track_key)
+         WHERE recording_id IS NULL
+           AND EXISTS (SELECT 1 FROM listen_track t WHERE t.key = play.track_key AND t.recording_id IS NOT NULL)`,
+      );
+  return (await statement.run()).meta.changes ?? 0;
 }
 
 const flag = (v: boolean | null | undefined) => (v == null ? null : v ? 1 : 0);
@@ -156,5 +181,8 @@ export async function rematchListens(index: CatalogueIndex, { limit = 5000 } = {
     );
   }
   for (let i = 0; i < statements.length; i += 200) await env.DB.batch(statements.slice(i, i + 200));
+  // And any play left behind by a track matched elsewhere (saveTracks, before 22 Nov).
+  const repaired = await linkPlays();
+  if (repaired) console.log(`Listens: ${repaired} plays pointed at their matched tracks' songs`);
   return statements.length / 2;
 }

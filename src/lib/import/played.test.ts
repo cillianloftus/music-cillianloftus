@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { pickAlbum, type SpotifyTrackFound } from './played';
-import { indexOf, matchTrack } from '../listens/match';
+import { indexOf, matchTrack, withoutSource } from '../listens/match';
 import { listenTrack } from '../listens/keys';
 
 const track = (name: string, artist: string, album: Partial<SpotifyTrackFound['album']> & { id: string }): SpotifyTrackFound => ({
@@ -51,5 +51,24 @@ describe('matchTrack and "feat."', () => {
 
   it('finds a catalogue title without the guest from a listen naming one', () => {
     expect(matchTrack(index, { artist: 'Logic', title: 'Nasty (feat. Someone)' })?.id).toBe('r2');
+  });
+});
+
+describe('matchTrack and soundtrack titles', () => {
+  const index = indexOf([
+    { id: 'r-lose', title: 'Lose Yourself', mbid: null, spotify_id: null, length_ms: null, artists: JSON.stringify(['Eminem']), albums: '[]' },
+    { id: 'r-930', title: '30/90', mbid: null, spotify_id: null, length_ms: null, artists: JSON.stringify(['Andrew Garfield']), albums: '[]' },
+    { id: 'r-from', title: 'Far From Home', mbid: null, spotify_id: null, length_ms: null, artists: JSON.stringify(['Five Finger Death Punch']), albums: '[]' },
+  ]);
+
+  it.each([
+    ['Eminem', 'Lose Yourself - From "8 Mile" Soundtrack', 'r-lose'],
+    ['Andrew Garfield', '30/90 (from "tick, tick... BOOM!" Soundtrack from the Netflix Film)', 'r-930'],
+    ['Five Finger Death Punch', 'Far From Home', 'r-from'],
+  ])('%s — %s', (artist, title, id) => expect(matchTrack(index, { artist, title })?.id).toBe(id));
+
+  it('never takes "from" inside a title for a source', () => {
+    expect(withoutSource('Far From Home')).toBe('Far From Home');
+    expect(withoutSource('Message From the Stars - Remix')).toBe('Message From the Stars - Remix');
   });
 });

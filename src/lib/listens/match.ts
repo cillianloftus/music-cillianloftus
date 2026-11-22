@@ -69,6 +69,20 @@ export async function catalogueIndex(): Promise<CatalogueIndex> {
   return indexOf(results);
 }
 
+/**
+ * A title without the film or show it comes from, as Spotify names
+ * soundtrack songs: 'Lose Yourself - From "8 Mile" Soundtrack', 'Sincerely
+ * Me - From The “Dear Evan Hansen” Original Motion Picture Soundtrack',
+ * '30/90 (from "tick, tick... BOOM!" Soundtrack…)'. For matching only: the
+ * listen's own key keeps the title as heard.
+ */
+export function withoutSource(title: string): string {
+  return title
+    .replace(/\s+[-–—]\s+from\s.+$/i, '')
+    .replace(/\s*[([](?:from|taken from)\s[^)\]]*[)\]]/gi, '')
+    .trim();
+}
+
 export function matchTrack(index: CatalogueIndex, t: TrackNaming): IndexRow | null {
   if (t.spotify_id) {
     const exact = index.bySpotify.get(t.spotify_id);
@@ -78,7 +92,7 @@ export function matchTrack(index: CatalogueIndex, t: TrackNaming): IndexRow | nu
     const exact = index.byMbid.get(t.mbid);
     if (exact) return exact;
   }
-  const titles = [...new Set([normaliseTitle(t.title), titleKey(t.title)])];
+  const titles = [...new Set([normaliseTitle(t.title), titleKey(t.title), titleKey(withoutSource(t.title))])];
   const album = t.album ? normaliseTitle(t.album) : null;
   for (const title of titles) {
     for (const artist of artistNames(t.artist)) {
