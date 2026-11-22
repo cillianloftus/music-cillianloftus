@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { d1 } from '../test/d1';
 import { insert, migratedDb, seedLibrary } from '../test/db';
-import { currentStamp, fingerprint, forgetStamp, isCacheablePage, isKeepable, pageKey, siteStamp } from './page-cache';
+import { bumpWrites, currentStamp, fingerprint, FRESH_MS, forgetStamp, isCacheablePage, isKeepable, isStale, movesPages, pageKey, RENDERED_HEADER, siteStamp, siteStamps, STAMP_HEADER } from './page-cache';
 
 describe('isCacheablePage', () => {
   it('keeps the public pages that show the library', () => {
@@ -81,5 +81,57 @@ describe('siteStamp', () => {
     expect(await currentStamp(5_000)).toBe(first); // within the moment
     forgetStamp();
     expect(await currentStamp(6_000)).not.toBe(first);
+  });
+});
+
+describe('two stamps', () => {
+  let db: DatabaseSync;
+  beforeEach(() => {
+    db = migratedDb();
+    seedLibrary(db);
+    (env as { DB: D1Database }).DB = d1(db);
+    forgetStamp();
+  });
+
+  it('a write someone makes moves the key; what the background changes moves only the full stamp', async () => {
+    const before = await siteStamps();
+    db.exec(`UPDATE release SET art_key = 'art/release/r-a/c.jpg' WHERE id = 'r-a'`);
+    const imported = await siteStamps();
+    expect(imported.mine).toBe(before.mine);
+    expect(imported.full).not.toBe(before.full);
+    await bumpWrites();
+    await bumpWrites();
+    const written = await siteStamps();
+    expect(written.mine).not.toBe(imported.mine);
+    expect(written.full).not.toBe(imported.full);
+  });
+
+  it('a rating moves the key too', async () => {
+    const before = await siteStamps();
+    insert(db, 'rating', [{ id: 'n3', user_id: 'u-owner', entity_type: 'recording', entity_id: 'a1', depth: 'gut', gut_score: 3, rated_at: '2026-02-01T00:00:00.000Z' }]);
+    expect((await siteStamps()).mine).not.toBe(before.mine);
+  });
+});
+
+describe('isStale', () => {
+  const kept = (stamp: string, at: number) => new Response('<p>', { headers: { [STAMP_HEADER]: stamp, [RENDERED_HEADER]: String(at) } });
+  it('is fresh at the same stamp within a quarter of an hour', () => {
+    expect(isStale(kept('s', 1_000), 's', 1_000 + FRESH_MS - 1)).toBe(false);
+  });
+  it('is stale at another stamp, after a quarter of an hour, or with no stamp', () => {
+    expect(isStale(kept('s', 1_000), 't', 2_000)).toBe(true);
+    expect(isStale(kept('s', 1_000), 's', 1_000 + FRESH_MS + 1)).toBe(true);
+    expect(isStale(new Response('<p>'), 's', 2_000)).toBe(true);
+  });
+});
+
+describe('movesPages', () => {
+  it('the player, listens and settings do not; everything else does', () => {
+    for (const path of ['/api/write/player', '/api/write/audio/played', '/api/write/audio/loudness', '/api/write/push', '/api/write/play-prefer']) {
+      expect(movesPages(path), path).toBe(false);
+    }
+    for (const path of ['/api/write/rating', '/api/write/audio/upload', '/api/write/import', '/api/quick', '/api/write/players']) {
+      expect(movesPages(path), path).toBe(true);
+    }
   });
 });

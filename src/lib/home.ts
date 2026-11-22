@@ -117,21 +117,28 @@ export async function topTracks(userId: string | null, limit = 12): Promise<Trac
 
 /** Played most (from listening history) and never rated. */
 export async function playedNotRated(userId: string, limit = 10): Promise<TrackCard[]> {
-  const { results } = await env.DB.prepare(
-    `SELECT r.id, r.title, ${FIRST_ART} AS art_key, g.id AS album_id, g.title AS album_title,
-            NULL AS quality_score, NULL AS personal_score, count(*) AS plays
-     FROM play p JOIN recording r ON r.id = p.recording_id
-     LEFT JOIN v_recording_album ra ON ra.recording_id = r.id
-     LEFT JOIN release_group g ON g.id = ra.release_group_id
-     LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
-     LEFT JOIN release x ON x.id = gc.release_id
-     WHERE p.user_id = ?1 AND p.counted = 1
-       AND NOT EXISTS (SELECT 1 FROM v_recording_score s WHERE s.recording_id = r.id AND s.user_id = ?1)
-     GROUP BY r.id ORDER BY plays DESC LIMIT ?2`,
-  )
-    .bind(userId, limit)
-    .all<Omit<TrackCard, 'credits'>>();
-  return withCredits(results);
+  // Most played first, from the plays alone; then those never rated. Joined
+  // to albums, covers and the score view per play, this read 668,000 rows
+  // once a year of Spotify history was in (22 Nov: 28,000 counted plays).
+  const [{ results: played }, { results: rated }] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT recording_id AS id, count(*) AS plays FROM play
+       WHERE user_id = ?1 AND counted = 1 AND recording_id IS NOT NULL
+       GROUP BY recording_id ORDER BY plays DESC LIMIT 300`,
+    ).bind(userId),
+    env.DB.prepare(`SELECT DISTINCT entity_id AS id FROM rating WHERE user_id = ?1 AND entity_type = 'recording'`).bind(userId),
+  ]) as [D1Result<{ id: string; plays: number }>, D1Result<{ id: string }>];
+  const own = new Set(rated.map((r) => r.id));
+  const candidates = played.filter((p) => !own.has(p.id)).slice(0, limit * 3);
+  if (candidates.length === 0) return [];
+  // A score borrowed from another version counts as rated too: checked for these few, by id
+  // (the view is worked out for one song with "= ?", whole with IN).
+  const scored = await env.DB.batch(
+    candidates.map((c) => env.DB.prepare(`SELECT 1 AS yes FROM v_recording_score WHERE recording_id = ?1 AND user_id = ?2`).bind(c.id, userId)),
+  );
+  const chosen = candidates.filter((_, i) => scored[i]!.results.length === 0).slice(0, limit);
+  const cards = await cardsFor(chosen.map((c) => c.id));
+  return withCredits(chosen.flatMap((c) => (cards.has(c.id) ? [{ ...cards.get(c.id)!, plays: c.plays }] : [])));
 }
 
 /**
@@ -162,6 +169,17 @@ export async function worthRatingInFull(userId: string, limit = 10): Promise<(Tr
     .sort((a, b) => b.worth - a.worth)
     .slice(0, limit);
   if (top.length === 0) return [];
+  const byId = await cardsFor(top.map((t) => t.id));
+  const cards = top.flatMap((t) => {
+    const card = byId.get(t.id);
+    return card ? [{ ...card, plays: t.plays, gut: t.gut }] : [];
+  });
+  return withCredits(cards);
+}
+
+/** Track cards (title, first cover, album) for a few songs, by id: worked out for those shown only. */
+async function cardsFor(ids: string[]): Promise<Map<string, Omit<TrackCard, 'credits'>>> {
+  if (ids.length === 0) return new Map();
   const { results } = await env.DB.prepare(
     `SELECT r.id, r.title, ${FIRST_ART} AS art_key, g.id AS album_id, g.title AS album_title, NULL AS quality_score, NULL AS personal_score
      FROM json_each(?1) j JOIN recording r ON r.id = j.value
@@ -170,14 +188,9 @@ export async function worthRatingInFull(userId: string, limit = 10): Promise<(Tr
      LEFT JOIN v_release_group_canonical gc ON gc.release_group_id = g.id
      LEFT JOIN release x ON x.id = gc.release_id`,
   )
-    .bind(JSON.stringify(top.map((t) => t.id)))
+    .bind(JSON.stringify(ids))
     .all<Omit<TrackCard, 'credits'>>();
-  const byId = new Map(results.map((r) => [r.id, r]));
-  const cards = top.flatMap((t) => {
-    const card = byId.get(t.id);
-    return card ? [{ ...card, plays: t.plays, gut: t.gut }] : [];
-  });
-  return withCredits(cards);
+  return new Map(results.map((r) => [r.id, r]));
 }
 
 export interface LovedArtist {
