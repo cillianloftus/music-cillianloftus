@@ -10,6 +10,8 @@ const discographyError = Astro.url.searchParams.get('derror');
 const presetArtist = Astro.url.searchParams.get('artist') ?? '';
 const recent = await recentReleaseGroups(Astro.locals.user?.id ?? null, 12);
 const previous = Astro.url.searchParams.get('source') ?? '';
+// A YouTube link whose song could not be found says why (api/write/import.ts).
+const why = error === 'youtube' ? (Astro.url.searchParams.get('why') ?? '') : '';
 ---
 
 <Base title="Import">
@@ -31,7 +33,7 @@ const previous = Astro.url.searchParams.get('source') ?? '';
           autocomplete="off"
           spellcheck="false"
           required
-          placeholder="open.spotify.com/album/… or musicbrainz.org/release/…"
+          placeholder="A Spotify, MusicBrainz or YouTube link"
           value={previous}
           aria-describedby={error ? 'source-hint source-error' : 'source-hint'}
           aria-invalid={error ? 'true' : undefined}
@@ -45,11 +47,11 @@ const previous = Astro.url.searchParams.get('source') ?? '';
         </button>
         <button class="bar-button bar-go" type="submit">Import</button>
       </div>
-      <p class="hint" id="source-hint">An album, edition or track link. Several at once are each queued.</p>
+      <p class="hint" id="source-hint">An album, edition or track link, or a YouTube video of a song (its album is imported). Several at once are each queued.</p>
       {
         error && (
           <p class="error" id="source-error" role="alert">
-            That is not a MusicBrainz release or release group link, or a Spotify album or track link.
+            {why || 'That is not a MusicBrainz release or release group link, a Spotify album or track link, or a YouTube video.'}
           </p>
         )
       }
@@ -66,7 +68,7 @@ const previous = Astro.url.searchParams.get('source') ?? '';
       const pasteButton = form?.querySelector<HTMLButtonElement>('[data-paste]');
 
       const LINK =
-        /https?:\/\/(?:www\.)?musicbrainz\.org\/(?:release|release-group)\/[0-9a-f-]{36}|https?:\/\/open\.spotify\.com\/(?:intl-[a-z-]+\/)?(?:album|track)\/[A-Za-z0-9]{22}|spotify:(?:album|track):[A-Za-z0-9]{22}/gi;
+        /https?:\/\/(?:www\.)?musicbrainz\.org\/(?:release|release-group)\/[0-9a-f-]{36}|https?:\/\/open\.spotify\.com\/(?:intl-[a-z-]+\/)?(?:album|track)\/[A-Za-z0-9]{22}|spotify:(?:album|track):[A-Za-z0-9]{22}|https?:\/\/(?:(?:www|m|music)\.)?(?:youtube\.com\/(?:watch\?\S*?v=|shorts\/|live\/)|youtu\.be\/)[A-Za-z0-9_-]{11}[^\s"'<>]*/gi;
       const linksIn = (text: string) => [...new Set(text.match(LINK) ?? [])];
 
       let count = 0;
@@ -76,13 +78,19 @@ const previous = Astro.url.searchParams.get('source') ?? '';
         queued.hidden = false;
       };
 
+      /** Why the last link failed, when the server said (a YouTube video whose song it could not find). */
+      let lastError = '';
+
       async function queue(link: string): Promise<boolean> {
         if (!form) return false;
         const body = new FormData();
         body.set('source', link);
         const res = await fetch(form.action, { method: 'POST', body, headers: { accept: 'application/json' } });
         const data = (await res.json().catch(() => ({}))) as { jobId?: string; label?: string; error?: string };
-        if (!res.ok || !data.jobId) return false;
+        if (!res.ok || !data.jobId) {
+          lastError = data.error ?? '';
+          return false;
+        }
         window.dispatchEvent(new CustomEvent('job:watch', { detail: { id: data.jobId, label: data.label ?? 'Album' } }));
         return true;
       }
@@ -91,13 +99,17 @@ const previous = Astro.url.searchParams.get('source') ?? '';
         const links = linksIn(text);
         if (links.length === 0) return false;
         let ok = 0;
+        lastError = '';
         for (const link of links) if (await queue(link)) ok += 1;
         count += ok;
-        if (field) field.value = '';
+        // Kept in the box when nothing went in, to correct.
+        if (field && ok > 0) field.value = '';
         say(
           ok === links.length
             ? `✓ Queued ${ok === 1 ? '' : `${ok} `}${count > ok ? `· ${count} this visit` : ''}`.replace(/\s+$/, '')
-            : `Queued ${ok} of ${links.length}; the rest could not be read.`,
+            : links.length === 1 && lastError
+              ? lastError
+              : `Queued ${ok} of ${links.length}; the rest could not be read.${lastError ? ` ${lastError}` : ''}`,
         );
         field?.focus();
         return true;
@@ -108,7 +120,7 @@ const previous = Astro.url.searchParams.get('source') ?? '';
         event.preventDefault();
         try {
           if (!(await queueAll(field.value))) {
-            field.setCustomValidity('That is not a MusicBrainz release or a Spotify album or track link.');
+            field.setCustomValidity('That is not a MusicBrainz release, a Spotify album or track link, or a YouTube video.');
             field.reportValidity();
           }
         } catch {
@@ -137,7 +149,7 @@ const previous = Astro.url.searchParams.get('source') ?? '';
             const text = await navigator.clipboard.readText();
             if (!(await queueAll(text))) {
               if (field) field.value = text.trim();
-              say('There is no MusicBrainz or Spotify link on the clipboard.');
+              say('There is no MusicBrainz, Spotify or YouTube link on the clipboard.');
             }
           } catch {
             say('The browser would not share the clipboard. Paste into the box instead.');
