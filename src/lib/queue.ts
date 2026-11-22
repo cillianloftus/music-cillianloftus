@@ -18,7 +18,7 @@
 import { env } from 'cloudflare:workers';
 import { splitVersion } from './versions';
 import { albumScores } from './album-scores';
-import { byLibrary } from './library-cache';
+import { byDay, byLibrary, byScores } from './library-cache';
 
 export const QUEUE_RULES = {
   highlyRatedArtist: 80,
@@ -65,13 +65,6 @@ interface Row {
 
 const QUEUE_SQL = `
 WITH
-artist_score AS (
-  SELECT c.artist_id, avg(s.quality_score) AS score
-  FROM artist_credit c
-  JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
-  WHERE c.entity_type = 'recording' AND c.role = 'primary'
-  GROUP BY c.artist_id
-),
 latest_rating AS (
   SELECT entity_type, entity_id, max(rated_at) AS rated_at
   FROM rating WHERE user_id = ?1
@@ -89,12 +82,11 @@ albums AS (
     (SELECT a.name FROM artist_credit c JOIN artist a ON a.id = c.artist_id
      WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary'
      ORDER BY c.position LIMIT 1) AS artist_name,
-    (SELECT max(sc.score) FROM artist_credit c JOIN artist_score sc ON sc.artist_id = c.artist_id
+    -- Each artist's average and each album's plays, worked out once and
+    -- passed in (?9, ?10): per album, here, they read 634,000 rows a visit.
+    (SELECT max(json_extract(?9, '$."' || c.artist_id || '"')) FROM artist_credit c
      WHERE c.entity_type = 'release_group' AND c.entity_id = g.id AND c.role = 'primary') AS artist_score,
-    (SELECT count(*) FROM play p
-     JOIN track t ON t.recording_id = p.recording_id
-     JOIN v_release_group_canonical cc ON cc.release_id = t.release_id
-     WHERE cc.release_group_id = g.id AND p.user_id = ?1 AND p.counted = 1) AS plays
+    coalesce(json_extract(?10, '$."' || g.id || '"'), 0) AS plays
   FROM release_group g
   WHERE g.status = 'released'
     -- Bootlegs waiting to be cleared are not worth a rating.
@@ -195,9 +187,46 @@ export function playedUnrated(userId: string): Promise<Record<string, number>> {
   });
 }
 
+/** Each artist's average song score (primary credits), by artist: kept while scores stand. */
+export function artistAverages(userId: string): Promise<Record<string, number>> {
+  return byScores('queue-artist-averages:v1', userId, async () => {
+    const { results } = await env.DB.prepare(
+      `SELECT c.artist_id AS id, avg(s.quality_score) AS score
+       FROM artist_credit c
+       JOIN v_recording_score s ON s.recording_id = c.entity_id AND s.user_id = ?1
+       WHERE c.entity_type = 'recording' AND c.role = 'primary'
+       GROUP BY c.artist_id`,
+    )
+      .bind(userId)
+      .all<{ id: string; score: number }>();
+    return Object.fromEntries(results.map((r) => [r.id, r.score]));
+  });
+}
+
+/**
+ * Each album's counted plays (its standard edition's songs), by album: kept
+ * for the day. It only sorts albums into tiers (played ten times or more), so
+ * a day's listening late is no loss, where working it out read 285,000 rows.
+ */
+export function albumPlays(userId: string): Promise<Record<string, number>> {
+  return byDay(`queue-album-plays:v1:${userId}`, async () => {
+    const { results } = await env.DB.prepare(
+      `SELECT cc.release_group_id AS id, count(*) AS plays
+       FROM play p
+       JOIN track t ON t.recording_id = p.recording_id
+       JOIN v_release_group_canonical cc ON cc.release_id = t.release_id
+       WHERE p.user_id = ?1 AND p.counted = 1
+       GROUP BY cc.release_group_id`,
+    )
+      .bind(userId)
+      .all<{ id: string; plays: number }>();
+    return Object.fromEntries(results.map((r) => [r.id, r.plays]));
+  });
+}
+
 export async function ratingQueue(userId: string): Promise<QueueEntry[]> {
   // From the album scores (kept per library state), not the view again.
-  const [scores, played] = await Promise.all([albumScores(userId), playedUnrated(userId)]);
+  const [scores, played, artists, plays] = await Promise.all([albumScores(userId), playedUnrated(userId), artistAverages(userId), albumPlays(userId)]);
   const ratedCounts = JSON.stringify(
     Object.fromEntries(Object.entries(scores).filter(([, s]) => s.rated > 0).map(([id, s]) => [id, s.rated])),
   );
@@ -211,6 +240,8 @@ export async function ratingQueue(userId: string): Promise<QueueEntry[]> {
       QUEUE_RULES.handoffHours,
       ratedCounts,
       JSON.stringify(played),
+      JSON.stringify(artists),
+      JSON.stringify(plays),
     )
     .all<Row>();
   // A remix single or EP is a version of a song rated elsewhere, not a record to rate.

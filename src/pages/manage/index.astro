@@ -17,17 +17,20 @@ import { connection } from '../../lib/spotify/client';
 import { waitingCount } from '../../lib/connections';
 import { latestBackup, nightlyRuns } from '../../lib/health';
 import { jobCounts } from '../../lib/jobs/queue';
+import { byStamp } from '../../lib/library-cache';
 
 const user = Astro.locals.user!;
-const [counts, spotify, jobs] = await Promise.all([
+// Plays counted once per new play (36,000 rows to count, the rest of this page reads a few dozen).
+const playsStamp = String((await env.DB.prepare('SELECT max(rowid) AS n FROM play').first<number>('n')) ?? 0);
+const [counts, plays, spotify, jobs] = await Promise.all([
   env.DB.prepare(
     `SELECT (SELECT count(*) FROM anomaly WHERE status = 'open') AS review,
             (SELECT count(*) FROM file) AS files,
-            (SELECT count(*) FROM play WHERE user_id = ?1 AND counted = 1) AS plays,
             (SELECT count(*) FROM release_group WHERE official = 0 AND keep_unofficial = 0) AS unofficial`,
-  )
-    .bind(user.id)
-    .first<{ review: number; files: number; plays: number; unofficial: number }>(),
+  ).first<{ review: number; files: number; unofficial: number }>(),
+  byStamp(`manage-plays:${user.id}`, playsStamp, async () =>
+    (await env.DB.prepare('SELECT count(*) AS n FROM play WHERE user_id = ?1 AND counted = 1').bind(user.id).first<number>('n')) ?? 0,
+  ),
   connection(user.id).catch(() => null),
   // Kept by triggers (0070), not counted.
   jobCounts().catch(() => null),
@@ -115,7 +118,7 @@ const item = {
     title: 'Listening history',
     text: 'What you play against what you rate.',
     icon: ICONS.history,
-    status: counts?.plays ? { text: n(counts.plays, 'play'), tone: 'quiet' } : null,
+    status: plays ? { text: n(plays, 'play'), tone: 'quiet' } : null,
   },
   spotify: {
     href: '/manage/spotify',

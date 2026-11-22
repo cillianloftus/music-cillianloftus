@@ -18,6 +18,7 @@ import { PLAY_BATCH, TRACK_BATCH } from './history-parse';
 import { listenTrack } from './listens/keys';
 import { catalogueIndex } from './listens/match';
 import { savePlays, saveTracks } from './listens/store';
+import { byLibrary } from './library-cache';
 
 const spotifyUri = z.string().regex(/^spotify:track:[A-Za-z0-9]{22}$/);
 
@@ -108,7 +109,12 @@ export interface HistorySummary {
   hours: number;
 }
 
-export async function historySummary(userId: string): Promise<HistorySummary> {
+/** Kept per library state (plays, ratings and imports all move it): every counted play is read. */
+export function historySummary(userId: string): Promise<HistorySummary> {
+  return byLibrary('history-summary:v1', userId, () => summaryNow(userId));
+}
+
+async function summaryNow(userId: string): Promise<HistorySummary> {
   const row = await env.DB.prepare(
     `SELECT count(*) AS plays, count(DISTINCT recording_id) AS recordings, count(DISTINCT track_key) AS tracks,
             min(played_at) AS first, max(played_at) AS last, coalesce(sum(ms_played), 0) / 3600000.0 AS hours
@@ -139,7 +145,12 @@ export interface Divergence {
  * tracks certainly on Spotify take part, so the percentiles are among
  * songs that could have been streamed.
  */
-export async function divergence(userId: string, limit = 10): Promise<{ underplayed: Divergence[]; overplayed: Divergence[] }> {
+/** Kept per library state, as historySummary: it ranks every rated song by its plays. */
+export function divergence(userId: string, limit = 10): Promise<{ underplayed: Divergence[]; overplayed: Divergence[] }> {
+  return byLibrary(`history-divergence:v1:${limit}`, userId, () => divergenceNow(userId, limit));
+}
+
+async function divergenceNow(userId: string, limit: number): Promise<{ underplayed: Divergence[]; overplayed: Divergence[] }> {
   const { results } = await env.DB.prepare(
     `WITH rated AS (
        SELECT s.recording_id, s.quality_score,
