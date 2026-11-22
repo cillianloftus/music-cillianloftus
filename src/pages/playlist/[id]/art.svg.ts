@@ -9,7 +9,7 @@ export const GET: APIRoute = async ({ params, request }) => {
   if (!saved) return new Response('Not found', { status: 404 });
   // A cover chosen by hand replaces the drawn one wherever the art is used.
   if (saved.art_mode === 'uploaded' && saved.art_key) return Response.redirect(new URL(`/playlist/${saved.id}/cover.jpg`, request.url), 302);
-  const svg = playlistArtSvg(await artItems(saved));
+  const svg = playlistArtSvg(await artItems(saved), { title: saved.name });
   return new Response(svg, {
     headers: {
       'content-type': 'image/svg+xml; charset=utf-8',
