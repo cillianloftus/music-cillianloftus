@@ -221,9 +221,25 @@ export interface TrackListening {
   sources: string[];
 }
 
+/**
+ * Every played song's count of plays, most first: what a song's rank is read
+ * from. Kept per library state; counted per song page, it read 70,000 rows.
+ */
+export function playCountsByRank(userId: string): Promise<number[]> {
+  return byLibrary('play-counts-by-rank:v1', userId, async () => {
+    const { results } = await env.DB.prepare(
+      `SELECT count(*) AS n FROM play WHERE user_id = ?1 AND counted = 1 AND recording_id IS NOT NULL GROUP BY recording_id ORDER BY n DESC`,
+    )
+      .bind(userId)
+      .all<{ n: number }>();
+    return results.map((r) => r.n);
+  });
+}
+
 /** How one track has been listened to, for its page. Null before any play. */
 export async function trackListening(userId: string, recordingId: string, now = new Date()): Promise<TrackListening | null> {
-  const [summary, months, ranks] = await env.DB.batch([
+  const [[summary, months], counts] = await Promise.all([
+    env.DB.batch([
     env.DB.prepare(
       `SELECT count(*) AS total, min(played_at) AS first, max(played_at) AS last, json_group_array(DISTINCT source) AS sources
        FROM play WHERE user_id = ? AND recording_id = ? AND counted = 1`,
@@ -232,15 +248,13 @@ export async function trackListening(userId: string, recordingId: string, now = 
       `SELECT substr(played_at, 1, 7) AS month, count(*) AS count FROM play
        WHERE user_id = ? AND recording_id = ? AND counted = 1 GROUP BY month ORDER BY month`,
     ).bind(userId, recordingId),
-    env.DB.prepare(
-      `WITH counts AS (SELECT recording_id, count(*) AS n FROM play WHERE user_id = ?1 AND counted = 1 AND recording_id IS NOT NULL GROUP BY recording_id)
-       SELECT (SELECT count(*) FROM counts c WHERE c.n > (SELECT n FROM counts WHERE recording_id = ?2)) + 1 AS rank,
-              (SELECT count(*) FROM counts) AS of`,
-    ).bind(userId, recordingId),
+    ]),
+    playCountsByRank(userId),
   ]);
   const s = summary!.results[0] as { total: number; first: string | null; last: string | null; sources: string } | undefined;
   if (!s?.total || !s.first || !s.last) return null;
-  const r = ranks!.results[0] as { rank: number; of: number };
+  // Where it stands: one more than the songs played more often.
+  const r = { rank: counts.filter((n) => n > s.total).length + 1, of: counts.length };
   const rows = months!.results as { month: string; count: number }[];
   // Run the months on to now, so a track gone quiet shows the quiet.
   const thisMonth = now.toISOString().slice(0, 7);
