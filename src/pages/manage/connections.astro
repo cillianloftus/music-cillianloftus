@@ -197,14 +197,19 @@ const quiet = { autocomplete: 'off', spellcheck: false, 'data-1p-ignore': '', 'd
     white-space: nowrap;
   }
 
+  /* The score tones' lightness (global.css: about 5:1 in either theme), outlined, on
+     the card itself: fixed light greens and reds were 1.5:1 on the light theme's
+     paper, and even these fell under 4.5 on a tint of themselves (axe, 22 Nov). */
   [data-state='ok'] .pill {
-    background: color-mix(in srgb, oklch(0.7 0.16 150) 20%, transparent);
-    color: oklch(0.8 0.15 150);
+    background: none;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, oklch(var(--score-l) var(--score-c) 150) 50%, transparent);
+    color: oklch(var(--score-l) var(--score-c) 150);
   }
 
   [data-state='failed'] .pill {
-    background: color-mix(in srgb, oklch(0.65 0.18 30) 22%, transparent);
-    color: oklch(0.78 0.15 30);
+    background: none;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, oklch(var(--score-l) var(--score-c) 30) 50%, transparent);
+    color: oklch(var(--score-l) var(--score-c) 30);
   }
 
   .flash {

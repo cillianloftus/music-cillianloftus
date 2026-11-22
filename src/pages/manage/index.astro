@@ -382,8 +382,9 @@ const slug = (heading: string) => heading.toLowerCase().replace(/\s+/g, '-');
     white-space: nowrap;
   }
 
+  /* 14%: at 20% the light theme's amber on its own tint was 4.3:1, under AA's 4.5 (axe, 22 Nov). */
   .status[data-tone='attention'] {
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
     color: var(--accent);
   }
 

@@ -37,7 +37,8 @@ const keyWords = ['None', ...cal.levels.map((start, i) => (i === 3 ? `${start} +
 ---
 
 <figure class="calendar">
-  <div class="scroller" data-calendar>
+  {/* Scrolls sideways on a phone: focusable, so the arrow keys scroll it too. */}
+  <div class="scroller" data-calendar tabindex="0" role="region" aria-label="Rating calendar, scrolls sideways">
     <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} role="group" aria-label={`Ratings each day${from ? '' : ' over the last year'}: ${cal.total} on ${cal.days} days`}>
       {
         cal.months.map((m) => (

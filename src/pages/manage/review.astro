@@ -672,6 +672,11 @@ const SOURCES: Record<string, string> = {
     font-weight: 650;
   }
 
+  /* On the tint the subtle grey fell to 4.0:1 (axe, 22 Nov). */
+  .facts .differs dt {
+    color: var(--text-muted);
+  }
+
   .source {
     color: var(--text-subtle);
     font-size: var(--step--1);
