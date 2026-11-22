@@ -1,0 +1,46 @@
+---
+/**
+ * Where to buy an album lossless (FLAC), for one not all uploaded: a
+ * Bandcamp and a Qobuz search for it. Bought files come in through the
+ * files import like any others. Album pages and the Files page use it.
+ */
+import ElsewhereLink from './ElsewhereLink.astro';
+
+interface Props {
+  artist: string;
+  album: string;
+  /** Just the links, where the line around them already says the rest (the Files page). */
+  bare?: boolean;
+}
+
+const { artist, album, bare = false } = Astro.props;
+const q = `${artist} ${album}`.trim();
+const bandcamp = `https://bandcamp.com/search?${new URLSearchParams({ q, item_type: 'a' })}`;
+const qobuz = `https://www.qobuz.com/ie-en/search?${new URLSearchParams({ q, i: 'boutique' })}`;
+---
+
+{
+  bare ? (
+    <span class="lossless">
+      <ElsewhereLink href={bandcamp} label="Bandcamp" icon="bandcamp" />
+      <ElsewhereLink href={qobuz} label="Qobuz" icon="qobuz" />
+    </span>
+  ) : (
+    <p class="lossless">
+      <span class="muted">Buy it lossless</span>
+      <ElsewhereLink href={bandcamp} label="Bandcamp" icon="bandcamp" />
+      <ElsewhereLink href={qobuz} label="Qobuz" icon="qobuz" />
+    </p>
+  )
+}
+
+<style>
+  .lossless {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    font-size: var(--step--1);
+  }
+</style>

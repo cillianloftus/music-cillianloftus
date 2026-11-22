@@ -17,6 +17,7 @@ import { similarAlbums } from '../../lib/pages';
 import AlbumCard from '../../components/AlbumCard.astro';
 import Shelf from '../../components/Shelf.astro';
 import PageActions from '../../components/PageActions.astro';
+import LosslessLinks from '../../components/LosslessLinks.astro';
 import CreditsPanel from '../../components/CreditsPanel.astro';
 import EntityHero from '../../components/EntityHero.astro';
 import ImpactNote from '../../components/ImpactNote.astro';
@@ -139,8 +140,17 @@ const editionHref = (e: Edition) =>
 
 // Listening history is private too: play counts only for the signed-in listener.
 // Your own uploaded audio for any of its songs: Play (the owner only, local-player.ts).
-const playHref =
-  user && user.id === (await ownerId()) && (await playableSongs([...tracks, ...standardTracks].map((t) => t.recording_id))).size > 0 ? `/play?album=${album.id}` : null;
+const isOwner = Boolean(user && user.id === (await ownerId()));
+const uploaded = isOwner ? await playableSongs([...tracks, ...standardTracks].map((t) => t.recording_id)) : new Set<string>();
+const playHref = uploaded.size > 0 ? `/play?album=${album.id}` : null;
+// Songs of the edition shown with no file of yours: where to buy it lossless (LosslessLinks).
+const uploadedState: 'all' | 'some' | 'none' | null = !isOwner
+  ? null
+  : tracks.every((t) => uploaded.has(t.recording_id))
+    ? 'all'
+    : tracks.some((t) => uploaded.has(t.recording_id))
+      ? 'some'
+      : 'none';
 const [plays, kinds, depths] = await Promise.all([
   user ? playCounts(user.id, tracks.map((t) => t.recording_id)) : Promise.resolve(new Map<string, number>()),
   kindsOf(tracks.map((t) => t.recording_id)),
@@ -313,6 +323,7 @@ const artistNames = album.credits.map((c) => c.name).join(', ');
         }
 
         <PageActions listenHref={listenHref} spotifyId={shownSpotifyId} kind="album" findEdition={findEdition ? shown!.id : null} editHref={user ? `/edit/album/${album.id}` : null} links={links} playHref={playHref} />
+        {(uploadedState === 'some' || uploadedState === 'none') && <LosslessLinks artist={album.credits[0]?.name ?? ''} album={album.title} />}
 
         <GenreChips genres={genres} />
 

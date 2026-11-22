@@ -8,6 +8,7 @@
  * before it matters (in the browser, changing nothing).
  */
 import EmptyState from '../../components/EmptyState.astro';
+import LosslessLinks from '../../components/LosslessLinks.astro';
 import Base from '../../layouts/Base.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import { catalogue } from '../../lib/import/files';
@@ -37,6 +38,8 @@ const measured = uploaded.filter((f) => f.loudness_lufs != null).length;
 const lufs = (v: number) => `${v.toFixed(1).replace('-', '−')} LUFS`;
 const playsAt = (v: number | null) => `plays at ${Math.round(levelFor(v) * 100)}%`;
 const done = Astro.url.searchParams.get('done');
+// FLAC, WAV, AIFF; or anything at a lossless rate (an ALAC .m4a). Lossy albums offer an upgrade.
+const isLossless = (f: { format: string; bitrate: number | null }) => /^(flac|wav|aiff?|alac)$/i.test(f.format) || (f.bitrate ?? 0) >= 700;
 ---
 
 <Base title="Files">
@@ -109,6 +112,12 @@ const done = Astro.url.searchParams.get('done');
                     <p class="album-actions">
                       {album.id && <a href={`/album/${album.id}`}>Open album</a>}
                       {album.up < album.files.length && <a href="/manage/import/files">Import its folder to upload the rest</a>}
+                      {album.files.some((f) => !isLossless(f)) && (
+                        <span class="upgrade">
+                          <span class="muted">Lossy files; lossless from</span>
+                          <LosslessLinks artist={album.artist ?? ''} album={album.title} bare />
+                        </span>
+                      )}
                       {album.up > 0 && (
                         <form method="post" action="/api/write/audio/remove" data-confirm="Remove this album's uploaded audio? Your own files are not touched.">
                           {album.files.filter((f) => f.audio_bytes != null).map((f) => <input type="hidden" name="id" value={f.id} />)}
@@ -295,6 +304,13 @@ const done = Astro.url.searchParams.get('done');
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2) var(--space-4);
+  }
+
+  .upgrade {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .album-actions form,

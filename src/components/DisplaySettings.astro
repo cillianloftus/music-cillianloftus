@@ -6,6 +6,7 @@
  * anything paints (see Base.astro), and scales every rem on the site.
  */
 import type { Theme } from '../lib/theme';
+import ChoiceForm from './ChoiceForm.astro';
 
 interface Props {
   theme: Theme;
@@ -16,16 +17,18 @@ const returnTo = Astro.url.pathname + Astro.url.search;
 ---
 
 <div class="display">
-  <form class="mode" method="post" action="/api/theme" data-mode>
-    <input type="hidden" name="return_to" value={returnTo} />
-    <fieldset>
-      <legend>Mode</legend>
-      <div class="segments">
-        <button type="submit" name="theme" value="dark" aria-pressed={theme === 'dark' ? 'true' : 'false'}>Dark</button>
-        <button type="submit" name="theme" value="light" aria-pressed={theme === 'light' ? 'true' : 'false'}>Light</button>
-      </div>
-    </fieldset>
-  </form>
+  <ChoiceForm
+    action="/api/theme"
+    legend="Mode"
+    name="theme"
+    current={theme}
+    options={[
+      { value: 'dark', label: 'Dark' },
+      { value: 'light', label: 'Light' },
+    ]}
+    hidden={{ return_to: returnTo }}
+    data-mode
+  />
 
   <div class="size" data-size>
     <label for="ui-scale">Text size</label>
@@ -94,45 +97,9 @@ const returnTo = Astro.url.pathname + Astro.url.search;
     background: var(--surface-1);
   }
 
-  fieldset {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-    margin: 0;
-    padding: 0;
-    border: 0;
-  }
-
-  legend,
   label {
     float: left;
     font-weight: 700;
-  }
-
-  .segments {
-    display: inline-flex;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-  }
-
-  .segments button {
-    min-height: calc(var(--target) - 8px);
-    padding-inline: var(--space-4);
-    border: 0;
-    border-radius: 999px;
-    background: none;
-    color: var(--text-muted);
-    font: inherit;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .segments button[aria-pressed='true'] {
-    background: var(--surface-2);
-    color: var(--text);
   }
 
   .size {

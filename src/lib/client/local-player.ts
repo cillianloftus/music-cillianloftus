@@ -113,12 +113,32 @@ interface Resume {
   shuffle?: boolean;
   repeat?: Repeat;
   order?: number[];
+  preferSpotify?: boolean;
+  spotifyOff?: boolean;
 }
+
+/** A song both uploaded and on Spotify: which plays it (the setting on Manage, play-queue.ts playPrefer). */
+export type PlayPrefer = 'spotify' | 'file';
 
 export class LocalPlayer {
   queue: LocalTrack[] = [];
   index = 0;
   problem: string | null = null;
+  /** Songs on Spotify play there even when uploaded, so they count in Spotify's own history (Wrapped). */
+  preferSpotify = false;
+  /** Spotify would not play this queue (no device, refused): your files play what they can. Until the next Play. */
+  spotifyOff = false;
+
+  /**
+   * The file to play a song from, or null for Spotify: your file when it
+   * is all there is, when files come first, or when Spotify cannot play
+   * (offline, or it refused this queue).
+   */
+  fileFor(t: LocalTrack): string | null {
+    if (!t.fileId) return null;
+    if (this.preferSpotify && t.spotifyId && !this.spotifyOff && navigator.onLine) return null;
+    return t.fileId;
+  }
   shuffle = false;
   repeat: Repeat = 'off';
   /** The queue's songs (their places in it) in the order they play: as listed, or shuffled. */
@@ -259,9 +279,11 @@ export class LocalPlayer {
     void this.audio.play().catch(() => {});
   }
 
-  load(queue: LocalTrack[], start: number, play: boolean): void {
+  load(queue: LocalTrack[], start: number, play: boolean, prefer: PlayPrefer = 'file'): void {
     this.hear();
     this.report();
+    this.preferSpotify = prefer === 'spotify';
+    this.spotifyOff = false;
     // Copied, so a queue made in a page that is then left is not held through it.
     this.queue = queue.map((t) => ({ ...t }));
     this.order = this.shuffle ? shuffled(this.queue.length, start) : this.queue.map((_, i) => i);
@@ -287,6 +309,8 @@ export class LocalPlayer {
       shuffle: this.shuffle,
       repeat: this.repeat,
       order: this.order,
+      preferSpotify: this.preferSpotify,
+      spotifyOff: this.spotifyOff,
     };
     try {
       sessionStorage.setItem(RESUME, JSON.stringify(saved));
@@ -298,6 +322,8 @@ export class LocalPlayer {
     this.queue = saved.queue;
     this.shuffle = saved.shuffle ?? false;
     this.repeat = saved.repeat ?? 'off';
+    this.preferSpotify = saved.preferSpotify ?? false;
+    this.spotifyOff = saved.spotifyOff ?? false;
     this.order = saved.order?.length === saved.queue.length ? saved.order : saved.queue.map((_, i) => i);
     this.go(saved.index, saved.playing, saved.positionMs, true);
     // A browser that will not start sound by itself after a reload starts it at the first
@@ -326,9 +352,10 @@ export class LocalPlayer {
     const leaving = this.remote;
     this.remote = null;
     this.clearTimers();
-    if (leaving?.playing && t.fileId && !leaving.pauseSent) void this.sendSpotify({ action: 'pause' });
-    if (t.fileId) {
-      if (this.spareFor === t.fileId && fromMs === 0) {
+    const file = this.fileFor(t);
+    if (leaving?.playing && file && !leaving.pauseSent) void this.sendSpotify({ action: 'pause' });
+    if (file) {
+      if (this.spareFor === file && fromMs === 0) {
         // Loaded already: the spare plays, and what played becomes the spare.
         const was = this.audio;
         this.audio = this.spare;
@@ -338,7 +365,7 @@ export class LocalPlayer {
         was.load();
       } else {
         this.audio.loop = false;
-        this.audio.src = `/audio/${t.fileId}`;
+        this.audio.src = `/audio/${file}`;
       }
       this.spareFor = null;
       this.audio.loop = false;
@@ -601,6 +628,15 @@ export class LocalPlayer {
    */
   private remoteFailed(title: string, reason: string | null, error: string | null): void {
     const r = this.remote;
+    // A song you have the file of: it carries on from the file, where Spotify would have been, and
+    // the rest of this queue plays from files too (Spotify asked again only on the next Play).
+    const t = this.queue[this.index];
+    if (r && t?.fileId && !this.spotifyOff) {
+      this.spotifyOff = true;
+      this.problem = null;
+      this.go(this.index, true, r.offsetMs);
+      return;
+    }
     if (reason === 'no-device' || reason === 'premium' || reason === 'scope') {
       this.problem =
         reason === 'no-device' ? 'Open Spotify on this phone to play its songs; the music carries on when you come back.' : (error ?? 'Spotify would not play.');
@@ -666,11 +702,12 @@ export class LocalPlayer {
   private prepareNext(): void {
     const next = this.upcoming();
     const t = next === null ? null : this.queue[next];
-    if (!t?.fileId || this.spareFor === t.fileId) return;
-    this.spareFor = t.fileId;
+    const file = t ? this.fileFor(t) : null;
+    if (!file || this.spareFor === file) return;
+    this.spareFor = file;
     this.spare.loop = false;
     this.spare.preload = 'auto';
-    this.spare.src = `/audio/${t.fileId}`;
+    this.spare.src = `/audio/${file}`;
     this.spare.load();
   }
 
@@ -698,7 +735,7 @@ export class LocalPlayer {
     if (r) {
       if (!r.playing || !r.durationMs) return;
       const left = r.durationMs - this.remotePosition();
-      if (this.repeat === 'one' || (next && !next.fileId)) {
+      if (this.repeat === 'one' || (next && !this.fileFor(next))) {
         later(left - this.latency.start!, () => this.remote === r && this.finished());
       } else {
         later(left - this.latency.pause! - 100, () => {
@@ -711,7 +748,7 @@ export class LocalPlayer {
       return;
     }
     const a = this.audio;
-    if (a.paused || !Number.isFinite(a.duration) || !next || next.fileId || !next.spotifyId) return;
+    if (a.paused || !Number.isFinite(a.duration) || !next || this.fileFor(next) || !next.spotifyId) return;
     const left = (a.duration - a.currentTime) * 1000;
     const id = next.spotifyId;
     later(left - this.latency.start!, () => {
@@ -903,9 +940,9 @@ export async function startLocal(params: URLSearchParams): Promise<boolean> {
   player.prime();
   try {
     const res = await fetch(`/api/play-queue?${params}`, { headers: { accept: 'application/json' } });
-    const data = (await res.json()) as { queue?: LocalTrack[]; start?: number };
+    const data = (await res.json()) as { queue?: LocalTrack[]; start?: number; prefer?: PlayPrefer };
     if (!res.ok || !data.queue?.length) return false;
-    player.load(data.queue, data.start ?? 0, true);
+    player.load(data.queue, data.start ?? 0, true, data.prefer);
   } catch {
     return false;
   }

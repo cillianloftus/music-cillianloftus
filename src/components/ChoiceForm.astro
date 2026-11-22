@@ -1,0 +1,86 @@
+---
+/**
+ * A setting with a few choices, as pill buttons, one pressed: a form that
+ * posts the choice, so it works without JavaScript; a page's script may
+ * catch the submit and switch at once. The same on every settings panel.
+ */
+interface Props {
+  action: string;
+  legend: string;
+  name: string;
+  current: string;
+  options: { value: string; label: string }[];
+  /** Hidden fields sent with the choice (where to come back to). */
+  hidden?: Record<string, string>;
+  /** An explanation under the choices. */
+  note?: string;
+  [attribute: `data-${string}`]: string | boolean | undefined;
+}
+
+const { action, legend, name, current, options, hidden = {}, note, ...rest } = Astro.props;
+---
+
+<form class="choice" method="post" action={action} {...rest}>
+  {Object.entries(hidden).map(([key, value]) => <input type="hidden" name={key} value={value} />)}
+  <fieldset>
+    <legend>{legend}</legend>
+    <div class="segments">
+      {
+        options.map((option) => (
+          <button type="submit" name={name} value={option.value} aria-pressed={option.value === current ? 'true' : 'false'}>
+            {option.label}
+          </button>
+        ))
+      }
+    </div>
+  </fieldset>
+  {note && <p class="note">{note}</p>}
+</form>
+
+<style>
+  fieldset {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  legend {
+    float: left;
+    font-weight: 700;
+  }
+
+  .segments {
+    display: inline-flex;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+  }
+
+  .segments button {
+    min-height: calc(var(--target) - 8px);
+    padding-inline: var(--space-4);
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .segments button[aria-pressed='true'] {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .note {
+    margin: var(--space-2) 0 0;
+    color: var(--text-muted);
+    font-size: var(--step--1);
+  }
+</style>
